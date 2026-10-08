@@ -159,5 +159,8 @@ CAPTURE-Generation scheiterte mit `ENOMEM`. Der vollständige Befund steht in
 `realvideo-001-run-02-results.md`.
 
 Die streng gegatete Wiederverwendung dieser bestehenden CAPTURE-Generation ist
-in Commit `9c48185` lokal vorbereitet. Der noch nicht aktiv ausgeführte Ablauf
-steht in `realvideo-001-run-03-test-plan.md`.
+in Commit `9c48185` lokal vorbereitet und einmal ausgeführt worden. Der
+Speichervertrag war vollständig kompatibel; die Probe stoppte vor dem Requeue,
+weil Iris `V4L2_CID_MIN_BUFFERS_FOR_CAPTURE` nicht bereitstellt. Plan und
+Ergebnis stehen in `realvideo-001-run-03-test-plan.md` und
+`realvideo-001-run-03-results.md`.

@@ -1,0 +1,99 @@
+input_bytes=755880785 access_units=7191 largest_access_unit=1058608
+source width=8192 visible_height=4096 fps=60000/1001 duration_s=119.969850
+vulkan_device=Turnip Adreno (TM) 750 vendor=0x5143 device=0x43051401 timestamp_period_ns=52.083332
+vulkan_preflight nv12_linear=1 memory_planes=2 sampled=1 transfer_src=1 external_features=0x7
+sync_fd_preflight importable=1 features=0x3
+vulkan_preflight=success queue_family=0 timestamp_bits=48 decoder_stream_not_started_yet
+v4l2_device=/dev/video-dec0 driver=iris_driver card=iris_decoder bus=platform:iris_bus
+output_format fourcc=HEVC width=8192 height=4096 sizeimage=16588800
+output_buffers=6
+capture_format fourcc=NV12 width=8192 height=4096 planes=1 stride=8192 sizeimage=50331648 colorspace=3 xfer=1 ycbcr=2 quant=2
+visible_rect left=0 top=0 width=8192 height=4096
+nv12_contract modifier=DRM_FORMAT_MOD_LINEAR memory_planes=2 v4l2_memory_planes=1 y_offset=0 uv_offset=33554432 row_pitch=8192 required_bytes=50331648
+transfer_buffer bytes=50331648 memory_type=0 flags=0x7
+capture_minimum_buffers=unavailable errno=22
+capture_allocation index=0 length=50331648
+dmabuf_export index=0 fd=9 size=50331648
+vulkan_layout index=0 memory_plane=0 offset=0 row_pitch=8192 size=33554432
+vulkan_layout index=0 memory_plane=1 offset=33554432 row_pitch=8192 size=16777216
+image_memory index=0 size=50331648 alignment=64 type_bits=0x7 dedicated_required=1
+dmabuf_import index=0 bytes=50331648 fd_type_bits=0x7 intersection=0x7 memory_type=0 flags=0x7 dedicated=1
+capture_allocation index=1 length=50331648
+dmabuf_export index=1 fd=11 size=50331648
+vulkan_layout index=1 memory_plane=0 offset=0 row_pitch=8192 size=33554432
+vulkan_layout index=1 memory_plane=1 offset=33554432 row_pitch=8192 size=16777216
+image_memory index=1 size=50331648 alignment=64 type_bits=0x7 dedicated_required=1
+dmabuf_import index=1 bytes=50331648 fd_type_bits=0x7 intersection=0x7 memory_type=0 flags=0x7 dedicated=1
+capture_allocation index=2 length=50331648
+dmabuf_export index=2 fd=12 size=50331648
+vulkan_layout index=2 memory_plane=0 offset=0 row_pitch=8192 size=33554432
+vulkan_layout index=2 memory_plane=1 offset=33554432 row_pitch=8192 size=16777216
+image_memory index=2 size=50331648 alignment=64 type_bits=0x7 dedicated_required=1
+dmabuf_import index=2 bytes=50331648 fd_type_bits=0x7 intersection=0x7 memory_type=0 flags=0x7 dedicated=1
+capture_allocation index=3 length=50331648
+dmabuf_export index=3 fd=13 size=50331648
+vulkan_layout index=3 memory_plane=0 offset=0 row_pitch=8192 size=33554432
+vulkan_layout index=3 memory_plane=1 offset=33554432 row_pitch=8192 size=16777216
+image_memory index=3 size=50331648 alignment=64 type_bits=0x7 dedicated_required=1
+dmabuf_import index=3 bytes=50331648 fd_type_bits=0x7 intersection=0x7 memory_type=0 flags=0x7 dedicated=1
+capture_allocation index=4 length=50331648
+dmabuf_export index=4 fd=14 size=50331648
+vulkan_layout index=4 memory_plane=0 offset=0 row_pitch=8192 size=33554432
+vulkan_layout index=4 memory_plane=1 offset=33554432 row_pitch=8192 size=16777216
+image_memory index=4 size=50331648 alignment=64 type_bits=0x7 dedicated_required=1
+dmabuf_import index=4 bytes=50331648 fd_type_bits=0x7 intersection=0x7 memory_type=0 flags=0x7 dedicated=1
+capture_allocation index=5 length=50331648
+dmabuf_export index=5 fd=15 size=50331648
+vulkan_layout index=5 memory_plane=0 offset=0 row_pitch=8192 size=33554432
+vulkan_layout index=5 memory_plane=1 offset=33554432 row_pitch=8192 size=16777216
+image_memory index=5 size=50331648 alignment=64 type_bits=0x7 dedicated_required=1
+dmabuf_import index=5 bytes=50331648 fd_type_bits=0x7 intersection=0x7 memory_type=0 flags=0x7 dedicated=1
+capture_allocation index=6 length=50331648
+dmabuf_export index=6 fd=16 size=50331648
+vulkan_layout index=6 memory_plane=0 offset=0 row_pitch=8192 size=33554432
+vulkan_layout index=6 memory_plane=1 offset=33554432 row_pitch=8192 size=16777216
+image_memory index=6 size=50331648 alignment=64 type_bits=0x7 dedicated_required=1
+dmabuf_import index=6 bytes=50331648 fd_type_bits=0x7 intersection=0x7 memory_type=0 flags=0x7 dedicated=1
+capture_allocation index=7 length=50331648
+dmabuf_export index=7 fd=17 size=50331648
+vulkan_layout index=7 memory_plane=0 offset=0 row_pitch=8192 size=33554432
+vulkan_layout index=7 memory_plane=1 offset=33554432 row_pitch=8192 size=16777216
+image_memory index=7 size=50331648 alignment=64 type_bits=0x7 dedicated_required=1
+dmabuf_import index=7 bytes=50331648 fd_type_bits=0x7 intersection=0x7 memory_type=0 flags=0x7 dedicated=1
+capture_allocation index=8 length=50331648
+dmabuf_export index=8 fd=18 size=50331648
+vulkan_layout index=8 memory_plane=0 offset=0 row_pitch=8192 size=33554432
+vulkan_layout index=8 memory_plane=1 offset=33554432 row_pitch=8192 size=16777216
+image_memory index=8 size=50331648 alignment=64 type_bits=0x7 dedicated_required=1
+dmabuf_import index=8 bytes=50331648 fd_type_bits=0x7 intersection=0x7 memory_type=0 flags=0x7 dedicated=1
+capture_allocation index=9 length=50331648
+dmabuf_export index=9 fd=19 size=50331648
+vulkan_layout index=9 memory_plane=0 offset=0 row_pitch=8192 size=33554432
+vulkan_layout index=9 memory_plane=1 offset=33554432 row_pitch=8192 size=16777216
+image_memory index=9 size=50331648 alignment=64 type_bits=0x7 dedicated_required=1
+dmabuf_import index=9 bytes=50331648 fd_type_bits=0x7 intersection=0x7 memory_type=0 flags=0x7 dedicated=1
+capture_allocation index=10 length=50331648
+dmabuf_export index=10 fd=20 size=50331648
+vulkan_layout index=10 memory_plane=0 offset=0 row_pitch=8192 size=33554432
+vulkan_layout index=10 memory_plane=1 offset=33554432 row_pitch=8192 size=16777216
+image_memory index=10 size=50331648 alignment=64 type_bits=0x7 dedicated_required=1
+dmabuf_import index=10 bytes=50331648 fd_type_bits=0x7 intersection=0x7 memory_type=0 flags=0x7 dedicated=1
+capture_allocation index=11 length=50331648
+dmabuf_export index=11 fd=21 size=50331648
+vulkan_layout index=11 memory_plane=0 offset=0 row_pitch=8192 size=33554432
+vulkan_layout index=11 memory_plane=1 offset=33554432 row_pitch=8192 size=16777216
+image_memory index=11 size=50331648 alignment=64 type_bits=0x7 dedicated_required=1
+dmabuf_import index=11 bytes=50331648 fd_type_bits=0x7 intersection=0x7 memory_type=0 flags=0x7 dedicated=1
+capture_buffers=12 imported_images=12 cpu_mapped=0
+source_change event=1 phase=initial changes=0x1
+playback_started paced=1 maximum_runtime_factor=3 deadline_margin_s=30 stall_timeout_s=10
+selected_readback frame=0 path=realvideo-001-run-03-frame-00000000.nv12 bytes=50331648
+frame=0 capture_index=0 sequence=0 bytesused=50331648 timestamp=0.000000 gpu_ms=3.943073 gpu_wall_ms=4.648202 selected=1
+frame=299 capture_index=0 sequence=0 bytesused=50331648 timestamp=4.988316 gpu_ms=4.027500 gpu_wall_ms=4.707054 selected=0
+source_change event=2 phase=dynamic changes=0x1 frames=300 action=drain-old-capture
+capture_flag=LAST frames=300 reason=source-change bytesused=0
+capture_format fourcc=NV12 width=8192 height=4096 planes=1 stride=8192 sizeimage=50331648 colorspace=3 xfer=1 ycbcr=2 quant=2
+visible_rect left=0 top=0 width=8192 height=4096
+capture_reuse_check memory_compatible=1 compose_unchanged=1 existing_buffers=12
+nv12_contract modifier=DRM_FORMAT_MOD_LINEAR memory_planes=2 v4l2_memory_planes=1 y_offset=0 uv_offset=33554432 row_pitch=8192 required_bytes=50331648
+VIDIOC_G_CTRL MIN_BUFFERS_FOR_CAPTURE: errno=22 (Invalid argument)

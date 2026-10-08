@@ -118,7 +118,8 @@ bestehenden CAPTURE-Generation:
 
 Diese funktionale Variante ist inzwischen lokal in Commit `9c48185`
 vorbereitet und geprüft. Der exakte Diff, die Gates und der begrenzte
-Laufvorschlag stehen in `realvideo-001-run-03-test-plan.md`. Sie wurde nicht auf
-dem Steam Frame ausgeführt und benötigt vor einer aktiven Ausführung eine neue
-Freigabe. Es wurden keine Paket-, Kernel-, Treiber-, Firmware- oder
-Systemänderungen vorgenommen.
+Laufvorschlag stehen in `realvideo-001-run-03-test-plan.md`. Der freigegebene
+Lauf bestätigte den kompatiblen Speichervertrag und stoppte anschließend am
+nicht verfügbaren `V4L2_CID_MIN_BUFFERS_FOR_CAPTURE`; Einzelheiten stehen in
+`realvideo-001-run-03-results.md`. Es wurden keine Paket-, Kernel-, Treiber-,
+Firmware- oder Systemänderungen vorgenommen.
