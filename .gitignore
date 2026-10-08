@@ -1,0 +1,34 @@
+# Reproducible decoder fixtures and generated test data
+tests/decoder-fixtures/*.hevc
+tests/decoder-fixtures/*.yuv
+
+# Local build products
+tools/**/build/
+tools/**/*.o
+tools/**/*.a
+tools/**/*.so
+tools/**/*.so.*
+
+# Generated binary diagnostics; retain their textual status and analysis files.
+docs/**/*.raw
+docs/**/*.bin
+docs/**/*.pgm
+docs/**/*.png
+docs/**/*.strace
+docs/**/*.zip
+
+# Crash dumps and local editor state
+core
+core.*
+*.core
+__pycache__/
+*.py[cod]
+.vscode/
+.idea/
+*.swp
+*~
+
+# Local credentials and machine-specific SSH state
+.ssh/
+*.pem
+*.key
