@@ -22,10 +22,13 @@ mapping occurs only for the first, middle, and last selected frames.
 Repeated stateful-decoder `SOURCE_CHANGE` events use the kernel-defined
 dynamic-resolution sequence. The probe finishes the implicitly drained old
 CAPTURE generation through its `LAST` buffer while OUTPUT remains streaming,
-then stops CAPTURE, destroys the completed Vulkan imports, releases and
-requeries the CAPTURE buffers, validates the new NV12 layout, imports the new
-generation, and restarts CAPTURE. It never guesses that a repeated parameter
-set kept the old layout.
+then waits for all GPU work and stops CAPTURE. It requeries pixel format,
+coded dimensions, memory-plane count, stride, `sizeimage`, compose rectangle,
+minimum buffer count, and every existing allocation length. Only when the
+memory contract, compose rectangle, buffer count, and lengths remain compatible
+does it requeue the same CAPTURE buffers and restart CAPTURE. Their DMA-BUF FDs
+and Vulkan imports stay alive. Any difference stops the probe; dynamic
+reallocation for a genuinely changed format is outside this probe.
 
 Build:
 

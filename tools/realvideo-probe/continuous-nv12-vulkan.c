@@ -94,6 +94,16 @@ struct video_layout {
     uint64_t uv_offset;
 };
 
+struct capture_contract {
+    uint32_t pixel_format;
+    uint32_t coded_width;
+    uint32_t coded_height;
+    uint32_t memory_planes;
+    uint32_t bytes_per_line;
+    uint32_t sizeimage;
+    struct v4l2_rect compose;
+};
+
 static int video_fd = -1;
 
 static void fail_errno(const char *what)
@@ -1017,11 +1027,7 @@ static void queue_capture(unsigned index, size_t length)
     must_ioctl(VIDIOC_QBUF, &buffer, "VIDIOC_QBUF CAPTURE");
 }
 
-static unsigned setup_capture(
-    struct vulkan_context *vk,
-    struct capture_buffer buffers[MAX_CAPTURE_BUFFERS],
-    struct video_layout *layout, uint32_t expected_width,
-    uint32_t expected_visible_height)
+static void query_capture_contract(struct capture_contract *contract)
 {
     struct v4l2_format format = {
         .type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE,
@@ -1042,10 +1048,6 @@ static unsigned setup_capture(
            format.fmt.pix_mp.plane_fmt[0].sizeimage,
            format.fmt.pix_mp.colorspace, format.fmt.pix_mp.xfer_func,
            format.fmt.pix_mp.ycbcr_enc, format.fmt.pix_mp.quantization);
-    if (format.fmt.pix_mp.pixelformat != V4L2_PIX_FMT_NV12 ||
-        format.fmt.pix_mp.num_planes != 1)
-        fail_message("Iris did not negotiate one-memory-plane NV12");
-
     struct v4l2_selection selection = {
         .type = V4L2_BUF_TYPE_VIDEO_CAPTURE,
         .target = V4L2_SEL_TGT_COMPOSE,
@@ -1054,17 +1056,34 @@ static unsigned setup_capture(
     printf("visible_rect left=%d top=%d width=%u height=%u\n",
            selection.r.left, selection.r.top, selection.r.width,
            selection.r.height);
-    if (selection.r.left != 0 || selection.r.top != 0 ||
-        selection.r.width != expected_width ||
-        selection.r.height != expected_visible_height)
+    contract->pixel_format = format.fmt.pix_mp.pixelformat;
+    contract->coded_width = format.fmt.pix_mp.width;
+    contract->coded_height = format.fmt.pix_mp.height;
+    contract->memory_planes = format.fmt.pix_mp.num_planes;
+    contract->bytes_per_line = format.fmt.pix_mp.plane_fmt[0].bytesperline;
+    contract->sizeimage = format.fmt.pix_mp.plane_fmt[0].sizeimage;
+    contract->compose = selection.r;
+}
+
+static void validate_capture_contract(const struct capture_contract *contract,
+                                      struct video_layout *layout,
+                                      uint32_t expected_width,
+                                      uint32_t expected_visible_height)
+{
+    if (contract->pixel_format != V4L2_PIX_FMT_NV12 ||
+        contract->memory_planes != 1)
+        fail_message("Iris did not negotiate one-memory-plane NV12");
+    if (contract->compose.left != 0 || contract->compose.top != 0 ||
+        contract->compose.width != expected_width ||
+        contract->compose.height != expected_visible_height)
         fail_message("Iris visible rectangle differs from input metadata");
 
-    layout->width = format.fmt.pix_mp.width;
-    layout->coded_height = format.fmt.pix_mp.height;
-    layout->visible_width = selection.r.width;
-    layout->visible_height = selection.r.height;
-    layout->stride = format.fmt.pix_mp.plane_fmt[0].bytesperline;
-    layout->sizeimage = format.fmt.pix_mp.plane_fmt[0].sizeimage;
+    layout->width = contract->coded_width;
+    layout->coded_height = contract->coded_height;
+    layout->visible_width = contract->compose.width;
+    layout->visible_height = contract->compose.height;
+    layout->stride = contract->bytes_per_line;
+    layout->sizeimage = contract->sizeimage;
     if (layout->width != expected_width || (layout->width & 1U) ||
         (layout->coded_height & 1U) || layout->stride < layout->width)
         fail_message("unsupported NV12 dimensions or stride");
@@ -1077,14 +1096,40 @@ static unsigned setup_capture(
            " v4l2_memory_planes=1 y_offset=0 uv_offset=%" PRIu64
            " row_pitch=%u required_bytes=%" PRIu64 "\n",
            layout->uv_offset, layout->stride, required);
+}
 
-    create_transfer_buffer(vk, layout);
+static unsigned query_capture_minimum(bool required)
+{
     struct v4l2_control minimum = {
         .id = V4L2_CID_MIN_BUFFERS_FOR_CAPTURE,
     };
+    if (xioctl(VIDIOC_G_CTRL, &minimum) < 0) {
+        if (required)
+            fail_errno("VIDIOC_G_CTRL MIN_BUFFERS_FOR_CAPTURE");
+        printf("capture_minimum_buffers=unavailable errno=%d\n", errno);
+        return 0;
+    }
+    if (minimum.value < 0)
+        fail_message("invalid V4L2_CID_MIN_BUFFERS_FOR_CAPTURE value");
+    printf("capture_minimum_buffers=%d\n", minimum.value);
+    return (unsigned)minimum.value;
+}
+
+static unsigned setup_capture(
+    struct vulkan_context *vk,
+    struct capture_buffer buffers[MAX_CAPTURE_BUFFERS],
+    struct capture_contract *contract, struct video_layout *layout,
+    uint32_t expected_width, uint32_t expected_visible_height)
+{
+    query_capture_contract(contract);
+    validate_capture_contract(contract, layout, expected_width,
+                              expected_visible_height);
+
+    create_transfer_buffer(vk, layout);
+    unsigned minimum = query_capture_minimum(false);
     unsigned wanted = 12;
-    if (xioctl(VIDIOC_G_CTRL, &minimum) == 0 && minimum.value > 0)
-        wanted = (unsigned)minimum.value + 4U;
+    if (minimum > 0)
+        wanted = minimum + 4U;
     if (wanted > MAX_CAPTURE_BUFFERS)
         fail_message("CAPTURE buffer request exceeds bound");
     struct v4l2_requestbuffers request = {
@@ -1108,6 +1153,8 @@ static unsigned setup_capture(
         if (buffer.length != 1 || plane.length != layout->sizeimage)
             fail_message("CAPTURE allocation differs from sizeimage");
         buffers[i].length = plane.length;
+        printf("capture_allocation index=%u length=%zu\n", i,
+               buffers[i].length);
         buffers[i].dma_buf_fd = export_capture(i, plane.length);
         import_capture_image(vk, &buffers[i], layout, i);
         queue_capture(i, plane.length);
@@ -1117,16 +1164,45 @@ static unsigned setup_capture(
     return request.count;
 }
 
-static void free_capture_buffers(void)
+static bool capture_memory_compatible(const struct capture_contract *old,
+                                      const struct capture_contract *updated)
 {
-    struct v4l2_requestbuffers request = {
-        .count = 0,
-        .type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE,
-        .memory = V4L2_MEMORY_MMAP,
-    };
-    must_ioctl(VIDIOC_REQBUFS, &request, "VIDIOC_REQBUFS CAPTURE count=0");
-    if (request.count != 0)
-        fail_message("Iris did not release all CAPTURE buffers");
+    return old->pixel_format == updated->pixel_format &&
+           old->coded_width == updated->coded_width &&
+           old->coded_height == updated->coded_height &&
+           old->memory_planes == updated->memory_planes &&
+           old->bytes_per_line == updated->bytes_per_line &&
+           old->sizeimage == updated->sizeimage;
+}
+
+static bool same_compose(const struct v4l2_rect *old,
+                         const struct v4l2_rect *updated)
+{
+    return old->left == updated->left && old->top == updated->top &&
+           old->width == updated->width && old->height == updated->height;
+}
+
+static void verify_capture_allocations(
+    struct capture_buffer buffers[MAX_CAPTURE_BUFFERS],
+    unsigned capture_count, uint32_t expected_size)
+{
+    for (unsigned i = 0; i < capture_count; i++) {
+        struct v4l2_plane plane = {0};
+        struct v4l2_buffer buffer = {
+            .type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE,
+            .memory = V4L2_MEMORY_MMAP,
+            .index = i,
+            .length = 1,
+            .m.planes = &plane,
+        };
+        must_ioctl(VIDIOC_QUERYBUF, &buffer,
+                   "VIDIOC_QUERYBUF CAPTURE reuse");
+        if (buffer.length != 1 || plane.length != expected_size ||
+            buffers[i].length != plane.length)
+            fail_message("existing CAPTURE allocation is incompatible");
+        printf("capture_reuse_allocation index=%u length=%u\n", i,
+               plane.length);
+    }
 }
 
 static size_t timestamp_to_unit(const struct timeval *timestamp,
@@ -1283,6 +1359,7 @@ int main(int argc, char **argv)
     for (unsigned i = 0; i < MAX_CAPTURE_BUFFERS; i++)
         captures[i].dma_buf_fd = -1;
     struct video_layout layout = {0};
+    struct capture_contract capture_contract = {0};
     unsigned capture_count = 0;
 
     double initial_start = monotonic_seconds();
@@ -1350,7 +1427,8 @@ int main(int argc, char **argv)
                     fail_message("SOURCE_CHANGE lacks RESOLUTION flag");
                 source_change_events++;
                 if (!capture_started) {
-                    capture_count = setup_capture(&vk, captures, &layout,
+                    capture_count = setup_capture(&vk, captures,
+                                                  &capture_contract, &layout,
                                                   expected_width,
                                                   expected_height);
                     type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
@@ -1521,22 +1599,46 @@ int main(int argc, char **argv)
                               captures[dequeued.index].length);
             }
             if (capture_generation_last && source_change_pending) {
+                VkResult idle = vkDeviceWaitIdle(vk.device);
+                if (idle != VK_SUCCESS)
+                    fail_vk("vkDeviceWaitIdle(CAPTURE reuse)", idle);
                 type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
                 must_ioctl(VIDIOC_STREAMOFF, &type,
                            "VIDIOC_STREAMOFF CAPTURE reconfigure");
-                release_capture_generation(&vk, captures, capture_count);
-                free_capture_buffers();
-                capture_count = setup_capture(&vk, captures, &layout,
-                                              expected_width,
-                                              expected_height);
+                struct capture_contract updated_contract = {0};
+                struct video_layout updated_layout = {0};
+                query_capture_contract(&updated_contract);
+                bool memory_compatible = capture_memory_compatible(
+                    &capture_contract, &updated_contract);
+                bool compose_unchanged = same_compose(
+                    &capture_contract.compose, &updated_contract.compose);
+                printf("capture_reuse_check memory_compatible=%u"
+                       " compose_unchanged=%u existing_buffers=%u\n",
+                       memory_compatible, compose_unchanged, capture_count);
+                if (!memory_compatible)
+                    fail_message("SOURCE_CHANGE CAPTURE memory contract changed");
+                if (!compose_unchanged)
+                    fail_message("SOURCE_CHANGE visible compose region changed");
+                validate_capture_contract(&updated_contract, &updated_layout,
+                                          expected_width, expected_height);
+                unsigned minimum = query_capture_minimum(true);
+                if (capture_count < minimum)
+                    fail_message("existing CAPTURE count is below new minimum");
+                verify_capture_allocations(captures, capture_count,
+                                           updated_contract.sizeimage);
+                for (unsigned i = 0; i < capture_count; i++)
+                    queue_capture(i, captures[i].length);
                 type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
                 must_ioctl(VIDIOC_STREAMON, &type,
                            "VIDIOC_STREAMON CAPTURE reconfigure");
+                capture_contract = updated_contract;
+                layout = updated_layout;
                 source_change_pending = false;
                 capture_reconfigurations++;
                 last_progress = monotonic_seconds();
-                printf("capture_reconfigured generation=%" PRIu64
-                       " frames=%" PRIu64 " output_stream_kept=1\n",
+                printf("capture_reused generation=%" PRIu64
+                       " frames=%" PRIu64
+                       " output_stream_kept=1 vulkan_imports_kept=1\n",
                        capture_reconfigurations + 1U, frames);
             }
         }
