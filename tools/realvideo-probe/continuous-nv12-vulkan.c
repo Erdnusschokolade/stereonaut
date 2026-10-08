@@ -1539,6 +1539,7 @@ int main(int argc, char **argv)
 
         if (capture_started) {
             bool capture_generation_last = false;
+            unsigned last_capture_index = capture_count;
             for (;;) {
                 struct v4l2_plane plane = {0};
                 struct v4l2_buffer dequeued = {
@@ -1600,6 +1601,7 @@ int main(int argc, char **argv)
                 }
                 if (dequeued.flags & V4L2_BUF_FLAG_LAST) {
                     capture_generation_last = true;
+                    last_capture_index = dequeued.index;
                     last_seen = !source_change_pending;
                     printf("capture_flag=LAST frames=%" PRIu64
                            " reason=%s bytesused=%u\n",
@@ -1613,12 +1615,11 @@ int main(int argc, char **argv)
                               captures[dequeued.index].length);
             }
             if (capture_generation_last && source_change_pending) {
+                if (last_capture_index >= capture_count)
+                    fail_message("SOURCE_CHANGE LAST buffer has invalid index");
                 VkResult idle = vkDeviceWaitIdle(vk.device);
                 if (idle != VK_SUCCESS)
                     fail_vk("vkDeviceWaitIdle(CAPTURE reuse)", idle);
-                type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-                must_ioctl(VIDIOC_STREAMOFF, &type,
-                           "VIDIOC_STREAMOFF CAPTURE reconfigure");
                 struct capture_contract updated_contract = {0};
                 struct video_layout updated_layout = {0};
                 query_capture_contract(&updated_contract);
@@ -1642,11 +1643,13 @@ int main(int argc, char **argv)
                     fail_message("existing CAPTURE count is below new minimum");
                 verify_capture_allocations(captures, capture_count,
                                            updated_contract.sizeimage);
-                for (unsigned i = 0; i < capture_count; i++)
-                    queue_capture(i, captures[i].length);
-                type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-                must_ioctl(VIDIOC_STREAMON, &type,
-                           "VIDIOC_STREAMON CAPTURE reconfigure");
+                queue_capture(last_capture_index,
+                              captures[last_capture_index].length);
+                struct v4l2_decoder_cmd command = {
+                    .cmd = V4L2_DEC_CMD_START,
+                };
+                must_ioctl(VIDIOC_DECODER_CMD, &command,
+                           "VIDIOC_DECODER_CMD START CAPTURE reuse");
                 capture_contract = updated_contract;
                 layout = updated_layout;
                 source_change_pending = false;
@@ -1654,8 +1657,10 @@ int main(int argc, char **argv)
                 last_progress = monotonic_seconds();
                 printf("capture_reused generation=%" PRIu64
                        " frames=%" PRIu64
-                       " output_stream_kept=1 vulkan_imports_kept=1\n",
-                       capture_reconfigurations + 1U, frames);
+                       " output_stream_kept=1 capture_stream_kept=1"
+                       " vulkan_imports_kept=1 last_index=%u\n",
+                       capture_reconfigurations + 1U, frames,
+                       last_capture_index);
             }
         }
     }
