@@ -71,7 +71,9 @@ int main(void)
         .applicationInfo = {
             .applicationVersion = 1,
             .engineVersion = 1,
-            .apiVersion = XR_CURRENT_API_VERSION,
+            /* SteamVR supplies the Vulkan-enable2 extension under OpenXR 1.0.
+             * Request that baseline instead of the newer header version. */
+            .apiVersion = XR_MAKE_VERSION(1, 0, 0),
         },
         .enabledExtensionCount = 1,
         .enabledExtensionNames =
