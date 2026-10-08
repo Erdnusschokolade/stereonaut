@@ -1,6 +1,16 @@
 # Reproducible decoder fixtures and generated test data
 tests/decoder-fixtures/*.hevc
 tests/decoder-fixtures/*.yuv
+tests/realvideo-001/*.hevc
+tests/realvideo-001/*.yuv
+tests/realvideo-001/*.nv12
+tests/realvideo-001/*.i420
+tests/realvideo-001/*.mkv
+tests/realvideo-001/*.mp4
+
+# Large local real-video sources placed at the repository root
+/*.mkv
+/*.mp4
 
 # Local build products
 tools/**/build/
