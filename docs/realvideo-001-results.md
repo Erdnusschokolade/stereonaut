@@ -164,3 +164,8 @@ Speichervertrag war vollständig kompatibel; die Probe stoppte vor dem Requeue,
 weil Iris `V4L2_CID_MIN_BUFFERS_FOR_CAPTURE` nicht bereitstellt. Plan und
 Ergebnis stehen in `realvideo-001-run-03-test-plan.md` und
 `realvideo-001-run-03-results.md`.
+
+Run 04 behandelt ausschließlich die für diesen Treiber bestätigte
+Nichtverfügbarkeit dieses Controls als einen protokollierten Zustand. Der
+lokal vorbereitete, noch nicht ausgeführte Plan steht in
+`realvideo-001-run-04-test-plan.md`.

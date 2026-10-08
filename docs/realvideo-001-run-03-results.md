@@ -113,7 +113,9 @@ Speichervertrag, das Compose-Rechteck, die gespeicherte Anzahl von zwölf
 Buffern und jede per `QUERYBUF` gemeldete Länge zwingend prüfen. Erst danach
 dürften dieselben Buffer mit `QBUF` und `STREAMON` wiederverwendet werden.
 
-Das wäre eine neue funktionale Variante. Sie wurde nicht implementiert oder
+Diese funktionale Variante ist in Commit `ba240bd` lokal vorbereitet. Der
+exakte Diff, die unveränderten Parameter und der einmalige Laufvorschlag stehen
+in `realvideo-001-run-04-test-plan.md`. Sie wurde nicht auf dem Steam Frame
 ausgeführt und benötigt vor einem aktiven Test eine neue Freigabe. Es wurden
 keine Paket-, Kernel-, Mesa-, Treiber-, Firmware- oder Systemänderungen
 vorgenommen.
