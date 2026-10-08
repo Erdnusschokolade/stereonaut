@@ -1,0 +1,6 @@
+main-NV12 exit=0
+main10-auto exit=0
+main10-Q10C exit=0
+gradient10-Q10C exit=0
+main10-P010 exit=3
+gst-negotiation exit=1

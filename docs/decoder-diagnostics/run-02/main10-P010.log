@@ -1,0 +1,15 @@
+input_AUs=60 bytes=3795855 requested=P010
+driver=iris_driver card=iris_decoder
+OUTPUT format=HEVC width=1920 height=1088 planes=1 colorspace=0 xfer=0 ycbcr=0 quant=0
+plane=0 stride=0 sizeimage=8847360
+enumeration=after HEVC S_FMT
+enum_capture=Q08C description=QCOM Compressed 8-bit Format
+enum_capture=NV12 description=Y/UV 4:2:0
+enum_capture=NV21 description=Y/VU 4:2:0
+enum_capture=Q10C description=QCOM Compressed 10-bit Format
+enum_capture=AB24 description=32-bit RGBA 8-8-8-8
+enum_capture=QC24 description=colorformat
+enum_end errno=22
+initial CAPTURE format=NV12 width=384 height=256 planes=1 colorspace=0 xfer=0 ycbcr=0 quant=0
+plane=0 stride=384 sizeimage=147456
+requested format substituted; no streaming

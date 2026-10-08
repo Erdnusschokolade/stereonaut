@@ -1,0 +1,94 @@
+Linux frame 6.18.0-gfbdbca41fd45 #1 SMP PREEMPT Wed, 16 Sep 2026 20:50:11 +0000 aarch64 GNU/Linux
+NAME="SteamOS"
+PRETTY_NAME="SteamOS"
+VERSION_CODENAME=holo
+ID=steamos
+ID_LIKE=arch
+ANSI_COLOR="1;35"
+HOME_URL="https://www.steampowered.com/"
+DOCUMENTATION_URL="https://support.steampowered.com/"
+SUPPORT_URL="https://support.steampowered.com/"
+BUG_REPORT_URL="https://support.steampowered.com/"
+LOGO=steamos
+BUILD_ID=20260922.6101926
+VARIANT_ID="vr"
+VERSION_ID=0.3.0
+Architecture:                            aarch64
+CPU op-mode(s):                          64-bit
+Byte Order:                              Little Endian
+CPU(s):                                  8
+On-line CPU(s) list:                     0-7
+Vendor ID:                               ARM
+Model name:                              Cortex-A520
+Model:                                   1
+Thread(s) per core:                      1
+Core(s) per socket:                      2
+Socket(s):                               1
+Stepping:                                r0p1
+Frequency boost:                         disabled
+CPU(s) scaling MHz:                      50%
+CPU max MHz:                             2265.6001
+CPU min MHz:                             364.8000
+BogoMIPS:                                38.40
+Flags:                                   fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 sve asimdfhm dit uscat ilrcpc flagm sb paca pacg dcpodp sve2 sveaes svepmull svebitperm svesha3 svesm4 flagm2 frint svei8mm svebf16 i8mm bf16 dgh bti ecv afp wfxt
+Model name:                              Cortex-A720
+Model:                                   1
+Thread(s) per core:                      1
+Core(s) per socket:                      5
+Socket(s):                               1
+Stepping:                                r0p1
+CPU(s) scaling MHz:                      96%
+CPU max MHz:                             3148.8000
+CPU min MHz:                             499.2000
+BogoMIPS:                                38.40
+Flags:                                   fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm jscvt fcma lrcpc dcpop sha3 sm3 sm4 asimddp sha512 sve asimdfhm dit uscat ilrcpc flagm sb paca pacg dcpodp sve2 sveaes svepmull svebitperm svesha3 svesm4 flagm2 frint svei8mm svebf16 i8mm bf16 dgh bti ecv afp wfxt
+Model name:                              -
+Model:                                   1
+Thread(s) per core:                      1
+Core(s) per socket:                      1
+Socket(s):                               1
+CPU(s) scaling MHz:                      19%
+CPU max MHz:                             3052.8000
+CPU min MHz:                             480.0000
+L1d cache:                               512 KiB (8 instances)
+L1i cache:                               512 KiB (8 instances)
+L2 cache:                                4.8 MiB (7 instances)
+L3 cache:                                12 MiB (1 instance)
+Vulnerability Gather data sampling:      Not affected
+Vulnerability Ghostwrite:                Not affected
+Vulnerability Indirect target selection: Not affected
+Vulnerability Itlb multihit:             Not affected
+Vulnerability L1tf:                      Not affected
+Vulnerability Mds:                       Not affected
+Vulnerability Meltdown:                  Not affected
+Vulnerability Mmio stale data:           Not affected
+Vulnerability Old microcode:             Not affected
+Vulnerability Reg file data sampling:    Not affected
+Vulnerability Retbleed:                  Not affected
+Vulnerability Spec rstack overflow:      Not affected
+Vulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl
+Vulnerability Spectre v1:                Mitigation; __user pointer sanitization
+Vulnerability Spectre v2:                Mitigation; CSV2, but not BHB
+Vulnerability Srbds:                     Not affected
+Vulnerability Tsa:                       Not affected
+Vulnerability Tsx async abort:           Not affected
+Vulnerability Vmscape:                   Not affected
+deckard-mesa-android-aarch64 26.3.0_devel+git8aa73b4b-1
+deckard-mesa-linux-aarch64 26.3.0_devel+git8aa73b4b-1
+deckard-mesa-linux-deps-x86_64 20260820-1
+deckard-mesa-linux-x86_64 26.3.0_devel+git8aa73b4b-1
+deckard-steamvr-rel r25358740+28b72a4f-1
+deckard-steamvr-session 1.6.1-8
+ffmpeg 2:7.0-1.1
+ffmpeg4.4 4.4.4-5
+gst-plugins-bad-libs 1.24.2-2
+gst-plugins-base 1.24.2-2
+gst-plugins-base-libs 1.24.2-2
+gst-plugins-good 1.24.2-2
+gstreamer 1.24.2-2
+libdrm 2.4.134-1
+linux-618-deckard 6.18.0+gfbdbca41fd45-1
+linux-618-v4l2loopback-deckard 20251112.1+gfbdbca41fd45-1
+qt6-multimedia-ffmpeg 6.8.0-1.1
+v4l-utils 1.33.0-1
+vulkan-icd-loader 1.4.309.0-4

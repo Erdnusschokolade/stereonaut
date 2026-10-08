@@ -1,0 +1,8 @@
+main-auto-mmap exit=1
+main-auto-dmabuf exit=1
+main10-auto-mmap exit=1
+main10-auto-dmabuf exit=1
+main10-P010_10LE-mmap exit=3
+main10-P010_10LE-dmabuf exit=3
+gradient10-auto-mmap exit=1
+gradient10-P010_10LE-dmabuf exit=3

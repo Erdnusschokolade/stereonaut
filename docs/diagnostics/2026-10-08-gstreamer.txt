@@ -1,0 +1,140 @@
+Factory Details:
+  Rank                     primary + 1 (257)
+  Long-name                V4L2 H265 Decoder
+  Klass                    Codec/Decoder/Video/Hardware
+  Description              Decodes H265 streams via V4L2 API
+  Author                   (GStreamer plugin author, see the GStreamer documentation)
+  Documentation            https://gstreamer.freedesktop.org/documentation/video4linux2/v4l2h265dec.html
+
+Plugin Details:
+  Name                     video4linux2
+  Description              elements for Video 4 Linux
+  Filename                 /usr/lib/gstreamer-1.0/libgstvideo4linux2.so
+  Version                  1.24.2
+  License                  LGPL
+  Source module            gst-plugins-good
+  Documentation            https://gstreamer.freedesktop.org/documentation/video4linux2/
+  Source release date      2024-04-09
+  Binary package           Arch Linux GStreamer 1.24.2-2
+  Origin URL               https://www.archlinux.org/
+
+GObject
+ +----GInitiallyUnowned
+       +----GstObject
+             +----GstElement
+                   +----GstVideoDecoder
+                         +----GstV4l2VideoDec
+                               +----v4l2h265dec
+
+Pad Templates:
+  SINK template: 'sink'
+    Availability: Always
+    Capabilities:
+      video/x-h265
+          stream-format: byte-stream
+              alignment: au
+  
+  SRC template: 'src'
+    Availability: Always
+    Capabilities:
+      video/x-raw
+                 format: { (string)NV12, (string)NV21, (string)RGBA }
+                  width: [ 1, 32768 ]
+                 height: [ 1, 32768 ]
+              framerate: [ 0/1, 2147483647/1 ]
+
+Element has no clocking capabilities.
+Element has no URI handling capabilities.
+
+Pads:
+  SINK: 'sink'
+    Pad Template: 'sink'
+  SRC: 'src'
+    Pad Template: 'src'
+
+Element Properties:
+
+  automatic-request-sync-point-flags: Flags to use when automatically requesting sync points
+                        flags: readable, writable
+                        Flags "GstVideoDecoderRequestSyncPointFlags" Default: 0x00000003, "corrupt-output+discard-input"
+                           (0x00000001): discard-input    - GST_VIDEO_DECODER_REQUEST_SYNC_POINT_DISCARD_INPUT
+                           (0x00000002): corrupt-output   - GST_VIDEO_DECODER_REQUEST_SYNC_POINT_CORRUPT_OUTPUT
+  
+  automatic-request-sync-points: Automatically request sync points when it would be useful
+                        flags: readable, writable
+                        Boolean. Default: false
+  
+  capture-io-mode     : Capture I/O mode (matches src pad)
+                        flags: readable, writable
+                        Enum "GstV4l2IOMode" Default: 0, "auto"
+                           (0): auto             - GST_V4L2_IO_AUTO
+                           (1): rw               - GST_V4L2_IO_RW
+                           (2): mmap             - GST_V4L2_IO_MMAP
+                           (3): userptr          - GST_V4L2_IO_USERPTR
+                           (4): dmabuf           - GST_V4L2_IO_DMABUF
+                           (5): dmabuf-import    - GST_V4L2_IO_DMABUF_IMPORT
+  
+  device              : Device location
+                        flags: readable
+                        String. Default: "/dev/video22"
+  
+  device-fd           : File descriptor of the device
+                        flags: readable
+                        Integer. Range: -1 - 2147483647 Default: -1 
+  
+  device-name         : Name of the device
+                        flags: readable
+                        String. Default: null
+  
+  discard-corrupted-frames: Discard frames marked as corrupted instead of outputting them
+                        flags: readable, writable
+                        Boolean. Default: false
+  
+  extra-controls      : Extra v4l2 controls (CIDs) for the device
+                        flags: readable, writable
+                        Boxed pointer of type "GstStructure"
+  
+  max-errors          : Max consecutive decoder errors before returning flow error
+                        flags: readable, writable
+                        Integer. Range: -1 - 2147483647 Default: -1 
+  
+  min-force-key-unit-interval: Minimum interval between force-keyunit requests in nanoseconds
+                        flags: readable, writable
+                        Unsigned Integer64. Range: 0 - 18446744073709551615 Default: 0 
+  
+  name                : The name of the object
+                        flags: readable, writable
+                        String. Default: "v4l2h265dec0"
+  
+  output-io-mode      : Output side I/O mode (matches sink pad)
+                        flags: readable, writable
+                        Enum "GstV4l2IOMode" Default: 0, "auto"
+                           (0): auto             - GST_V4L2_IO_AUTO
+                           (1): rw               - GST_V4L2_IO_RW
+                           (2): mmap             - GST_V4L2_IO_MMAP
+                           (3): userptr          - GST_V4L2_IO_USERPTR
+                           (4): dmabuf           - GST_V4L2_IO_DMABUF
+                           (5): dmabuf-import    - GST_V4L2_IO_DMABUF_IMPORT
+  
+  parent              : The parent of the object
+                        flags: readable, writable
+                        Object of type "GstObject"
+  
+  qos                 : Handle Quality-of-Service events from downstream
+                        flags: readable, writable
+                        Boolean. Default: true
+  
+Plugin Details:
+  Name                     v4l2codecs
+  Description              V4L2 CODEC Accelerators plugin
+  Filename                 /usr/lib/gstreamer-1.0/libgstv4l2codecs.so
+  Version                  1.24.2
+  License                  LGPL
+  Source module            gst-plugins-bad
+  Documentation            https://gstreamer.freedesktop.org/documentation/v4l2codecs/
+  Source release date      2024-04-09
+  Binary package           Arch Linux GStreamer 1.24.2-2
+  Origin URL               https://www.archlinux.org/
+
+
+  0 features:

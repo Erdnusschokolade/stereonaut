@@ -1,0 +1,24 @@
+driver=iris_driver card=iris_decoder
+stage=initial
+CAPTURE index=0 fourcc=Q08C description=QCOM Compressed 8-bit Format
+CAPTURE index=1 fourcc=NV12 description=Y/UV 4:2:0
+CAPTURE index=2 fourcc=NV21 description=Y/VU 4:2:0
+CAPTURE index=3 fourcc=AB24 description=32-bit RGBA 8-8-8-8
+CAPTURE index=4 fourcc=QC24 description=colorformat
+ENUM_FMT end errno=22 (Invalid argument)
+G_FMT NV12 384x256 planes=1
+stage=after S_FMT HEVC, before headers
+CAPTURE index=0 fourcc=Q08C description=QCOM Compressed 8-bit Format
+CAPTURE index=1 fourcc=NV12 description=Y/UV 4:2:0
+CAPTURE index=2 fourcc=NV21 description=Y/VU 4:2:0
+CAPTURE index=3 fourcc=Q10C description=QCOM Compressed 10-bit Format
+CAPTURE index=4 fourcc=AB24 description=32-bit RGBA 8-8-8-8
+CAPTURE index=5 fourcc=QC24 description=colorformat
+ENUM_FMT end errno=22 (Invalid argument)
+G_FMT NV12 384x256 planes=1
+HEVC profile min=0 max=2 default=0
+profile=0 name=Main
+profile=1 name=Main Still Picture
+profile=2 name=Main 10
+TRY_FMT requested=P010 returned=NV12 stride=0 size=0
+TRY_FMT requested=Q10C returned=Q10C stride=0 size=0

@@ -1,0 +1,2 @@
+decoder=v4l2h265dec device=/dev/video22 capture_io_mode=dmabuf
+link failed; no fallback

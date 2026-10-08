@@ -1,0 +1,23 @@
+decoder=v4l2h265dec device=/dev/video22 capture_io_mode=mmap
+0:00:00.441303117  4717 0xaaaaf1490610 INFO                    v4l2 v4l2_calls.c:592:gst_v4l2_open:<hardware_decoder:sink> Opened device 'iris_decoder' (/dev/video22) successfully
+0:00:00.441398428  4717 0xaaaaf1490610 INFO                    v4l2 v4l2_calls.c:688:gst_v4l2_dup:<hardware_decoder:src> Cloned device 'iris_decoder' (/dev/video22) successfully
+0:00:00.441577384  4717 0xaaaaf1490610 INFO                    v4l2 gstv4l2object.c:1281:gst_v4l2_object_fill_format_list:<hardware_decoder:sink> got 3 format(s):
+0:00:00.441638841  4717 0xaaaaf1490610 INFO                    v4l2 gstv4l2object.c:1285:gst_v4l2_object_fill_format_list:<hardware_decoder:sink>   VP90
+0:00:00.441698945  4717 0xaaaaf1490610 INFO                    v4l2 gstv4l2object.c:1285:gst_v4l2_object_fill_format_list:<hardware_decoder:sink>   HEVC
+0:00:00.441758215  4717 0xaaaaf1490610 INFO                    v4l2 gstv4l2object.c:1285:gst_v4l2_object_fill_format_list:<hardware_decoder:sink>   H264
+0:00:00.442248937  4717 0xaaaaf1490610 INFO                    v4l2 gstv4l2object.c:5083:gst_v4l2_object_probe_caps:<hardware_decoder:sink> probed caps: video/x-h265, stream-format=(string)byte-stream, alignment=(string)au, width=(int)[ 128, 8192 ], height=(int)[ 128, 8192 ], colorimetry=(string){ bt601, smpte240m, bt709, 1:3:5:1, 2:4:5:2, 2:4:5:3, 1:4:7:1, 2:4:7:1, 2:4:12:8, bt2020, 2:0:0:0 }, parsed=(boolean)true
+0:00:00.445029575  4717 0xffffa4000b90 WARN                    v4l2 gstv4l2object.c:3431:gst_v4l2_object_reset_compose_region:<hardware_decoder:sink> Failed to get default compose rectangle with VIDIOC_G_SELECTION: Invalid argument
+0:00:00.445110876  4717 0xffffa4000b90 INFO                    v4l2 gstv4l2object.c:3367:gst_v4l2_object_setup_pool:<hardware_decoder:sink> accessing buffers via mode 2
+0:00:00.445524568  4717 0xffffa4000b90 INFO          v4l2bufferpool gstv4l2bufferpool.c:588:gst_v4l2_buffer_pool_set_config:<hardware_decoder:pool0:sink> increasing minimum buffers to 2
+0:00:00.445698003  4717 0xffffa4000b90 INFO          v4l2bufferpool gstv4l2bufferpool.c:601:gst_v4l2_buffer_pool_set_config:<hardware_decoder:pool0:sink> reducing maximum buffers to 32
+0:00:00.447180483  4717 0xffffa4000b90 WARN          v4l2bufferpool gstv4l2bufferpool.c:852:gst_v4l2_buffer_pool_start:<hardware_decoder:pool0:sink> Uncertain or not enough buffers, enabling copy threshold
+0:00:00.450026849  4717 0xffffa4000d70 INFO                    v4l2 gstv4l2object.c:1281:gst_v4l2_object_fill_format_list:<hardware_decoder:src> got 2 format(s):
+0:00:00.450123723  4717 0xffffa4000d70 INFO                    v4l2 gstv4l2object.c:1285:gst_v4l2_object_fill_format_list:<hardware_decoder:src>   NV12
+0:00:00.450196951  4717 0xffffa4000d70 INFO                    v4l2 gstv4l2object.c:1285:gst_v4l2_object_fill_format_list:<hardware_decoder:src>   Q08C
+0:00:00.450328460  4717 0xffffa4000d70 WARN                    v4l2 gstv4l2object.c:2440:gst_v4l2_object_get_streamparm:<hardware_decoder:src> VIDIOC_G_PARM failed
+0:00:00.450475072  4717 0xffffa4000d70 INFO                    v4l2 gstv4l2object.c:1281:gst_v4l2_object_fill_format_list:<hardware_decoder:src> got 1 format(s):
+0:00:00.450546946  4717 0xffffa4000d70 INFO                    v4l2 gstv4l2object.c:1285:gst_v4l2_object_fill_format_list:<hardware_decoder:src>   Q10C
+0:00:00.450702882  4717 0xffffa4000d70 INFO                    v4l2 gstv4l2object.c:5083:gst_v4l2_object_probe_caps:<hardware_decoder:src> probed caps: EMPTY
+0:00:00.450798714  4717 0xffffa4000d70 ERROR           v4l2videodec gstv4l2videodec.c:518:gst_v4l2_video_dec_negotiate:<hardware_decoder> not negotiated
+0:00:00.450865744  4717 0xffffa4000d70 ERROR           v4l2videodec gstv4l2videodec.c:743:gst_v4l2_video_dec_loop:<hardware_decoder> Failed to setup capture queue
+result frames=0 expected=60 dmabuf_frames=0 eos=0 failed=1

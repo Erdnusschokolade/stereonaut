@@ -1,0 +1,188 @@
+Input #0, lavfi, from 'testsrc2=size=1920x1080:rate=30':
+  Duration: N/A, start: 0.000000, bitrate: N/A
+  Stream #0:0: Video: wrapped_avframe, yuv420p, 1920x1080 [SAR 1:1 DAR 16:9], 30 fps, 30 tbr, 30 tbn
+Stream mapping:
+  Stream #0:0 -> #0:0 (wrapped_avframe (native) -> hevc (libx265))
+x265 [info]: HEVC encoder version 4.3
+x265 [info]: build info [Linux][GCC 16.1.1][64 bit] 8bit+10bit+12bit
+x265 [info]: using cpu capabilities: MMX2 SSE2Fast LZCNT SSSE3 SSE4.2 AVX FMA3 BMI2 AVX2
+x265 [info]: Main profile, Level-4 (Main tier)
+x265 [info]: Thread pool created using 1 threads
+x265 [info]: frame threads / pool features       : 1 / none
+x265 [info]: Slices                              : 1
+x265 [info]: Coding QT: max CU size, min CU size : 64 / 8
+x265 [info]: Residual QT: max TU size, max depth : 32 / 1 inter / 1 intra
+x265 [info]: ME / range / subpel / merge         : hex / 57 / 2 / 2
+x265 [info]: Lookahead / bframes / badapt        : 15 / 0 / 0
+x265 [info]: b-pyramid / weightp / weightb       : 0 / 1 / 0
+x265 [info]: References / ref-limit  cu / depth  : 3 / on / on
+x265 [info]: AQ: mode / str / qg-size / cu-tree  : 2 / 1.0 / 32 / 1
+x265 [info]: Rate Control / qCompress            : CRF-18.0 / 0.60
+x265 [info]: tools: rd=2 psy-rd=2.00 rskip mode=1 signhide tmvp fast-intra
+x265 [info]: tools: strong-intra-smoothing lslices=6 deblock sao dhdr10-info
+Output #0, hevc, to '/path/to/stereonaut/tests/decoder-fixtures/main.hevc':
+  Metadata:
+    encoder         : Lavf63.1.102
+  Stream #0:0: Video: hevc, yuv420p(tv, bt709/unknown/unknown, progressive), 1920x1080 [SAR 1:1 DAR 16:9], q=2-31, 30 fps, 30 tbn
+    Metadata:
+      encoder         : Lavc63.1.102 libx265
+    Side data:
+      CPB properties: bitrate max/min/avg: 0/0/0 buffer size: 0 vbv_delay: N/A
+frame=    4 fps=0.0 q=17.6 size=     203KiB time=00:00:00.13 bitrate=12445.2kbits/s speed=0.267x elapsed=0:00:00.50    frame=   14 fps= 14 q=18.0 size=     768KiB time=00:00:00.46 bitrate=13481.7kbits/s speed=0.467x elapsed=0:00:01.00    frame=   25 fps= 17 q=17.9 size=    1280KiB time=00:00:00.83 bitrate=12582.9kbits/s speed=0.555x elapsed=0:00:01.50    frame=   32 fps= 16 q=18.2 size=    1792KiB time=00:00:01.06 bitrate=13762.6kbits/s speed=0.533x elapsed=0:00:02.00    frame=   43 fps= 17 q=18.0 size=    2560KiB time=N/A bitrate=N/A speed=N/A elapsed=0:00:02.50    frame=   54 fps= 18 q=18.4 size=    3328KiB time=N/A bitrate=N/A speed=N/A elapsed=0:00:03.00    [out#0/hevc @ 0x55ed1db9e380] video:3782KiB audio:0KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: 0.000000%
+frame=   60 fps= 19 q=20.7 Lsize=    3782KiB time=00:00:02.00 bitrate=15492.8kbits/s speed=0.619x elapsed=0:00:03.23    
+x265 [info]: frame I:      2, Avg QP:16.51  kb/s: 18946.44
+x265 [info]: frame P:     58, Avg QP:18.09  kb/s: 15352.77
+x265 [info]: Weighted P-Frames: Y:0.0% UV:0.0%
+
+encoded 60 frames in 3.22s (18.62 fps), 15472.56 kb/s, Avg QP:18.03
+Input #0, lavfi, from 'testsrc2=size=1920x1080:rate=30':
+  Duration: N/A, start: 0.000000, bitrate: N/A
+  Stream #0:0: Video: wrapped_avframe, yuv420p, 1920x1080 [SAR 1:1 DAR 16:9], 30 fps, 30 tbr, 30 tbn
+Stream mapping:
+  Stream #0:0 -> #0:0 (wrapped_avframe (native) -> hevc (libx265))
+[swscaler @ 0x7fe460026280] No accelerated colorspace conversion found from yuv420p to bgr48le.
+[swscaler @ 0x7fe460026280] [swscaler @ 0x7fe4600b3780] No accelerated colorspace conversion found from yuv420p to bgr48le.
+[swscaler @ 0x7fe460026280] [swscaler @ 0x7fe4600c2700] No accelerated colorspace conversion found from yuv420p to bgr48le.
+[swscaler @ 0x7fe460026280] [swscaler @ 0x7fe4600d2700] No accelerated colorspace conversion found from yuv420p to bgr48le.
+[swscaler @ 0x7fe460026280] [swscaler @ 0x7fe4600e2700] No accelerated colorspace conversion found from yuv420p to bgr48le.
+[swscaler @ 0x7fe460026280] [swscaler @ 0x7fe4600f2700] No accelerated colorspace conversion found from yuv420p to bgr48le.
+[swscaler @ 0x7fe460026280] [swscaler @ 0x7fe460102700] No accelerated colorspace conversion found from yuv420p to bgr48le.
+[swscaler @ 0x7fe460026280] [swscaler @ 0x7fe460112700] No accelerated colorspace conversion found from yuv420p to bgr48le.
+[swscaler @ 0x7fe460026280] [swscaler @ 0x7fe460122700] No accelerated colorspace conversion found from yuv420p to bgr48le.
+[swscaler @ 0x7fe460026280] [swscaler @ 0x7fe460132700] No accelerated colorspace conversion found from yuv420p to bgr48le.
+[swscaler @ 0x7fe460026280] [swscaler @ 0x7fe460142700] No accelerated colorspace conversion found from yuv420p to bgr48le.
+[swscaler @ 0x7fe460026280] [swscaler @ 0x7fe460152700] No accelerated colorspace conversion found from yuv420p to bgr48le.
+[swscaler @ 0x7fe460026280] [swscaler @ 0x7fe460162700] No accelerated colorspace conversion found from yuv420p to bgr48le.
+[swscaler @ 0x7fe460026280] [swscaler @ 0x7fe460172700] No accelerated colorspace conversion found from yuv420p to bgr48le.
+[swscaler @ 0x7fe460026280] [swscaler @ 0x7fe460182700] No accelerated colorspace conversion found from yuv420p to bgr48le.
+[swscaler @ 0x7fe460026280] [swscaler @ 0x7fe460192700] No accelerated colorspace conversion found from yuv420p to bgr48le.
+[swscaler @ 0x7fe460026280] [swscaler @ 0x7fe4601a2700] No accelerated colorspace conversion found from yuv420p to bgr48le.
+x265 [info]: HEVC encoder version 4.3
+x265 [info]: build info [Linux][GCC 16.1.1][64 bit] 10bit
+x265 [info]: using cpu capabilities: MMX2 SSE2Fast LZCNT SSSE3 SSE4.2 AVX FMA3 BMI2 AVX2
+x265 [info]: Main 10 profile, Level-4 (Main tier)
+x265 [info]: Thread pool created using 1 threads
+x265 [info]: frame threads / pool features       : 1 / none
+x265 [info]: Slices                              : 1
+x265 [info]: Coding QT: max CU size, min CU size : 64 / 8
+x265 [info]: Residual QT: max TU size, max depth : 32 / 1 inter / 1 intra
+x265 [info]: ME / range / subpel / merge         : hex / 57 / 2 / 2
+x265 [info]: Lookahead / bframes / badapt        : 15 / 0 / 0
+x265 [info]: b-pyramid / weightp / weightb       : 0 / 1 / 0
+x265 [info]: References / ref-limit  cu / depth  : 3 / on / on
+x265 [info]: AQ: mode / str / qg-size / cu-tree  : 2 / 1.0 / 32 / 1
+x265 [info]: Rate Control / qCompress            : CRF-18.0 / 0.60
+x265 [info]: tools: rd=2 psy-rd=2.00 rskip mode=1 signhide tmvp fast-intra
+x265 [info]: tools: strong-intra-smoothing lslices=6 deblock sao dhdr10-info
+Output #0, hevc, to '/path/to/stereonaut/tests/decoder-fixtures/main10.hevc':
+  Metadata:
+    encoder         : Lavf63.1.102
+  Stream #0:0: Video: hevc, yuv420p10le(tv, bt709/unknown/unknown, progressive), 1920x1080 [SAR 1:1 DAR 16:9], q=2-31, 30 fps, 30 tbn
+    Metadata:
+      encoder         : Lavc63.1.102 libx265
+    Side data:
+      CPB properties: bitrate max/min/avg: 0/0/0 buffer size: 0 vbv_delay: N/A
+frame=    2 fps=0.0 q=17.5 size=      72KiB time=00:00:00.06 bitrate=8860.6kbits/s speed=0.133x elapsed=0:00:00.50    frame=   10 fps= 10 q=16.9 size=     512KiB time=00:00:00.33 bitrate=12582.9kbits/s speed=0.333x elapsed=0:00:01.00    frame=   18 fps= 12 q=17.7 size=    1024KiB time=00:00:00.60 bitrate=13981.0kbits/s speed= 0.4x elapsed=0:00:01.50    frame=   25 fps= 12 q=17.5 size=    1280KiB time=00:00:00.83 bitrate=12582.9kbits/s speed=0.417x elapsed=0:00:02.00    frame=   30 fps= 12 q=19.1 size=    1792KiB time=00:00:01.00 bitrate=14680.1kbits/s speed= 0.4x elapsed=0:00:02.50    frame=   38 fps= 13 q=16.4 size=    2304KiB time=00:00:01.26 bitrate=14900.8kbits/s speed=0.422x elapsed=0:00:03.00    frame=   46 fps= 13 q=16.8 size=    2560KiB time=N/A bitrate=N/A speed=N/A elapsed=0:00:03.50    frame=   54 fps= 13 q=17.0 size=    3072KiB time=N/A bitrate=N/A speed=N/A elapsed=0:00:04.00    [out#0/hevc @ 0x562074c2d380] video:3707KiB audio:0KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: 0.000000%
+frame=   60 fps= 14 q=20.8 Lsize=    3707KiB time=00:00:02.00 bitrate=15183.4kbits/s speed=0.462x elapsed=0:00:04.32    
+x265 [info]: frame I:      2, Avg QP:15.55  kb/s: 18547.20
+x265 [info]: frame P:     58, Avg QP:17.25  kb/s: 15046.56
+x265 [info]: Weighted P-Frames: Y:0.0% UV:0.0%
+
+encoded 60 frames in 4.32s (13.90 fps), 15163.25 kb/s, Avg QP:17.19
+[in#0/rawvideo @ 0x55a9476990c0] Estimating duration from bitrate, this may be inaccurate
+Input #0, rawvideo, from '/path/to/stereonaut/tests/decoder-fixtures/gradient10-source.yuv':
+  Duration: 00:00:00.03, start: 0.000000, bitrate: 1493006 kb/s
+  Stream #0:0: Video: rawvideo (Y3[11][10] / 0xA0B3359), yuv420p10le(tv, bt709), 1920x1080, 1492992 kb/s, 30 tbr, 30 tbn
+Stream mapping:
+  Stream #0:0 -> #0:0 (rawvideo (native) -> hevc (libx265))
+x265 [info]: HEVC encoder version 4.3
+x265 [info]: build info [Linux][GCC 16.1.1][64 bit] 10bit
+x265 [info]: using cpu capabilities: MMX2 SSE2Fast LZCNT SSSE3 SSE4.2 AVX FMA3 BMI2 AVX2
+x265 [warning]: Specifying a decoder level with constant rate factor rate-control requires
+x265 [warning]: enabling VBV with vbv-bufsize=50000kb vbv-maxrate=50000kbps. VBV outputs are non-deterministic!
+x265 [info]: Main 10 profile, Level-4.1 (High tier)
+x265 [info]: Thread pool created using 1 threads
+x265 [info]: frame threads / pool features       : 1 / none
+x265 [info]: Slices                              : 1
+x265 [info]: Coding QT: max CU size, min CU size : 64 / 8
+x265 [info]: Residual QT: max TU size, max depth : 32 / 1 inter / 1 intra
+x265 [info]: ME / range / subpel / merge         : hex / 57 / 2 / 2
+x265 [info]: Lookahead / bframes / badapt        : 15 / 0 / 0
+x265 [info]: b-pyramid / weightp / weightb       : 0 / 1 / 0
+x265 [info]: References / ref-limit  cu / depth  : 3 / on / on
+x265 [info]: AQ: mode / str / qg-size / cu-tree  : 2 / 1.0 / 32 / 1
+x265 [info]: Rate Control / qCompress            : CRF-4.0 / 0.60
+x265 [info]: VBV/HRD buffer / max-rate / init    : 50000 / 50000 / 0.900
+x265 [info]: tools: rd=2 psy-rd=2.00 rskip mode=1 signhide tmvp fast-intra
+x265 [info]: tools: strong-intra-smoothing lslices=6 deblock sao dhdr10-info
+Output #0, hevc, to '/path/to/stereonaut/tests/decoder-fixtures/gradient10.hevc':
+  Metadata:
+    encoder         : Lavf63.1.102
+  Stream #0:0: Video: hevc, yuv420p10le(tv, bt709, progressive), 1920x1080, q=2-31, 30 fps, 30 tbn
+    Metadata:
+      encoder         : Lavc63.1.102 libx265
+    Side data:
+      CPB properties: bitrate max/min/avg: 0/0/0 buffer size: 0 vbv_delay: N/A
+frame=    3 fps=0.0 q=10.0 size=       7KiB time=00:00:00.10 bitrate= 535.1kbits/s speed= 0.2x elapsed=0:00:00.50    frame=   15 fps= 15 q=10.0 size=       7KiB time=00:00:00.50 bitrate= 118.7kbits/s speed= 0.5x elapsed=0:00:01.00    frame=   28 fps= 19 q=10.0 size=       8KiB time=00:00:00.93 bitrate=  70.4kbits/s speed=0.622x elapsed=0:00:01.50    frame=   36 fps= 18 q=10.0 size=      14KiB time=00:00:01.20 bitrate=  97.3kbits/s speed= 0.6x elapsed=0:00:02.00    frame=   50 fps= 20 q=10.0 size=      15KiB time=N/A bitrate=N/A speed=N/A elapsed=0:00:02.50    [out#0/hevc @ 0x55a9476a3980] video:16KiB audio:0KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: 0.000000%
+frame=   60 fps= 21 q=10.0 Lsize=      16KiB time=00:00:02.00 bitrate=  63.9kbits/s speed=0.707x elapsed=0:00:02.82    
+x265 [info]: frame I:      2, Avg QP:1.02  kb/s: 894.12  
+x265 [info]: frame P:     58, Avg QP:9.79  kb/s: 13.43   
+x265 [info]: Weighted P-Frames: Y:0.0% UV:0.0%
+
+encoded 60 frames in 2.82s (21.25 fps), 42.79 kb/s, Avg QP:9.50
+Input #0, hevc, from '/path/to/stereonaut/tests/decoder-fixtures/main.hevc':
+  Duration: N/A, bitrate: N/A
+  Stream #0:0: Video: hevc (Main), yuv420p(tv, bt709/unknown/unknown), 1920x1080 [SAR 1:1 DAR 16:9], 25 fps, 30 tbr, 1200k tbn
+Stream mapping:
+  Stream #0:0 -> #0:0 (hevc (native) -> rawvideo (native))
+Output #0, rawvideo, to '/path/to/stereonaut/tests/decoder-fixtures/main-reference.yuv':
+  Metadata:
+    encoder         : Lavf63.1.102
+  Stream #0:0: Video: rawvideo (I420 / 0x30323449), yuv420p(tv, bt709/unknown/unknown, progressive), 1920x1080 [SAR 1:1 DAR 16:9], q=2-31, 746496 kb/s, 30 fps, 30 tbn
+    Metadata:
+      encoder         : Lavc63.1.102 rawvideo
+[out#0/rawvideo @ 0x55e51c4cd2c0] video:3038KiB audio:0KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: 0.000000%
+frame=    1 fps=0.0 q=-0.0 Lsize=    3038KiB time=00:00:00.03 bitrate=746503.5kbits/s speed=0.522x elapsed=0:00:00.06    
+Input #0, hevc, from '/path/to/stereonaut/tests/decoder-fixtures/main10.hevc':
+  Duration: N/A, bitrate: N/A
+  Stream #0:0: Video: hevc (Main 10), yuv420p10le(tv, bt709/unknown/unknown), 1920x1080 [SAR 1:1 DAR 16:9], 25 fps, 30 tbr, 1200k tbn
+Stream mapping:
+  Stream #0:0 -> #0:0 (hevc (native) -> rawvideo (native))
+Output #0, rawvideo, to '/path/to/stereonaut/tests/decoder-fixtures/main10-reference.yuv':
+  Metadata:
+    encoder         : Lavf63.1.102
+  Stream #0:0: Video: rawvideo (Y3[11][10] / 0xA0B3359), yuv420p10le(tv, bt709/unknown/unknown, progressive), 1920x1080 [SAR 1:1 DAR 16:9], q=2-31, 933120 kb/s, 30 fps, 30 tbn
+    Metadata:
+      encoder         : Lavc63.1.102 rawvideo
+[out#0/rawvideo @ 0x56029d271340] video:6075KiB audio:0KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: 0.000000%
+frame=    1 fps=0.0 q=-0.0 Lsize=    6075KiB time=00:00:00.03 bitrate=1493006.9kbits/s speed=0.515x elapsed=0:00:00.06    
+Input #0, hevc, from '/path/to/stereonaut/tests/decoder-fixtures/gradient10.hevc':
+  Duration: N/A, bitrate: N/A
+  Stream #0:0: Video: hevc (Main 10), yuv420p10le(tv, bt709), 1920x1080, 25 fps, 30 tbr, 1200k tbn
+Stream mapping:
+  Stream #0:0 -> #0:0 (hevc (native) -> rawvideo (native))
+Output #0, rawvideo, to '/path/to/stereonaut/tests/decoder-fixtures/gradient10-reference.yuv':
+  Metadata:
+    encoder         : Lavf63.1.102
+  Stream #0:0: Video: rawvideo (Y3[11][10] / 0xA0B3359), yuv420p10le(tv, bt709, progressive), 1920x1080, q=2-31, 933120 kb/s, 30 fps, 30 tbn
+    Metadata:
+      encoder         : Lavc63.1.102 rawvideo
+[out#0/rawvideo @ 0x565564ec1340] video:6075KiB audio:0KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: 0.000000%
+frame=    1 fps=0.0 q=-0.0 Lsize=    6075KiB time=00:00:00.03 bitrate=1493006.9kbits/s speed=0.824x elapsed=0:00:00.04    
+{
+  "main": {
+    "bytes": 3873201,
+    "profile": "Main",
+    "pix_fmt": "yuv420p"
+  },
+  "main10": {
+    "bytes": 3795855,
+    "profile": "Main 10",
+    "pix_fmt": "yuv420p10le"
+  },
+  "gradient10": {
+    "bytes": 15977,
+    "profile": "Main 10",
+    "pix_fmt": "yuv420p10le"
+  }
+}

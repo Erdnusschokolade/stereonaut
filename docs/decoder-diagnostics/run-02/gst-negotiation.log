@@ -1,0 +1,449 @@
+0:00:00.015729041  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:132:gst_v4l2_probe_and_register: Probing devices
+0:00:00.032619017  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:165:gst_v4l2_probe_and_register: Probing 'iris_decoder' located at '/dev/video22'
+0:00:00.032634797  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:74:gst_v4l2_probe_template_caps: Getting /dev/video22 format enumerations
+0:00:00.032639484  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:74:gst_v4l2_probe_template_caps: Getting /dev/video22 format enumerations
+0:00:00.032654640  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:74:gst_v4l2_probe_template_caps: Getting /dev/video22 format enumerations
+0:00:00.032657400  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:74:gst_v4l2_probe_template_caps: Getting /dev/video22 format enumerations
+0:00:00.032661983  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:1738:gst_v4l2_object_v4l2fourcc_to_bare_struct: Unsupported fourcc 0x43383051 Q08C
+0:00:00.032684899  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:1738:gst_v4l2_object_v4l2fourcc_to_bare_struct: Unsupported fourcc 0x34324351 QC24
+0:00:00.032697190  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:1738:gst_v4l2_object_v4l2fourcc_to_bare_struct: Unsupported fourcc 0x3436324d M264
+0:00:00.032716772  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:1738:gst_v4l2_object_v4l2fourcc_to_bare_struct: Unsupported fourcc 0x31424752 RGB1
+0:00:00.032719845  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:1738:gst_v4l2_object_v4l2fourcc_to_bare_struct: Unsupported fourcc 0x35315241 AR15
+0:00:00.032725209  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:1738:gst_v4l2_object_v4l2fourcc_to_bare_struct: Unsupported fourcc 0xb5315241 AR1.
+0:00:00.032730574  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:1738:gst_v4l2_object_v4l2fourcc_to_bare_struct: Unsupported fourcc 0x52424752 RGBR
+0:00:00.032733022  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:1738:gst_v4l2_object_v4l2fourcc_to_bare_struct: Unsupported fourcc 0x48524742 BGRH
+0:00:00.032746042  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:1738:gst_v4l2_object_v4l2fourcc_to_bare_struct: Unsupported fourcc 0x34343452 R444
+0:00:00.032760833  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:1738:gst_v4l2_object_v4l2fourcc_to_bare_struct: Unsupported fourcc 0x20343059 Y04 
+0:00:00.032764791  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:1738:gst_v4l2_object_v4l2fourcc_to_bare_struct: Unsupported fourcc 0x20363059 Y06 
+0:00:00.032768489  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:1738:gst_v4l2_object_v4l2fourcc_to_bare_struct: Unsupported fourcc 0x20303159 Y10 
+0:00:00.032775468  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:1738:gst_v4l2_object_v4l2fourcc_to_bare_struct: Unsupported fourcc 0x20323159 Y12 
+0:00:00.032790311  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:1738:gst_v4l2_object_v4l2fourcc_to_bare_struct: Unsupported fourcc 0x42303159 Y10B
+0:00:00.032797446  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:1738:gst_v4l2_object_v4l2fourcc_to_bare_struct: Unsupported fourcc 0x384c4150 PAL8
+0:00:00.032804320  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:1738:gst_v4l2_object_v4l2fourcc_to_bare_struct: Unsupported fourcc 0x20385655 UV8 
+0:00:00.032824215  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:1738:gst_v4l2_object_v4l2fourcc_to_bare_struct: Unsupported fourcc 0x56555959 YYUV
+0:00:00.032833381  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:1738:gst_v4l2_object_v4l2fourcc_to_bare_struct: Unsupported fourcc 0x59555956 VYUY
+0:00:00.032840048  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:1738:gst_v4l2_object_v4l2fourcc_to_bare_struct: Unsupported fourcc 0x50313459 Y41P
+0:00:00.032844058  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:1738:gst_v4l2_object_v4l2fourcc_to_bare_struct: Unsupported fourcc 0x34343459 Y444
+0:00:00.032859838  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:1738:gst_v4l2_object_v4l2fourcc_to_bare_struct: Unsupported fourcc 0x4f565559 YUVO
+0:00:00.032863432  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:1738:gst_v4l2_object_v4l2fourcc_to_bare_struct: Unsupported fourcc 0x50565559 YUVP
+0:00:00.032866921  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:1738:gst_v4l2_object_v4l2fourcc_to_bare_struct: Unsupported fourcc 0x34565559 YUV4
+0:00:00.032915617  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:1738:gst_v4l2_object_v4l2fourcc_to_bare_struct: Unsupported fourcc 0x34324948 HI24
+0:00:00.032920304  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:1738:gst_v4l2_object_v4l2fourcc_to_bare_struct: Unsupported fourcc 0x32314d48 HM12
+0:00:00.032923898  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:1738:gst_v4l2_object_v4l2fourcc_to_bare_struct: Unsupported fourcc 0x3032344d M420
+0:00:00.032933116  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:1738:gst_v4l2_object_v4l2fourcc_to_bare_struct: Unsupported fourcc 0x32314d56 VM12
+0:00:00.032960042  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:1738:gst_v4l2_object_v4l2fourcc_to_bare_struct: Unsupported fourcc 0x3234564e NV42
+0:00:00.033716621  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:165:gst_v4l2_probe_and_register: Probing 'iris_encoder' located at '/dev/video23'
+0:00:00.033729172  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:74:gst_v4l2_probe_template_caps: Getting /dev/video23 format enumerations
+0:00:00.033734016  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:74:gst_v4l2_probe_template_caps: Getting /dev/video23 format enumerations
+0:00:00.033740109  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:1738:gst_v4l2_object_v4l2fourcc_to_bare_struct: Unsupported fourcc 0x43383051 Q08C
+0:00:00.033753181  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:1738:gst_v4l2_object_v4l2fourcc_to_bare_struct: Unsupported fourcc 0x34324351 QC24
+0:00:00.033761775  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:74:gst_v4l2_probe_template_caps: Getting /dev/video23 format enumerations
+0:00:00.033766931  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:74:gst_v4l2_probe_template_caps: Getting /dev/video23 format enumerations
+0:00:00.034892346  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Inappropriate ioctl for device
+0:00:00.034930313  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Inappropriate ioctl for device
+0:00:00.034951770  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Invalid argument
+0:00:00.034965363  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Invalid argument
+0:00:00.034977446  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Invalid argument
+0:00:00.034987862  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Invalid argument
+0:00:00.035000726  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Inappropriate ioctl for device
+0:00:00.035012028  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Inappropriate ioctl for device
+0:00:00.035024214  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Inappropriate ioctl for device
+0:00:00.035041974  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Inappropriate ioctl for device
+0:00:00.035053067  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Inappropriate ioctl for device
+0:00:00.035062963  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Inappropriate ioctl for device
+0:00:00.035073275  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Inappropriate ioctl for device
+0:00:00.035083795  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Inappropriate ioctl for device
+0:00:00.035093378  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Inappropriate ioctl for device
+0:00:00.035105200  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Inappropriate ioctl for device
+0:00:00.035115304  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Inappropriate ioctl for device
+0:00:00.035125251  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Inappropriate ioctl for device
+0:00:00.035135720  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Inappropriate ioctl for device
+0:00:00.035145875  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Inappropriate ioctl for device
+0:00:00.035156344  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Inappropriate ioctl for device
+0:00:00.035166499  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Inappropriate ioctl for device
+0:00:00.035178009  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Invalid argument
+0:00:00.035187905  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Invalid argument
+0:00:00.035197852  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Invalid argument
+0:00:00.035681423  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Invalid argument
+0:00:00.035743763  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Invalid argument
+0:00:00.035769439  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Inappropriate ioctl for device
+0:00:00.035792928  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Inappropriate ioctl for device
+0:00:00.035814489  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Inappropriate ioctl for device
+0:00:00.035838186  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Inappropriate ioctl for device
+0:00:00.035858550  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Inappropriate ioctl for device
+0:00:00.035878913  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Inappropriate ioctl for device
+0:00:00.035916724  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2.c:153:gst_v4l2_probe_and_register: Failed to get device capabilities: Inappropriate ioctl for device
+decoder=v4l2h265dec device=/dev/video22 capture_io_mode=mmap
+0:00:00.039790029  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3113:gst_pad_query_caps:<source:src> get pad caps with filter (NULL)
+0:00:00.039820340  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3120:gst_pad_query_caps:<source:src> query returned ANY
+0:00:00.039830131  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3113:gst_pad_query_caps:<parser:sink> get pad caps with filter (NULL)
+0:00:00.039841537  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3159:gst_pad_peer_query_caps:<parser:src> get pad peer caps with filter (NULL)
+0:00:00.039859869  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3120:gst_pad_query_caps:<parser:sink> query returned video/x-h265
+0:00:00.039880024  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3113:gst_pad_query_caps:<source:src> get pad caps with filter (NULL)
+0:00:00.039889972  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3120:gst_pad_query_caps:<source:src> query returned ANY
+0:00:00.039897680  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3113:gst_pad_query_caps:<parser:sink> get pad caps with filter (NULL)
+0:00:00.039906169  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3159:gst_pad_peer_query_caps:<parser:src> get pad peer caps with filter (NULL)
+0:00:00.039918877  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3120:gst_pad_query_caps:<parser:sink> query returned video/x-h265
+0:00:00.039926949  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstpad.c:2290:gst_pad_link_check_compatible_unlocked:<source:src> src caps ANY
+0:00:00.039934449  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstpad.c:2292:gst_pad_link_check_compatible_unlocked:<parser:sink> sink caps video/x-h265
+0:00:00.039942209  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstpad.c:2310:gst_pad_link_check_compatible_unlocked: caps are compatible
+0:00:00.039964291  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3113:gst_pad_query_caps:<parser:src> get pad caps with filter (NULL)
+0:00:00.039980749  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstpad.c:3290:gst_pad_query_caps_default:<parser:src> query caps caps query: 0xaaaac9bdaa10, GstQueryCaps, filter=(GstCaps)"NULL", caps=(GstCaps)"NULL";
+0:00:00.039989186  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstpad.c:3308:gst_pad_query_caps_default:<parser:src> fixed pad caps: trying pad caps
+0:00:00.039995852  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstpad.c:3314:gst_pad_query_caps_default:<parser:src> trying pad template caps
+0:00:00.040010799  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstpad.c:3343:gst_pad_query_caps_default:<parser:src> using caps 0xaaaac9d3f3d0 video/x-h265, parsed=(boolean)true, stream-format=(string){ hvc1, hev1, byte-stream }, alignment=(string){ au, nal }
+0:00:00.040024861  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3120:gst_pad_query_caps:<parser:src> query returned video/x-h265, parsed=(boolean)true, stream-format=(string){ hvc1, hev1, byte-stream }, alignment=(string){ au, nal }
+0:00:00.040033559  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3113:gst_pad_query_caps:<hardware_decoder:sink> get pad caps with filter (NULL)
+0:00:00.040043923  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3159:gst_pad_peer_query_caps:<hardware_decoder:src> get pad peer caps with filter (NULL)
+0:00:00.040077619  6270 0xaaaac9d476c0 DEBUG           v4l2videodec gstv4l2videodec.c:1156:gst_v4l2_video_dec_sink_getcaps:<hardware_decoder> Returning sink caps video/x-h265, width=(int)[ 1, 32768 ], height=(int)[ 1, 32768 ], framerate=(fraction)[ 0/1, 2147483647/1 ], stream-format=(string)byte-stream, alignment=(string)au
+0:00:00.040093191  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3120:gst_pad_query_caps:<hardware_decoder:sink> query returned video/x-h265, width=(int)[ 1, 32768 ], height=(int)[ 1, 32768 ], framerate=(fraction)[ 0/1, 2147483647/1 ], stream-format=(string)byte-stream, alignment=(string)au
+0:00:00.040122409  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3113:gst_pad_query_caps:<parser:src> get pad caps with filter (NULL)
+0:00:00.040134179  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstpad.c:3290:gst_pad_query_caps_default:<parser:src> query caps caps query: 0xaaaac9bdaac0, GstQueryCaps, filter=(GstCaps)"NULL", caps=(GstCaps)"NULL";
+0:00:00.040141158  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstpad.c:3308:gst_pad_query_caps_default:<parser:src> fixed pad caps: trying pad caps
+0:00:00.040147512  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstpad.c:3314:gst_pad_query_caps_default:<parser:src> trying pad template caps
+0:00:00.040158917  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstpad.c:3343:gst_pad_query_caps_default:<parser:src> using caps 0xaaaac9d3f3d0 video/x-h265, parsed=(boolean)true, stream-format=(string){ hvc1, hev1, byte-stream }, alignment=(string){ au, nal }
+0:00:00.040171104  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3120:gst_pad_query_caps:<parser:src> query returned video/x-h265, parsed=(boolean)true, stream-format=(string){ hvc1, hev1, byte-stream }, alignment=(string){ au, nal }
+0:00:00.040178916  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3113:gst_pad_query_caps:<hardware_decoder:sink> get pad caps with filter (NULL)
+0:00:00.040187562  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3159:gst_pad_peer_query_caps:<hardware_decoder:src> get pad peer caps with filter (NULL)
+0:00:00.040221154  6270 0xaaaac9d476c0 DEBUG           v4l2videodec gstv4l2videodec.c:1156:gst_v4l2_video_dec_sink_getcaps:<hardware_decoder> Returning sink caps video/x-h265, width=(int)[ 1, 32768 ], height=(int)[ 1, 32768 ], framerate=(fraction)[ 0/1, 2147483647/1 ], stream-format=(string)byte-stream, alignment=(string)au
+0:00:00.040239382  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3120:gst_pad_query_caps:<hardware_decoder:sink> query returned video/x-h265, width=(int)[ 1, 32768 ], height=(int)[ 1, 32768 ], framerate=(fraction)[ 0/1, 2147483647/1 ], stream-format=(string)byte-stream, alignment=(string)au
+0:00:00.040252038  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstpad.c:2290:gst_pad_link_check_compatible_unlocked:<parser:src> src caps video/x-h265, parsed=(boolean)true, stream-format=(string){ hvc1, hev1, byte-stream }, alignment=(string){ au, nal }
+0:00:00.040264902  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstpad.c:2292:gst_pad_link_check_compatible_unlocked:<hardware_decoder:sink> sink caps video/x-h265, width=(int)[ 1, 32768 ], height=(int)[ 1, 32768 ], framerate=(fraction)[ 0/1, 2147483647/1 ], stream-format=(string)byte-stream, alignment=(string)au
+0:00:00.040276620  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstpad.c:2310:gst_pad_link_check_compatible_unlocked: caps are compatible
+0:00:00.040292505  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3113:gst_pad_query_caps:<hardware_decoder:src> get pad caps with filter (NULL)
+0:00:00.040307400  6270 0xaaaac9d476c0 DEBUG           v4l2videodec gstv4l2videodec.c:1132:gst_v4l2_video_dec_src_query:<hardware_decoder> Returning src caps video/x-raw, format=(string){ NV12, NV21, RGBA }, width=(int)[ 1, 32768 ], height=(int)[ 1, 32768 ], framerate=(fraction)[ 0/1, 2147483647/1 ]
+0:00:00.040321410  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3120:gst_pad_query_caps:<hardware_decoder:src> query returned video/x-raw, format=(string){ NV12, NV21, RGBA }, width=(int)[ 1, 32768 ], height=(int)[ 1, 32768 ], framerate=(fraction)[ 0/1, 2147483647/1 ]
+0:00:00.040330836  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3113:gst_pad_query_caps:<output_format:sink> get pad caps with filter (NULL)
+0:00:00.040340211  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3159:gst_pad_peer_query_caps:<output_format:src> get pad peer caps with filter (NULL)
+0:00:00.040358387  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3120:gst_pad_query_caps:<output_format:sink> query returned ANY
+0:00:00.040369689  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3113:gst_pad_query_caps:<hardware_decoder:src> get pad caps with filter (NULL)
+0:00:00.040381771  6270 0xaaaac9d476c0 DEBUG           v4l2videodec gstv4l2videodec.c:1132:gst_v4l2_video_dec_src_query:<hardware_decoder> Returning src caps video/x-raw, format=(string){ NV12, NV21, RGBA }, width=(int)[ 1, 32768 ], height=(int)[ 1, 32768 ], framerate=(fraction)[ 0/1, 2147483647/1 ]
+0:00:00.040395156  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3120:gst_pad_query_caps:<hardware_decoder:src> query returned video/x-raw, format=(string){ NV12, NV21, RGBA }, width=(int)[ 1, 32768 ], height=(int)[ 1, 32768 ], framerate=(fraction)[ 0/1, 2147483647/1 ]
+0:00:00.040404218  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3113:gst_pad_query_caps:<output_format:sink> get pad caps with filter (NULL)
+0:00:00.040412864  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3159:gst_pad_peer_query_caps:<output_format:src> get pad peer caps with filter (NULL)
+0:00:00.040423228  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3120:gst_pad_query_caps:<output_format:sink> query returned ANY
+0:00:00.040434633  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstpad.c:2290:gst_pad_link_check_compatible_unlocked:<hardware_decoder:src> src caps video/x-raw, format=(string){ NV12, NV21, RGBA }, width=(int)[ 1, 32768 ], height=(int)[ 1, 32768 ], framerate=(fraction)[ 0/1, 2147483647/1 ]
+0:00:00.040443383  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstpad.c:2292:gst_pad_link_check_compatible_unlocked:<output_format:sink> sink caps ANY
+0:00:00.040450049  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstpad.c:2310:gst_pad_link_check_compatible_unlocked: caps are compatible
+0:00:00.040465205  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3113:gst_pad_query_caps:<output_format:src> get pad caps with filter (NULL)
+0:00:00.040474007  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3159:gst_pad_peer_query_caps:<output_format:sink> get pad peer caps with filter (NULL)
+0:00:00.040486766  6270 0xaaaac9d476c0 DEBUG           v4l2videodec gstv4l2videodec.c:1132:gst_v4l2_video_dec_src_query:<hardware_decoder> Returning src caps video/x-raw, format=(string){ NV12, NV21, RGBA }, width=(int)[ 1, 32768 ], height=(int)[ 1, 32768 ], framerate=(fraction)[ 0/1, 2147483647/1 ]
+0:00:00.040500620  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3166:gst_pad_peer_query_caps:<output_format:sink> peer query returned video/x-raw, format=(string){ NV12, NV21, RGBA }, width=(int)[ 1, 32768 ], height=(int)[ 1, 32768 ], framerate=(fraction)[ 0/1, 2147483647/1 ]
+0:00:00.040515775  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3120:gst_pad_query_caps:<output_format:src> query returned video/x-raw, format=(string){ NV12, NV21, RGBA }, width=(int)[ 1, 32768 ], height=(int)[ 1, 32768 ], framerate=(fraction)[ 0/1, 2147483647/1 ]
+0:00:00.040524837  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3113:gst_pad_query_caps:<inspect:sink> get pad caps with filter (NULL)
+0:00:00.040534941  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3120:gst_pad_query_caps:<inspect:sink> query returned ANY
+0:00:00.040545930  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3113:gst_pad_query_caps:<output_format:src> get pad caps with filter (NULL)
+0:00:00.040554992  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3159:gst_pad_peer_query_caps:<output_format:sink> get pad peer caps with filter (NULL)
+0:00:00.040567231  6270 0xaaaac9d476c0 DEBUG           v4l2videodec gstv4l2videodec.c:1132:gst_v4l2_video_dec_src_query:<hardware_decoder> Returning src caps video/x-raw, format=(string){ NV12, NV21, RGBA }, width=(int)[ 1, 32768 ], height=(int)[ 1, 32768 ], framerate=(fraction)[ 0/1, 2147483647/1 ]
+0:00:00.040585824  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3166:gst_pad_peer_query_caps:<output_format:sink> peer query returned video/x-raw, format=(string){ NV12, NV21, RGBA }, width=(int)[ 1, 32768 ], height=(int)[ 1, 32768 ], framerate=(fraction)[ 0/1, 2147483647/1 ]
+0:00:00.040600771  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3120:gst_pad_query_caps:<output_format:src> query returned video/x-raw, format=(string){ NV12, NV21, RGBA }, width=(int)[ 1, 32768 ], height=(int)[ 1, 32768 ], framerate=(fraction)[ 0/1, 2147483647/1 ]
+0:00:00.040609833  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3113:gst_pad_query_caps:<inspect:sink> get pad caps with filter (NULL)
+0:00:00.040618427  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstutils.c:3120:gst_pad_query_caps:<inspect:sink> query returned ANY
+0:00:00.040629572  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstpad.c:2290:gst_pad_link_check_compatible_unlocked:<output_format:src> src caps video/x-raw, format=(string){ NV12, NV21, RGBA }, width=(int)[ 1, 32768 ], height=(int)[ 1, 32768 ], framerate=(fraction)[ 0/1, 2147483647/1 ]
+0:00:00.040638322  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstpad.c:2292:gst_pad_link_check_compatible_unlocked:<inspect:sink> sink caps ANY
+0:00:00.040644832  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstpad.c:2310:gst_pad_link_check_compatible_unlocked: caps are compatible
+0:00:00.040715974  6270 0xaaaac9d476c0 DEBUG           v4l2videodec gstv4l2videodec.c:125:gst_v4l2_video_dec_open:<hardware_decoder> Opening
+0:00:00.040725088  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:528:gst_v4l2_open:<hardware_decoder:sink> Trying to open device /dev/video22
+0:00:00.040815449  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:66:gst_v4l2_get_capabilities:<hardware_decoder> getting capabilities
+0:00:00.040828313  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:501:gst_v4l2_adjust_buf_type: adjust type to multi-planar output
+0:00:00.040835239  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:138:gst_v4l2_fill_lists:<hardware_decoder> getting enumerations
+0:00:00.040841177  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:141:gst_v4l2_fill_lists:<hardware_decoder>   channels
+0:00:00.040849353  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:213:gst_v4l2_fill_lists:<hardware_decoder>   norms
+0:00:00.040856384  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:261:gst_v4l2_fill_lists:<hardware_decoder>   controls+menus
+0:00:00.040864457  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 00000000
+0:00:00.040874040  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:327:gst_v4l2_fill_lists:<hardware_decoder> starting control class 'User Controls'
+0:00:00.040881227  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 00980001
+0:00:00.040891487  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 00980914
+0:00:00.040900236  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 00980915
+0:00:00.040911329  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID rotate (980922) unhandled, FIXME
+0:00:00.040917840  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 00980922
+0:00:00.040925443  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:327:gst_v4l2_fill_lists:<hardware_decoder> starting control class 'Codec Controls'
+0:00:00.040931537  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 00990001
+0:00:00.040941432  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID video_b_frames (9909ca) unhandled, FIXME
+0:00:00.040954140  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 009909ca
+0:00:00.040964556  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID video_gop_size (9909cb) unhandled, FIXME
+0:00:00.040971170  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 009909cb
+0:00:00.040981118  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID video_bitrate_mode (9909ce) unhandled, FIXME
+0:00:00.040987940  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 009909ce
+0:00:00.040997419  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID video_bitrate (9909cf) unhandled, FIXME
+0:00:00.041003981  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 009909cf
+0:00:00.041013304  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID video_peak_bitrate (9909d0) unhandled, FIXME
+0:00:00.041019866  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 009909d0
+0:00:00.041030334  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID frame_level_rate_control_enable (9909d7) unhandled, FIXME
+0:00:00.041037105  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 009909d7
+0:00:00.041170692  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID sequence_header_mode (9909d8) unhandled, FIXME
+0:00:00.041177983  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 009909d8
+0:00:00.041188504  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID maximum_bytes_in_a_slice (9909db) unhandled, FIXME
+0:00:00.041195118  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 009909db
+0:00:00.041214023  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID number_of_mbs_in_a_slice (9909dc) unhandled, FIXME
+0:00:00.041223815  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 009909dc
+0:00:00.041233449  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID slice_partitioning_method (9909dd) unhandled, FIXME
+0:00:00.041240064  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 009909dd
+0:00:00.041249907  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID force_key_frame (9909e5) unhandled, FIXME
+0:00:00.041256365  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 009909e5
+0:00:00.041265479  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID base_layer_priority_id (9909e6) unhandled, FIXME
+0:00:00.041272041  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 009909e6
+0:00:00.041281103  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID ltr_count (9909e8) unhandled, FIXME
+0:00:00.041292457  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 009909e8
+0:00:00.041302821  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID frame_ltr_index (9909e9) unhandled, FIXME
+0:00:00.041309279  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 009909e9
+0:00:00.041319070  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID use_ltr_frames (9909ea) unhandled, FIXME
+0:00:00.041325528  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 009909ea
+0:00:00.041334643  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID intra_refresh_period (9909ec) unhandled, FIXME
+0:00:00.041340944  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 009909ec
+0:00:00.041350475  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID intra_refresh_period_type (9909ed) unhandled, FIXME
+0:00:00.041356673  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 009909ed
+0:00:00.041365891  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID h264_i_frame_qp_value (990a5e) unhandled, FIXME
+0:00:00.041372193  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 00990a5e
+0:00:00.041381151  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID h264_p_frame_qp_value (990a5f) unhandled, FIXME
+0:00:00.041387348  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 00990a5f
+0:00:00.041396306  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID h264_b_frame_qp_value (990a60) unhandled, FIXME
+0:00:00.041402452  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 00990a60
+0:00:00.041411358  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID h264_minimum_qp_value (990a61) unhandled, FIXME
+0:00:00.041417607  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 00990a61
+0:00:00.041426305  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID h264_maximum_qp_value (990a62) unhandled, FIXME
+0:00:00.041432450  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 00990a62
+0:00:00.041441565  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID h264_8x8_transform_enable (990a63) unhandled, FIXME
+0:00:00.041447866  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 00990a63
+0:00:00.041457033  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID h264_entropy_mode (990a65) unhandled, FIXME
+0:00:00.041463282  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 00990a65
+0:00:00.041472240  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID h264_level (990a67) unhandled, FIXME
+0:00:00.041478542  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 00990a67
+0:00:00.041491875  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID h264_profile (990a6b) unhandled, FIXME
+0:00:00.041498645  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 00990a6b
+0:00:00.041508228  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID enable_h264_hierarchical_coding (990a7b) unhandled, FIXME
+0:00:00.041514738  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 00990a7b
+0:00:00.041523748  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID h264_hierarchical_coding_type (990a7c) unhandled, FIXME
+0:00:00.041530258  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 00990a7c
+0:00:00.041539112  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID h264_number_of_hc_layers (990a7d) unhandled, FIXME
+0:00:00.041545674  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 00990a7d
+0:00:00.041564423  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID h264_i_frame_minimum_qp_value (990a81) unhandled, FIXME
+0:00:00.041571142  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 00990a81
+0:00:00.041580360  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID h264_i_frame_maximum_qp_value (990a82) unhandled, FIXME
+0:00:00.041586818  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 00990a82
+0:00:00.041595463  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID h264_p_frame_minimum_qp_value (990a83) unhandled, FIXME
+0:00:00.041602078  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 00990a83
+0:00:00.041610671  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID h264_p_frame_maximum_qp_value (990a84) unhandled, FIXME
+0:00:00.041617181  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 00990a84
+0:00:00.041627649  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID h264_b_frame_minimum_qp_value (990a85) unhandled, FIXME
+0:00:00.041634212  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 00990a85
+0:00:00.041643170  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID h264_b_frame_maximum_qp_value (990a86) unhandled, FIXME
+0:00:00.041649471  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 00990a86
+0:00:00.041658325  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID h264_hierarchical_lay_0_bitrate (990a87) unhandled, FIXME
+0:00:00.041664835  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 00990a87
+0:00:00.041673481  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID h264_hierarchical_lay_1_bitrate (990a88) unhandled, FIXME
+0:00:00.041679939  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 00990a88
+0:00:00.041691969  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID h264_hierarchical_lay_2_bitrate (990a89) unhandled, FIXME
+0:00:00.041698636  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 00990a89
+0:00:00.041707073  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID h264_hierarchical_lay_3_bitrate (990a8a) unhandled, FIXME
+0:00:00.041713427  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 00990a8a
+0:00:00.041722124  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID h264_hierarchical_lay_4_bitrate (990a8b) unhandled, FIXME
+0:00:00.041728530  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 00990a8b
+0:00:00.041737228  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID h264_hierarchical_lay_5_bitrate (990a8c) unhandled, FIXME
+0:00:00.041743686  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 00990a8c
+0:00:00.041752800  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID prepend_sps_and_pps_to_idr (990b84) unhandled, FIXME
+0:00:00.041759206  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 00990b84
+0:00:00.041768372  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:390:gst_v4l2_fill_lists:<hardware_decoder> ControlID frame_skip_mode (990b86) unhandled, FIXME
+0:00:00.041775038  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:281:gst_v4l2_fill_lists:<hardware_decoder> checking control 00990b86
+0:00:00.041782121  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:288:gst_v4l2_fill_lists:<hardware_decoder> controls finished
+0:00:00.041788111  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:461:gst_v4l2_fill_lists:<hardware_decoder> done
+0:00:00.041796496  6270 0xaaaac9d476c0 INFO                    v4l2 v4l2_calls.c:592:gst_v4l2_open:<hardware_decoder:sink> Opened device 'iris_decoder' (/dev/video22) successfully
+0:00:00.041806339  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:669:gst_v4l2_dup:<hardware_decoder:src> Trying to dup device /dev/video22
+0:00:00.041813161  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:508:gst_v4l2_adjust_buf_type: adjust type to multi-planar capture
+0:00:00.041821963  6270 0xaaaac9d476c0 INFO                    v4l2 v4l2_calls.c:688:gst_v4l2_dup:<hardware_decoder:src> Cloned device 'iris_decoder' (/dev/video22) successfully
+0:00:00.041830296  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:1244:gst_v4l2_object_fill_format_list:<hardware_decoder:sink> getting src format enumerations
+0:00:00.041847847  6270 0xaaaac9d476c0 INFO                    v4l2 gstv4l2object.c:1281:gst_v4l2_object_fill_format_list:<hardware_decoder:sink> got 3 format(s):
+0:00:00.041859253  6270 0xaaaac9d476c0 INFO                    v4l2 gstv4l2object.c:1285:gst_v4l2_object_fill_format_list:<hardware_decoder:sink>   VP90
+0:00:00.041868211  6270 0xaaaac9d476c0 INFO                    v4l2 gstv4l2object.c:1285:gst_v4l2_object_fill_format_list:<hardware_decoder:sink>   HEVC
+0:00:00.041876231  6270 0xaaaac9d476c0 INFO                    v4l2 gstv4l2object.c:1285:gst_v4l2_object_fill_format_list:<hardware_decoder:sink>   H264
+0:00:00.041895085  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:2993:gst_v4l2_object_probe_caps_for_format:<hardware_decoder:sink> Enumerating frame sizes for HEVC
+0:00:00.041904667  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:3034:gst_v4l2_object_probe_caps_for_format:<hardware_decoder:sink> we have stepwise frame sizes:
+0:00:00.041915813  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:3035:gst_v4l2_object_probe_caps_for_format:<hardware_decoder:sink> min width:   128
+0:00:00.041922948  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:3037:gst_v4l2_object_probe_caps_for_format:<hardware_decoder:sink> min height:  128
+0:00:00.041929770  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:3039:gst_v4l2_object_probe_caps_for_format:<hardware_decoder:sink> max width:   8192
+0:00:00.041936124  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:3041:gst_v4l2_object_probe_caps_for_format:<hardware_decoder:sink> max height:  8192
+0:00:00.041942582  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:3043:gst_v4l2_object_probe_caps_for_format:<hardware_decoder:sink> step width:  1
+0:00:00.041948988  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:3045:gst_v4l2_object_probe_caps_for_format:<hardware_decoder:sink> step height: 1
+0:00:00.041960186  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:2851:gst_v4l2_object_probe_caps_for_format_and_size:<hardware_decoder:sink> Unable to enumerate intervals for HEVC@8192x8192
+0:00:00.041974612  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:2322:gst_v4l2_object_get_colorspace: Unknown enum v4l2_colorspace 0
+0:00:00.042043411  6270 0xaaaac9d476c0 INFO                    v4l2 gstv4l2object.c:5083:gst_v4l2_object_probe_caps:<hardware_decoder:sink> probed caps: video/x-h265, stream-format=(string)byte-stream, alignment=(string)au, width=(int)[ 128, 8192 ], height=(int)[ 128, 8192 ], colorimetry=(string){ bt601, smpte240m, bt709, 1:3:5:1, 2:4:5:2, 2:4:5:3, 1:4:7:1, 2:4:7:1, 2:4:12:8, bt2020, 2:0:0:0 }, parsed=(boolean)true
+0:00:00.042054764  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:1097:gst_v4l2_get_input:<hardware_decoder:src> trying to get input
+0:00:00.042063774  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:1252:gst_v4l2_subscribe_event:<hardware_decoder:src> Subscribing to 'SOURCE_CHANGE' event
+0:00:00.042142000  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstpad.c:2768:gst_pad_get_current_caps:<output_format:sink> get current pad caps (NULL)
+0:00:00.042150541  6270 0xaaaac9d476c0 DEBUG               GST_CAPS gstpad.c:2768:gst_pad_get_current_caps:<output_format:src> get current pad caps (NULL)
+0:00:00.042169707  6270 0xaaaac9d476c0 DEBUG           v4l2videodec gstv4l2videodec.c:188:gst_v4l2_video_dec_start:<hardware_decoder> Starting
+0:00:00.042303346  6270 0xaaaac9d476c0 DEBUG              h265parse gsth265parse.c:286:gst_h265_parse_start:<parser> start
+0:00:00.042312617  6270 0xaaaac9d476c0 DEBUG              h265parse gsth265parse.c:196:gst_h265_parse_reset_frame:<parser> reset frame
+0:00:00.042743430  6270 0xffffa8000b90 DEBUG           v4l2videodec gstv4l2videodec.c:662:gst_v4l2_video_dec_drain:<hardware_decoder> Draining...
+0:00:00.042754939  6270 0xffffa8000b90 DEBUG           v4l2videodec gstv4l2videodec.c:326:gst_v4l2_video_dec_flush:<hardware_decoder> Flushed
+0:00:00.042828165  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3113:gst_pad_query_caps:<parser:src> get pad caps with filter (NULL)
+0:00:00.042843060  6270 0xffffa8000b90 DEBUG               GST_CAPS gstpad.c:3290:gst_pad_query_caps_default:<parser:src> query caps caps query: 0xffffa0011d40, GstQueryCaps, filter=(GstCaps)"NULL", caps=(GstCaps)"NULL";
+0:00:00.042846133  6270 0xffffa8000b90 DEBUG               GST_CAPS gstpad.c:3308:gst_pad_query_caps_default:<parser:src> fixed pad caps: trying pad caps
+0:00:00.042848320  6270 0xffffa8000b90 DEBUG               GST_CAPS gstpad.c:3314:gst_pad_query_caps_default:<parser:src> trying pad template caps
+0:00:00.042855716  6270 0xffffa8000b90 DEBUG               GST_CAPS gstpad.c:3343:gst_pad_query_caps_default:<parser:src> using caps 0xaaaac9d3f3d0 video/x-h265, parsed=(boolean)true, stream-format=(string){ hvc1, hev1, byte-stream }, alignment=(string){ au, nal }
+0:00:00.042860976  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3120:gst_pad_query_caps:<parser:src> query returned video/x-h265, parsed=(boolean)true, stream-format=(string){ hvc1, hev1, byte-stream }, alignment=(string){ au, nal }
+0:00:00.042877225  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3159:gst_pad_peer_query_caps:<hardware_decoder:src> get pad peer caps with filter video/x-raw
+0:00:00.042882485  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3159:gst_pad_peer_query_caps:<output_format:src> get pad peer caps with filter video/x-raw
+0:00:00.042886391  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3166:gst_pad_peer_query_caps:<output_format:src> peer query returned video/x-raw
+0:00:00.042889985  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3166:gst_pad_peer_query_caps:<hardware_decoder:src> peer query returned video/x-raw
+0:00:00.042908109  6270 0xffffa8000b90 DEBUG           v4l2videodec gstv4l2videodec.c:1156:gst_v4l2_video_dec_sink_getcaps:<hardware_decoder> Returning sink caps video/x-h265, width=(int)[ 128, 8192 ], height=(int)[ 128, 8192 ], framerate=(fraction)[ 0/1, 2147483647/1 ], stream-format=(string)byte-stream, alignment=(string)au, colorimetry=(string){ bt601, smpte240m, bt709, 1:3:5:1, 2:4:5:2, 2:4:5:3, 1:4:7:1, 2:4:7:1, 2:4:12:8, bt2020, 2:0:0:0 }, parsed=(boolean)true
+0:00:00.042915348  6270 0xffffa8000b90 DEBUG               GST_CAPS gstpad.c:2871:gst_pad_get_allowed_caps:<parser:src> allowed caps video/x-h265, width=(int)[ 128, 8192 ], height=(int)[ 128, 8192 ], framerate=(fraction)[ 0/1, 2147483647/1 ], stream-format=(string)byte-stream, alignment=(string)au, colorimetry=(string){ bt601, smpte240m, bt709, 1:3:5:1, 2:4:5:2, 2:4:5:3, 1:4:7:1, 2:4:7:1, 2:4:12:8, bt2020, 2:0:0:0 }, parsed=(boolean)true
+0:00:00.042921234  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:387:gst_h265_parse_negotiate:<parser> allowed caps: video/x-h265, width=(int)[ 128, 8192 ], height=(int)[ 128, 8192 ], framerate=(fraction)[ 0/1, 2147483647/1 ], stream-format=(string)byte-stream, alignment=(string)au, colorimetry=(string){ bt601, smpte240m, bt709, 1:3:5:1, 2:4:5:2, 2:4:5:3, 1:4:7:1, 2:4:7:1, 2:4:12:8, bt2020, 2:0:0:0 }, parsed=(boolean)true
+0:00:00.042926077  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:393:gst_h265_parse_negotiate:<parser> negotiating with caps: video/x-h265, width=(int)[ 128, 8192 ], height=(int)[ 128, 8192 ], framerate=(fraction)[ 0/1, 2147483647/1 ], stream-format=(string)byte-stream, alignment=(string)au, colorimetry=(string){ bt601, smpte240m, bt709, 1:3:5:1, 2:4:5:2, 2:4:5:3, 1:4:7:1, 2:4:7:1, 2:4:12:8, bt2020, 2:0:0:0 }, parsed=(boolean)true
+0:00:00.042933785  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:341:gst_h265_parse_format_from_caps: parsing caps: video/x-h265, width=(int)128, height=(int)128, framerate=(fraction)0/1, stream-format=(string)byte-stream, alignment=(string)au, colorimetry=(string)bt601, parsed=(boolean)true
+0:00:00.042938264  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:419:gst_h265_parse_negotiate:<parser> selected format byte-stream, alignment au
+0:00:00.042940712  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:196:gst_h265_parse_reset_frame:<parser> reset frame
+0:00:00.042943680  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:1218:gst_h265_parse_handle_frame:<parser> last parse position 0
+0:00:00.042964617  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:1257:gst_h265_parse_handle_frame:<parser> complete nal (offset, size): (4, 3) 
+0:00:00.042969617  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:1319:gst_h265_parse_handle_frame:<parser> 0xffffa0001728 complete nal found. Off: 4, Size: 3
+0:00:00.042978418  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:760:gst_h265_parse_process_nal:<parser> processing nal of type 35 AUD, size 3
+0:00:00.042982220  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:441:gst_h265_parse_wrap_nal:<parser> nal length 3
+0:00:00.042986126  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:1367:gst_h265_parse_handle_frame:<parser> Looking for more
+0:00:00.042992636  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:1257:gst_h265_parse_handle_frame:<parser> complete nal (offset, size): (11, 24) 
+0:00:00.042995032  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:1319:gst_h265_parse_handle_frame:<parser> 0xffffa0001728 complete nal found. Off: 11, Size: 24
+0:00:00.042997480  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:760:gst_h265_parse_process_nal:<parser> processing nal of type 32 VPS, size 24
+0:00:00.043007271  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:772:gst_h265_parse_process_nal:<parser> triggering src caps check
+0:00:00.043009563  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:472:gst_h265_parser_store_nal:<parser> storing vps 0
+0:00:00.043012219  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:441:gst_h265_parse_wrap_nal:<parser> nal length 24
+0:00:00.043014615  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:1367:gst_h265_parse_handle_frame:<parser> Looking for more
+0:00:00.043017010  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:1257:gst_h265_parse_handle_frame:<parser> complete nal (offset, size): (39, 46) 
+0:00:00.043019302  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:1319:gst_h265_parse_handle_frame:<parser> 0xffffa0001728 complete nal found. Off: 39, Size: 46
+0:00:00.043021802  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:760:gst_h265_parse_process_nal:<parser> processing nal of type 33 SPS, size 46
+0:00:00.043035811  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:810:gst_h265_parse_process_nal:<parser> triggering src caps check
+0:00:00.043038415  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:476:gst_h265_parser_store_nal:<parser> storing sps 0
+0:00:00.043040811  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:441:gst_h265_parse_wrap_nal:<parser> nal length 46
+0:00:00.043043103  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:1367:gst_h265_parse_handle_frame:<parser> Looking for more
+0:00:00.043045394  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:1257:gst_h265_parse_handle_frame:<parser> complete nal (offset, size): (89, 7) 
+0:00:00.043047634  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:1319:gst_h265_parse_handle_frame:<parser> 0xffffa0001728 complete nal found. Off: 89, Size: 7
+0:00:00.043049925  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:760:gst_h265_parse_process_nal:<parser> processing nal of type 34 PPS, size 7
+0:00:00.043062529  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:839:gst_h265_parse_process_nal:<parser> triggering src caps check
+0:00:00.043064612  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:480:gst_h265_parser_store_nal:<parser> storing pps 0
+0:00:00.043066904  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:441:gst_h265_parse_wrap_nal:<parser> nal length 7
+0:00:00.043069091  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:1367:gst_h265_parse_handle_frame:<parser> Looking for more
+0:00:00.043072581  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:1257:gst_h265_parse_handle_frame:<parser> complete nal (offset, size): (99, 2307) 
+0:00:00.043074924  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:1319:gst_h265_parse_handle_frame:<parser> 0xffffa0001728 complete nal found. Off: 99, Size: 2307
+0:00:00.043077372  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:760:gst_h265_parse_process_nal:<parser> processing nal of type 39 PREFIX_SEI, size 2307
+0:00:00.043101746  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:873:gst_h265_parse_process_nal:<parser> marking SEI in frame at offset 96
+0:00:00.043103881  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:441:gst_h265_parse_wrap_nal:<parser> nal length 2307
+0:00:00.043108568  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:1367:gst_h265_parse_handle_frame:<parser> Looking for more
+0:00:00.043119453  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:1268:gst_h265_parse_handle_frame:<parser> not a complete nal found at offset 2409
+0:00:00.043182419  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:1218:gst_h265_parse_handle_frame:<parser> last parse position 2406
+0:00:00.043198043  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:1257:gst_h265_parse_handle_frame:<parser> complete nal (offset, size): (2409, 72881) 
+0:00:00.043201324  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:1319:gst_h265_parse_handle_frame:<parser> 0xffffb13c3098 complete nal found. Off: 2409, Size: 72881
+0:00:00.043223250  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:760:gst_h265_parse_process_nal:<parser> processing nal of type 20 SLICE_IDR_N_LP, size 72881
+0:00:00.043226948  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:922:gst_h265_parse_process_nal:<parser> frame start, first_slice_segment_in_pic_flag = 1
+0:00:00.043229813  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:925:gst_h265_parse_process_nal:<parser> parse result 0, first slice_segment: 1, slice type: 2
+0:00:00.043232104  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:973:gst_h265_parse_process_nal:<parser> marking IDR in frame at offset 2407
+0:00:00.043234135  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:979:gst_h265_parse_process_nal:<parser> moved IDR mark to SEI position 96
+0:00:00.043236010  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:441:gst_h265_parse_wrap_nal:<parser> nal length 72881
+0:00:00.043263092  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:1367:gst_h265_parse_handle_frame:<parser> Looking for more
+0:00:00.043268196  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:1257:gst_h265_parse_handle_frame:<parser> complete nal (offset, size): (75294, 3) 
+0:00:00.043270800  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:1319:gst_h265_parse_handle_frame:<parser> 0xffffb13c3098 complete nal found. Off: 75294, Size: 3
+0:00:00.043274654  6270 0xffffa8000b90 DEBUG               GST_CAPS gstpad.c:2740:gst_pad_has_current_caps:<parser:src> check current pad caps (NULL)
+0:00:00.043277467  6270 0xffffa8000b90 DEBUG               GST_CAPS gstpad.c:2768:gst_pad_get_current_caps:<parser:sink> get current pad caps (NULL)
+0:00:00.043281789  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:2129:gst_h265_parse_update_src_caps:<parser> sps: 0xffffaff0aa90
+0:00:00.043284289  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:2163:gst_h265_parse_update_src_caps:<parser> vps: 0xffffafefa010
+0:00:00.043286841  6270 0xffffa8000b90 INFO               h265parse gsth265parse.c:2180:gst_h265_parse_update_src_caps:<parser> resolution changed 1920x1080
+0:00:00.043289601  6270 0xffffa8000b90 INFO               h265parse gsth265parse.c:2215:gst_h265_parse_update_src_caps:<parser> framerate changed 30/1
+0:00:00.043292205  6270 0xffffa8000b90 INFO               h265parse gsth265parse.c:2228:gst_h265_parse_update_src_caps:<parser> pixel aspect ratio has been changed 1/1
+0:00:00.043295903  6270 0xffffa8000b90 INFO               h265parse gsth265parse.c:2254:gst_h265_parse_update_src_caps:<parser> colorimetry has been changed from (NULL) to 2:3:0:0
+0:00:00.043300330  6270 0xffffa8000b90 INFO               h265parse gsth265parse.c:2295:gst_h265_parse_update_src_caps:<parser> setting framerate in caps
+0:00:00.043311632  6270 0xffffa8000b90 INFO               h265parse gsth265parse.c:2391:gst_h265_parse_update_src_caps:<parser> PAR 1/1
+0:00:00.043317361  6270 0xffffa8000b90 DEBUG               GST_CAPS gstpad.c:2768:gst_pad_get_current_caps:<parser:src> get current pad caps (NULL)
+0:00:00.043322100  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3159:gst_pad_peer_query_caps:<parser:src> get pad peer caps with filter video/x-h265
+0:00:00.043335953  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3159:gst_pad_peer_query_caps:<hardware_decoder:src> get pad peer caps with filter video/x-raw
+0:00:00.043340849  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3159:gst_pad_peer_query_caps:<output_format:src> get pad peer caps with filter video/x-raw
+0:00:00.043345068  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3166:gst_pad_peer_query_caps:<output_format:src> peer query returned video/x-raw
+0:00:00.043348974  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3166:gst_pad_peer_query_caps:<hardware_decoder:src> peer query returned video/x-raw
+0:00:00.043363035  6270 0xffffa8000b90 DEBUG           v4l2videodec gstv4l2videodec.c:1156:gst_v4l2_video_dec_sink_getcaps:<hardware_decoder> Returning sink caps video/x-h265, width=(int)[ 128, 8192 ], height=(int)[ 128, 8192 ], framerate=(fraction)[ 0/1, 2147483647/1 ], stream-format=(string)byte-stream, alignment=(string)au, colorimetry=(string){ bt601, smpte240m, bt709, 1:3:5:1, 2:4:5:2, 2:4:5:3, 1:4:7:1, 2:4:7:1, 2:4:12:8, bt2020, 2:0:0:0 }, parsed=(boolean)true
+0:00:00.043368816  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3166:gst_pad_peer_query_caps:<parser:src> peer query returned video/x-h265, width=(int)[ 128, 8192 ], height=(int)[ 128, 8192 ], framerate=(fraction)[ 0/1, 2147483647/1 ], stream-format=(string)byte-stream, alignment=(string)au, colorimetry=(string){ bt601, smpte240m, bt709, 1:3:5:1, 2:4:5:2, 2:4:5:3, 1:4:7:1, 2:4:7:1, 2:4:12:8, bt2020, 2:0:0:0 }, parsed=(boolean)true
+0:00:00.043383816  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:2061:ensure_caps_profile:<parser> Setting compatible profile main to the caps
+0:00:00.043387670  6270 0xffffa8000b90 DEBUG               GST_CAPS gstpad.c:2768:gst_pad_get_current_caps:<parser:src> get current pad caps (NULL)
+0:00:00.043398919  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3196:gst_pad_query_accept_caps:<hardware_decoder:sink> accept caps of video/x-h265, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, chroma-format=(string)4:2:0, bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, colorimetry=(string)2:3:0:0, parsed=(boolean)true, stream-format=(string)byte-stream, alignment=(string)au, pixel-aspect-ratio=(fraction)1/1, profile=(string)main, tier=(string)main, level=(string)4
+0:00:00.043406575  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3113:gst_pad_query_caps:<hardware_decoder:sink> get pad caps with filter video/x-h265, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, chroma-format=(string)4:2:0, bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, colorimetry=(string)2:3:0:0, parsed=(boolean)true, stream-format=(string)byte-stream, alignment=(string)au, pixel-aspect-ratio=(fraction)1/1, profile=(string)main, tier=(string)main, level=(string)4
+0:00:00.043413137  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3159:gst_pad_peer_query_caps:<hardware_decoder:src> get pad peer caps with filter video/x-raw, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, pixel-aspect-ratio=(fraction)1/1, colorimetry=(string)2:3:0:0
+0:00:00.043417824  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3159:gst_pad_peer_query_caps:<output_format:src> get pad peer caps with filter video/x-raw, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, pixel-aspect-ratio=(fraction)1/1, colorimetry=(string)2:3:0:0
+0:00:00.043422251  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3166:gst_pad_peer_query_caps:<output_format:src> peer query returned video/x-raw, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, pixel-aspect-ratio=(fraction)1/1, colorimetry=(string)2:3:0:0
+0:00:00.043426730  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3166:gst_pad_peer_query_caps:<hardware_decoder:src> peer query returned video/x-raw, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, pixel-aspect-ratio=(fraction)1/1, colorimetry=(string)2:3:0:0
+0:00:00.043437042  6270 0xffffa8000b90 DEBUG           v4l2videodec gstv4l2videodec.c:1156:gst_v4l2_video_dec_sink_getcaps:<hardware_decoder> Returning sink caps EMPTY
+0:00:00.043439594  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3120:gst_pad_query_caps:<hardware_decoder:sink> query returned EMPTY
+0:00:00.043442563  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3202:gst_pad_query_accept_caps:<hardware_decoder:sink> query returned 0
+0:00:00.043447042  6270 0xffffa8000b90 WARN                GST_CAPS gstpad.c:5819:pre_eventfunc_check:<hardware_decoder:sink> caps video/x-h265, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, chroma-format=(string)4:2:0, bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, colorimetry=(string)2:3:0:0, parsed=(boolean)true, stream-format=(string)byte-stream, alignment=(string)au, pixel-aspect-ratio=(fraction)1/1, profile=(string)main, tier=(string)main, level=(string)4 not accepted
+0:00:00.043513393  6270 0xffffa8000b90 DEBUG               GST_CAPS gstpad.c:2740:gst_pad_has_current_caps:<parser:src> check current pad caps video/x-h265, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, chroma-format=(string)4:2:0, bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, colorimetry=(string)2:3:0:0, parsed=(boolean)true, stream-format=(string)byte-stream, alignment=(string)au, pixel-aspect-ratio=(fraction)1/1, profile=(string)main, tier=(string)main, level=(string)4
+0:00:00.043521830  6270 0xffffa8000b90 DEBUG               GST_CAPS gstpad.c:2768:gst_pad_get_current_caps:<parser:src> get current pad caps video/x-h265, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, chroma-format=(string)4:2:0, bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, colorimetry=(string)2:3:0:0, parsed=(boolean)true, stream-format=(string)byte-stream, alignment=(string)au, pixel-aspect-ratio=(fraction)1/1, profile=(string)main, tier=(string)main, level=(string)4
+0:00:00.043527975  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3196:gst_pad_query_accept_caps:<hardware_decoder:sink> accept caps of video/x-h265, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, chroma-format=(string)4:2:0, bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, colorimetry=(string)2:3:0:0, parsed=(boolean)true, stream-format=(string)byte-stream, alignment=(string)au, pixel-aspect-ratio=(fraction)1/1, profile=(string)main, tier=(string)main, level=(string)4
+0:00:00.043535163  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3113:gst_pad_query_caps:<hardware_decoder:sink> get pad caps with filter video/x-h265, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, chroma-format=(string)4:2:0, bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, colorimetry=(string)2:3:0:0, parsed=(boolean)true, stream-format=(string)byte-stream, alignment=(string)au, pixel-aspect-ratio=(fraction)1/1, profile=(string)main, tier=(string)main, level=(string)4
+0:00:00.043543131  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3159:gst_pad_peer_query_caps:<hardware_decoder:src> get pad peer caps with filter video/x-raw, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, pixel-aspect-ratio=(fraction)1/1, colorimetry=(string)2:3:0:0
+0:00:00.043548547  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3159:gst_pad_peer_query_caps:<output_format:src> get pad peer caps with filter video/x-raw, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, pixel-aspect-ratio=(fraction)1/1, colorimetry=(string)2:3:0:0
+0:00:00.043553495  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3166:gst_pad_peer_query_caps:<output_format:src> peer query returned video/x-raw, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, pixel-aspect-ratio=(fraction)1/1, colorimetry=(string)2:3:0:0
+0:00:00.043558495  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3166:gst_pad_peer_query_caps:<hardware_decoder:src> peer query returned video/x-raw, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, pixel-aspect-ratio=(fraction)1/1, colorimetry=(string)2:3:0:0
+0:00:00.043571307  6270 0xffffa8000b90 DEBUG           v4l2videodec gstv4l2videodec.c:1156:gst_v4l2_video_dec_sink_getcaps:<hardware_decoder> Returning sink caps EMPTY
+0:00:00.043574067  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3120:gst_pad_query_caps:<hardware_decoder:sink> query returned EMPTY
+0:00:00.043576984  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3202:gst_pad_query_accept_caps:<hardware_decoder:sink> query returned 0
+0:00:00.043581410  6270 0xffffa8000b90 WARN                GST_CAPS gstpad.c:5819:pre_eventfunc_check:<hardware_decoder:sink> caps video/x-h265, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, chroma-format=(string)4:2:0, bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, colorimetry=(string)2:3:0:0, parsed=(boolean)true, stream-format=(string)byte-stream, alignment=(string)au, pixel-aspect-ratio=(fraction)1/1, profile=(string)main, tier=(string)main, level=(string)4 not accepted
+0:00:00.043587921  6270 0xffffa8000b90 DEBUG               GST_CAPS gstpad.c:2768:gst_pad_get_current_caps:<parser:src> get current pad caps video/x-h265, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, chroma-format=(string)4:2:0, bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, colorimetry=(string)2:3:0:0, parsed=(boolean)true, stream-format=(string)byte-stream, alignment=(string)au, pixel-aspect-ratio=(fraction)1/1, profile=(string)main, tier=(string)main, level=(string)4
+0:00:00.043627814  6270 0xffffa8000b90 DEBUG              h265parse gsth265parse.c:196:gst_h265_parse_reset_frame:<parser> reset frame
+0:00:00.043638856  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3196:gst_pad_query_accept_caps:<hardware_decoder:sink> accept caps of video/x-h265, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, chroma-format=(string)4:2:0, bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, colorimetry=(string)2:3:0:0, parsed=(boolean)true, stream-format=(string)byte-stream, alignment=(string)au, pixel-aspect-ratio=(fraction)1/1, profile=(string)main, tier=(string)main, level=(string)4
+0:00:00.043646043  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3113:gst_pad_query_caps:<hardware_decoder:sink> get pad caps with filter video/x-h265, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, chroma-format=(string)4:2:0, bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, colorimetry=(string)2:3:0:0, parsed=(boolean)true, stream-format=(string)byte-stream, alignment=(string)au, pixel-aspect-ratio=(fraction)1/1, profile=(string)main, tier=(string)main, level=(string)4
+0:00:00.043653178  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3159:gst_pad_peer_query_caps:<hardware_decoder:src> get pad peer caps with filter video/x-raw, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, pixel-aspect-ratio=(fraction)1/1, colorimetry=(string)2:3:0:0
+0:00:00.043658230  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3159:gst_pad_peer_query_caps:<output_format:src> get pad peer caps with filter video/x-raw, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, pixel-aspect-ratio=(fraction)1/1, colorimetry=(string)2:3:0:0
+0:00:00.043662657  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3166:gst_pad_peer_query_caps:<output_format:src> peer query returned video/x-raw, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, pixel-aspect-ratio=(fraction)1/1, colorimetry=(string)2:3:0:0
+0:00:00.043667500  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3166:gst_pad_peer_query_caps:<hardware_decoder:src> peer query returned video/x-raw, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, pixel-aspect-ratio=(fraction)1/1, colorimetry=(string)2:3:0:0
+0:00:00.043675052  6270 0xffffa8000b90 DEBUG           v4l2videodec gstv4l2videodec.c:1156:gst_v4l2_video_dec_sink_getcaps:<hardware_decoder> Returning sink caps EMPTY
+0:00:00.043677656  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3120:gst_pad_query_caps:<hardware_decoder:sink> query returned EMPTY
+0:00:00.043684635  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3202:gst_pad_query_accept_caps:<hardware_decoder:sink> query returned 0
+0:00:00.043689322  6270 0xffffa8000b90 WARN                GST_CAPS gstpad.c:5819:pre_eventfunc_check:<hardware_decoder:sink> caps video/x-h265, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, chroma-format=(string)4:2:0, bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, colorimetry=(string)2:3:0:0, parsed=(boolean)true, stream-format=(string)byte-stream, alignment=(string)au, pixel-aspect-ratio=(fraction)1/1, profile=(string)main, tier=(string)main, level=(string)4 not accepted
+0:00:00.043696145  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3196:gst_pad_query_accept_caps:<hardware_decoder:sink> accept caps of video/x-h265, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, chroma-format=(string)4:2:0, bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, colorimetry=(string)2:3:0:0, parsed=(boolean)true, stream-format=(string)byte-stream, alignment=(string)au, pixel-aspect-ratio=(fraction)1/1, profile=(string)main, tier=(string)main, level=(string)4
+0:00:00.043701821  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3113:gst_pad_query_caps:<hardware_decoder:sink> get pad caps with filter video/x-h265, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, chroma-format=(string)4:2:0, bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, colorimetry=(string)2:3:0:0, parsed=(boolean)true, stream-format=(string)byte-stream, alignment=(string)au, pixel-aspect-ratio=(fraction)1/1, profile=(string)main, tier=(string)main, level=(string)4
+0:00:00.043707759  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3159:gst_pad_peer_query_caps:<hardware_decoder:src> get pad peer caps with filter video/x-raw, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, pixel-aspect-ratio=(fraction)1/1, colorimetry=(string)2:3:0:0
+0:00:00.043712706  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3159:gst_pad_peer_query_caps:<output_format:src> get pad peer caps with filter video/x-raw, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, pixel-aspect-ratio=(fraction)1/1, colorimetry=(string)2:3:0:0
+0:00:00.043717185  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3166:gst_pad_peer_query_caps:<output_format:src> peer query returned video/x-raw, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, pixel-aspect-ratio=(fraction)1/1, colorimetry=(string)2:3:0:0
+0:00:00.043721768  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3166:gst_pad_peer_query_caps:<hardware_decoder:src> peer query returned video/x-raw, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, pixel-aspect-ratio=(fraction)1/1, colorimetry=(string)2:3:0:0
+0:00:00.043727914  6270 0xffffa8000b90 DEBUG           v4l2videodec gstv4l2videodec.c:1156:gst_v4l2_video_dec_sink_getcaps:<hardware_decoder> Returning sink caps EMPTY
+0:00:00.043730466  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3120:gst_pad_query_caps:<hardware_decoder:sink> query returned EMPTY
+0:00:00.043732914  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3202:gst_pad_query_accept_caps:<hardware_decoder:sink> query returned 0
+0:00:00.043737080  6270 0xffffa8000b90 WARN                GST_CAPS gstpad.c:5819:pre_eventfunc_check:<hardware_decoder:sink> caps video/x-h265, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, chroma-format=(string)4:2:0, bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, colorimetry=(string)2:3:0:0, parsed=(boolean)true, stream-format=(string)byte-stream, alignment=(string)au, pixel-aspect-ratio=(fraction)1/1, profile=(string)main, tier=(string)main, level=(string)4 not accepted
+0:00:00.043800306  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3196:gst_pad_query_accept_caps:<hardware_decoder:sink> accept caps of video/x-h265, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, chroma-format=(string)4:2:0, bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, colorimetry=(string)2:3:0:0, parsed=(boolean)true, stream-format=(string)byte-stream, alignment=(string)au, pixel-aspect-ratio=(fraction)1/1, profile=(string)main, tier=(string)main, level=(string)4
+0:00:00.043821451  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3113:gst_pad_query_caps:<hardware_decoder:sink> get pad caps with filter video/x-h265, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, chroma-format=(string)4:2:0, bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, colorimetry=(string)2:3:0:0, parsed=(boolean)true, stream-format=(string)byte-stream, alignment=(string)au, pixel-aspect-ratio=(fraction)1/1, profile=(string)main, tier=(string)main, level=(string)4
+0:00:00.043832023  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3159:gst_pad_peer_query_caps:<hardware_decoder:src> get pad peer caps with filter video/x-raw, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, pixel-aspect-ratio=(fraction)1/1, colorimetry=(string)2:3:0:0
+0:00:00.043838117  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3159:gst_pad_peer_query_caps:<output_format:src> get pad peer caps with filter video/x-raw, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, pixel-aspect-ratio=(fraction)1/1, colorimetry=(string)2:3:0:0
+0:00:00.043843690  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3166:gst_pad_peer_query_caps:<output_format:src> peer query returned video/x-raw, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, pixel-aspect-ratio=(fraction)1/1, colorimetry=(string)2:3:0:0
+0:00:00.043848846  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3166:gst_pad_peer_query_caps:<hardware_decoder:src> peer query returned video/x-raw, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, pixel-aspect-ratio=(fraction)1/1, colorimetry=(string)2:3:0:0
+0:00:00.043857126  6270 0xffffa8000b90 DEBUG           v4l2videodec gstv4l2videodec.c:1156:gst_v4l2_video_dec_sink_getcaps:<hardware_decoder> Returning sink caps EMPTY
+0:00:00.043859939  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3120:gst_pad_query_caps:<hardware_decoder:sink> query returned EMPTY
+0:00:00.043862595  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3202:gst_pad_query_accept_caps:<hardware_decoder:sink> query returned 0
+0:00:00.043867074  6270 0xffffa8000b90 WARN                GST_CAPS gstpad.c:5819:pre_eventfunc_check:<hardware_decoder:sink> caps video/x-h265, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, chroma-format=(string)4:2:0, bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, colorimetry=(string)2:3:0:0, parsed=(boolean)true, stream-format=(string)byte-stream, alignment=(string)au, pixel-aspect-ratio=(fraction)1/1, profile=(string)main, tier=(string)main, level=(string)4 not accepted
+0:00:00.043873428  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3196:gst_pad_query_accept_caps:<hardware_decoder:sink> accept caps of video/x-h265, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, chroma-format=(string)4:2:0, bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, colorimetry=(string)2:3:0:0, parsed=(boolean)true, stream-format=(string)byte-stream, alignment=(string)au, pixel-aspect-ratio=(fraction)1/1, profile=(string)main, tier=(string)main, level=(string)4
+0:00:00.043879261  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3113:gst_pad_query_caps:<hardware_decoder:sink> get pad caps with filter video/x-h265, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, chroma-format=(string)4:2:0, bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, colorimetry=(string)2:3:0:0, parsed=(boolean)true, stream-format=(string)byte-stream, alignment=(string)au, pixel-aspect-ratio=(fraction)1/1, profile=(string)main, tier=(string)main, level=(string)4
+0:00:00.043884938  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3159:gst_pad_peer_query_caps:<hardware_decoder:src> get pad peer caps with filter video/x-raw, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, pixel-aspect-ratio=(fraction)1/1, colorimetry=(string)2:3:0:0
+0:00:00.043893739  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3159:gst_pad_peer_query_caps:<output_format:src> get pad peer caps with filter video/x-raw, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, pixel-aspect-ratio=(fraction)1/1, colorimetry=(string)2:3:0:0
+0:00:00.043898218  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3166:gst_pad_peer_query_caps:<output_format:src> peer query returned video/x-raw, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, pixel-aspect-ratio=(fraction)1/1, colorimetry=(string)2:3:0:0
+0:00:00.043902489  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3166:gst_pad_peer_query_caps:<hardware_decoder:src> peer query returned video/x-raw, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, pixel-aspect-ratio=(fraction)1/1, colorimetry=(string)2:3:0:0
+0:00:00.043908582  6270 0xffffa8000b90 DEBUG           v4l2videodec gstv4l2videodec.c:1156:gst_v4l2_video_dec_sink_getcaps:<hardware_decoder> Returning sink caps EMPTY
+0:00:00.043911082  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3120:gst_pad_query_caps:<hardware_decoder:sink> query returned EMPTY
+0:00:00.043913582  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3202:gst_pad_query_accept_caps:<hardware_decoder:sink> query returned 0
+0:00:00.043917749  6270 0xffffa8000b90 WARN                GST_CAPS gstpad.c:5819:pre_eventfunc_check:<hardware_decoder:sink> caps video/x-h265, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, chroma-format=(string)4:2:0, bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, colorimetry=(string)2:3:0:0, parsed=(boolean)true, stream-format=(string)byte-stream, alignment=(string)au, pixel-aspect-ratio=(fraction)1/1, profile=(string)main, tier=(string)main, level=(string)4 not accepted
+0:00:00.043923217  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3196:gst_pad_query_accept_caps:<hardware_decoder:sink> accept caps of video/x-h265, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, chroma-format=(string)4:2:0, bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, colorimetry=(string)2:3:0:0, parsed=(boolean)true, stream-format=(string)byte-stream, alignment=(string)au, pixel-aspect-ratio=(fraction)1/1, profile=(string)main, tier=(string)main, level=(string)4
+0:00:00.043928790  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3113:gst_pad_query_caps:<hardware_decoder:sink> get pad caps with filter video/x-h265, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, chroma-format=(string)4:2:0, bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, colorimetry=(string)2:3:0:0, parsed=(boolean)true, stream-format=(string)byte-stream, alignment=(string)au, pixel-aspect-ratio=(fraction)1/1, profile=(string)main, tier=(string)main, level=(string)4
+0:00:00.043934466  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3159:gst_pad_peer_query_caps:<hardware_decoder:src> get pad peer caps with filter video/x-raw, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, pixel-aspect-ratio=(fraction)1/1, colorimetry=(string)2:3:0:0
+0:00:00.043939050  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3159:gst_pad_peer_query_caps:<output_format:src> get pad peer caps with filter video/x-raw, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, pixel-aspect-ratio=(fraction)1/1, colorimetry=(string)2:3:0:0
+0:00:00.043943320  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3166:gst_pad_peer_query_caps:<output_format:src> peer query returned video/x-raw, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, pixel-aspect-ratio=(fraction)1/1, colorimetry=(string)2:3:0:0
+0:00:00.043947851  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3166:gst_pad_peer_query_caps:<hardware_decoder:src> peer query returned video/x-raw, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, pixel-aspect-ratio=(fraction)1/1, colorimetry=(string)2:3:0:0
+0:00:00.043953684  6270 0xffffa8000b90 DEBUG           v4l2videodec gstv4l2videodec.c:1156:gst_v4l2_video_dec_sink_getcaps:<hardware_decoder> Returning sink caps EMPTY
+0:00:00.043957903  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3120:gst_pad_query_caps:<hardware_decoder:sink> query returned EMPTY
+0:00:00.043960247  6270 0xffffa8000b90 DEBUG               GST_CAPS gstutils.c:3202:gst_pad_query_accept_caps:<hardware_decoder:sink> query returned 0
+0:00:00.043964205  6270 0xffffa8000b90 WARN                GST_CAPS gstpad.c:5819:pre_eventfunc_check:<hardware_decoder:sink> caps video/x-h265, width=(int)1920, height=(int)1080, framerate=(fraction)30/1, chroma-format=(string)4:2:0, bit-depth-luma=(uint)8, bit-depth-chroma=(uint)8, colorimetry=(string)2:3:0:0, parsed=(boolean)true, stream-format=(string)byte-stream, alignment=(string)au, pixel-aspect-ratio=(fraction)1/1, profile=(string)main, tier=(string)main, level=(string)4 not accepted
+error source=parser message=Internal data stream error. debug=../gstreamer/subprojects/gstreamer/libs/gst/base/gstbaseparse.c(3702): gst_base_parse_loop (): /GstPipeline:iris-probe/GstH265Parse:parser:
+streaming stopped, reason not-negotiated (-4)
+result frames=0 expected=60 dmabuf_frames=0 eos=1 failed=1
+0:00:00.044175653  6270 0xaaaac9d476c0 DEBUG           v4l2videodec gstv4l2videodec.c:202:gst_v4l2_video_dec_stop:<hardware_decoder> Stopping
+0:00:00.044187163  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:4942:gst_v4l2_object_stop:<hardware_decoder:sink> stopping
+0:00:00.044194246  6270 0xaaaac9d476c0 DEBUG                   v4l2 gstv4l2object.c:4942:gst_v4l2_object_stop:<hardware_decoder:src> stopping
+0:00:00.044200391  6270 0xaaaac9d476c0 DEBUG           v4l2videodec gstv4l2videodec.c:225:gst_v4l2_video_dec_stop:<hardware_decoder> Stopped
+0:00:00.044225807  6270 0xaaaac9d476c0 DEBUG           v4l2videodec gstv4l2videodec.c:173:gst_v4l2_video_dec_close:<hardware_decoder> Closing
+0:00:00.044234713  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:716:gst_v4l2_close:<hardware_decoder:sink> Trying to close /dev/video22
+0:00:00.044243410  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:469:gst_v4l2_empty_lists:<hardware_decoder:sink> deleting enumerations
+0:00:00.044254035  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:716:gst_v4l2_close:<hardware_decoder:src> Trying to close /dev/video22
+0:00:00.044335177  6270 0xaaaac9d476c0 DEBUG                   v4l2 v4l2_calls.c:469:gst_v4l2_empty_lists:<hardware_decoder:src> deleting enumerations
+0:00:00.044386685  6270 0xaaaac9d476c0 DEBUG              h265parse gsth265parse.c:302:gst_h265_parse_stop:<parser> stop
+0:00:00.044392257  6270 0xaaaac9d476c0 DEBUG              h265parse gsth265parse.c:196:gst_h265_parse_reset_frame:<parser> reset frame
