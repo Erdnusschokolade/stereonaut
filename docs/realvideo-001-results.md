@@ -167,5 +167,7 @@ Ergebnis stehen in `realvideo-001-run-03-test-plan.md` und
 
 Run 04 behandelt ausschließlich die für diesen Treiber bestätigte
 Nichtverfügbarkeit dieses Controls als einen protokollierten Zustand. Der
-lokal vorbereitete, noch nicht ausgeführte Plan steht in
-`realvideo-001-run-04-test-plan.md`.
+ausgeführte Lauf bestätigte alle Buffer-Gates, scheiterte aber am anschließenden
+CAPTURE-`STREAMON` mit `ENOMEM`; Einzelheiten stehen in
+`realvideo-001-run-04-results.md`. Der korrigierte, noch nicht ausgeführte
+Decoder-START-Pfad ist in `realvideo-001-run-05-test-plan.md` dokumentiert.
