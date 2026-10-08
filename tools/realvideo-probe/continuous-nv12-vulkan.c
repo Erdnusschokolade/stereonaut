@@ -104,6 +104,11 @@ struct capture_contract {
     struct v4l2_rect compose;
 };
 
+struct capture_minimum {
+    bool available;
+    unsigned value;
+};
+
 static int video_fd = -1;
 
 static void fail_errno(const char *what)
@@ -1098,21 +1103,27 @@ static void validate_capture_contract(const struct capture_contract *contract,
            layout->uv_offset, layout->stride, required);
 }
 
-static unsigned query_capture_minimum(bool required)
+static struct capture_minimum query_capture_minimum(void)
 {
     struct v4l2_control minimum = {
         .id = V4L2_CID_MIN_BUFFERS_FOR_CAPTURE,
     };
     if (xioctl(VIDIOC_G_CTRL, &minimum) < 0) {
-        if (required)
-            fail_errno("VIDIOC_G_CTRL MIN_BUFFERS_FOR_CAPTURE");
-        printf("capture_minimum_buffers=unavailable errno=%d\n", errno);
-        return 0;
+        int control_errno = errno;
+        if (control_errno == EINVAL || control_errno == ENOTTY) {
+            printf("min_buffers_control=unavailable errno=%d\n",
+                   control_errno);
+            return (struct capture_minimum){0};
+        }
+        fail_errno("VIDIOC_G_CTRL MIN_BUFFERS_FOR_CAPTURE");
     }
     if (minimum.value < 0)
         fail_message("invalid V4L2_CID_MIN_BUFFERS_FOR_CAPTURE value");
-    printf("capture_minimum_buffers=%d\n", minimum.value);
-    return (unsigned)minimum.value;
+    printf("min_buffers_control=available value=%d\n", minimum.value);
+    return (struct capture_minimum){
+        .available = true,
+        .value = (unsigned)minimum.value,
+    };
 }
 
 static unsigned setup_capture(
@@ -1126,10 +1137,13 @@ static unsigned setup_capture(
                               expected_visible_height);
 
     create_transfer_buffer(vk, layout);
-    unsigned minimum = query_capture_minimum(false);
+    struct capture_minimum minimum = query_capture_minimum();
     unsigned wanted = 12;
-    if (minimum > 0)
-        wanted = minimum + 4U;
+    if (minimum.available) {
+        if (minimum.value > MAX_CAPTURE_BUFFERS - 4U)
+            fail_message("CAPTURE minimum buffer count exceeds bound");
+        wanted = minimum.value + 4U;
+    }
     if (wanted > MAX_CAPTURE_BUFFERS)
         fail_message("CAPTURE buffer request exceeds bound");
     struct v4l2_requestbuffers request = {
@@ -1621,8 +1635,8 @@ int main(int argc, char **argv)
                     fail_message("SOURCE_CHANGE visible compose region changed");
                 validate_capture_contract(&updated_contract, &updated_layout,
                                           expected_width, expected_height);
-                unsigned minimum = query_capture_minimum(true);
-                if (capture_count < minimum)
+                struct capture_minimum minimum = query_capture_minimum();
+                if (minimum.available && capture_count < minimum.value)
                     fail_message("existing CAPTURE count is below new minimum");
                 verify_capture_allocations(captures, capture_count,
                                            updated_contract.sizeimage);

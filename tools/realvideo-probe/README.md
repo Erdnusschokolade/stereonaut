@@ -24,11 +24,14 @@ dynamic-resolution sequence. The probe finishes the implicitly drained old
 CAPTURE generation through its `LAST` buffer while OUTPUT remains streaming,
 then waits for all GPU work and stops CAPTURE. It requeries pixel format,
 coded dimensions, memory-plane count, stride, `sizeimage`, compose rectangle,
-minimum buffer count, and every existing allocation length. Only when the
-memory contract, compose rectangle, buffer count, and lengths remain compatible
-does it requeue the same CAPTURE buffers and restart CAPTURE. Their DMA-BUF FDs
-and Vulkan imports stay alive. Any difference stops the probe; dynamic
-reallocation for a genuinely changed format is outside this probe.
+minimum buffer count, and every existing allocation length. If the
+minimum-buffer control is unavailable with `EINVAL` or `ENOTTY`, that fact is
+logged and the existing buffer count is retained; any other control error is
+fatal. Only when the memory contract, compose rectangle, available minimum,
+buffer count, and lengths remain compatible does it requeue the same CAPTURE
+buffers and restart CAPTURE. Their DMA-BUF FDs and Vulkan imports stay alive.
+Any difference stops the probe; dynamic reallocation for a genuinely changed
+format is outside this probe.
 
 Build:
 
