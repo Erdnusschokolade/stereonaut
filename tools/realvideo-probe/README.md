@@ -44,5 +44,6 @@ The active Steam Frame command and all stop gates are specified in
 `docs/realvideo-001-plan.md`; running it requires separate approval.
 
 `inspect-annexb.py` counts the exact AUD boundaries without invoking a video
-decoder. `compare-selected-frames.py` crops the coded-height NV12 readbacks,
-deinterleaves UV, and compares their visible I420 bytes plane by plane.
+decoder. `compare-selected-frames.py` accepts one or more selected frames,
+crops their coded-height NV12 readbacks, deinterleaves UV, and compares the
+visible I420 bytes plane by plane.

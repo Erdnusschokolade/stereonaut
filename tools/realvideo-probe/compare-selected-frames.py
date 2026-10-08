@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare three tightly packed coded-height NV12 GPU readbacks to I420."""
+"""Compare selected tightly packed coded-height NV12 GPU readbacks to I420."""
 
 import argparse
 import hashlib
@@ -40,7 +40,7 @@ def main() -> None:
     parser.add_argument("--width", type=int, required=True)
     parser.add_argument("--visible-height", type=int, required=True)
     parser.add_argument("--coded-height", type=int, required=True)
-    parser.add_argument("--frames", type=int, nargs=3, required=True)
+    parser.add_argument("--frames", type=int, nargs="+", required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
 
@@ -58,9 +58,10 @@ def main() -> None:
     coded_y = width * coded_height
     coded_frame_size = coded_y + width * coded_height // 2
     reference = args.reference.read_bytes()
-    if len(reference) != 3 * visible_frame_size:
+    if len(reference) != len(args.frames) * visible_frame_size:
         raise SystemExit(
-            f"reference size {len(reference)} != {3 * visible_frame_size}"
+            "reference size "
+            f"{len(reference)} != {len(args.frames) * visible_frame_size}"
         )
 
     report = {
