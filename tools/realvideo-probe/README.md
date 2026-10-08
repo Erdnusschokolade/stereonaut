@@ -19,6 +19,14 @@ frame waits on a producer SYNC_FD, copies both logical planes to a Vulkan
 buffer, waits for the fence, and only then requeues the CAPTURE buffer. CPU
 mapping occurs only for the first, middle, and last selected frames.
 
+Repeated stateful-decoder `SOURCE_CHANGE` events use the kernel-defined
+dynamic-resolution sequence. The probe finishes the implicitly drained old
+CAPTURE generation through its `LAST` buffer while OUTPUT remains streaming,
+then stops CAPTURE, destroys the completed Vulkan imports, releases and
+requeries the CAPTURE buffers, validates the new NV12 layout, imports the new
+generation, and restarts CAPTURE. It never guesses that a repeated parameter
+set kept the old layout.
+
 Build:
 
 ```sh

@@ -1117,6 +1117,18 @@ static unsigned setup_capture(
     return request.count;
 }
 
+static void free_capture_buffers(void)
+{
+    struct v4l2_requestbuffers request = {
+        .count = 0,
+        .type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE,
+        .memory = V4L2_MEMORY_MMAP,
+    };
+    must_ioctl(VIDIOC_REQBUFS, &request, "VIDIOC_REQBUFS CAPTURE count=0");
+    if (request.count != 0)
+        fail_message("Iris did not release all CAPTURE buffers");
+}
+
 static size_t timestamp_to_unit(const struct timeval *timestamp,
                                 uint32_t fps_numerator,
                                 uint32_t fps_denominator)
@@ -1129,27 +1141,42 @@ static size_t timestamp_to_unit(const struct timeval *timestamp,
                     denominator);
 }
 
-static void cleanup_vulkan(struct vulkan_context *vk,
-                           struct capture_buffer *captures,
-                           unsigned capture_count)
+static void release_capture_generation(struct vulkan_context *vk,
+                                       struct capture_buffer *captures,
+                                       unsigned capture_count)
 {
-    if (vk->device != VK_NULL_HANDLE) {
-        VkResult result = vkDeviceWaitIdle(vk->device);
-        if (result != VK_SUCCESS)
-            fail_vk("vkDeviceWaitIdle(cleanup)", result);
-    }
+    VkResult result = vkDeviceWaitIdle(vk->device);
+    if (result != VK_SUCCESS)
+        fail_vk("vkDeviceWaitIdle(release CAPTURE generation)", result);
     for (unsigned i = 0; i < capture_count; i++) {
+        if (captures[i].command != VK_NULL_HANDLE)
+            vkFreeCommandBuffers(vk->device, vk->command_pool, 1,
+                                 &captures[i].command);
         if (captures[i].image != VK_NULL_HANDLE)
             vkDestroyImage(vk->device, captures[i].image, NULL);
         if (captures[i].memory != VK_NULL_HANDLE)
             vkFreeMemory(vk->device, captures[i].memory, NULL);
         if (captures[i].dma_buf_fd >= 0 && close(captures[i].dma_buf_fd) < 0)
             fail_errno("close CAPTURE DMA-BUF");
+        memset(&captures[i], 0, sizeof(captures[i]));
+        captures[i].dma_buf_fd = -1;
     }
     if (vk->transfer_buffer != VK_NULL_HANDLE)
         vkDestroyBuffer(vk->device, vk->transfer_buffer, NULL);
     if (vk->transfer_memory != VK_NULL_HANDLE)
         vkFreeMemory(vk->device, vk->transfer_memory, NULL);
+    vk->transfer_buffer = VK_NULL_HANDLE;
+    vk->transfer_memory = VK_NULL_HANDLE;
+    vk->transfer_size = 0;
+    vk->transfer_memory_flags = 0;
+}
+
+static void cleanup_vulkan(struct vulkan_context *vk,
+                           struct capture_buffer *captures,
+                           unsigned capture_count)
+{
+    if (vk->device != VK_NULL_HANDLE)
+        release_capture_generation(vk, captures, capture_count);
     if (vk->query_pool != VK_NULL_HANDLE)
         vkDestroyQueryPool(vk->device, vk->query_pool, NULL);
     if (vk->fence != VK_NULL_HANDLE)
@@ -1265,6 +1292,7 @@ int main(int argc, char **argv)
     enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
     must_ioctl(VIDIOC_STREAMON, &type, "VIDIOC_STREAMON OUTPUT");
     bool capture_started = false;
+    bool source_change_pending = false;
     bool drain_sent = false;
     bool last_seen = false;
     bool eos_seen = false;
@@ -1277,6 +1305,8 @@ int main(int argc, char **argv)
     uint32_t previous_sequence = 0;
     bool have_sequence = false;
     uint64_t output_returned = 0;
+    uint64_t source_change_events = 0;
+    uint64_t capture_reconfigurations = 0;
     struct timing_stats decode_stats = {0};
     struct timing_stats gpu_stats = {0};
     struct timing_stats gpu_wall_stats = {0};
@@ -1315,20 +1345,38 @@ int main(int argc, char **argv)
                 break;
             }
             if (event.type == V4L2_EVENT_SOURCE_CHANGE) {
-                if (capture_started)
-                    fail_message("unexpected second SOURCE_CHANGE");
-                capture_count = setup_capture(&vk, captures, &layout,
-                                              expected_width,
-                                              expected_height);
-                type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-                must_ioctl(VIDIOC_STREAMON, &type,
-                           "VIDIOC_STREAMON CAPTURE");
-                capture_started = true;
-                playback_start = monotonic_seconds();
-                last_progress = playback_start;
-                deadline = playback_start + source_duration * 3.0 + 30.0;
-                printf("playback_started paced=1 maximum_runtime_factor=3"
-                       " deadline_margin_s=30 stall_timeout_s=10\n");
+                if (!(event.u.src_change.changes &
+                      V4L2_EVENT_SRC_CH_RESOLUTION))
+                    fail_message("SOURCE_CHANGE lacks RESOLUTION flag");
+                source_change_events++;
+                if (!capture_started) {
+                    capture_count = setup_capture(&vk, captures, &layout,
+                                                  expected_width,
+                                                  expected_height);
+                    type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+                    must_ioctl(VIDIOC_STREAMON, &type,
+                               "VIDIOC_STREAMON CAPTURE");
+                    capture_started = true;
+                    playback_start = monotonic_seconds();
+                    last_progress = playback_start;
+                    deadline = playback_start + source_duration * 3.0 + 30.0;
+                    printf("source_change event=%" PRIu64
+                           " phase=initial changes=0x%x\n",
+                           source_change_events,
+                           event.u.src_change.changes);
+                    printf("playback_started paced=1 maximum_runtime_factor=3"
+                           " deadline_margin_s=30 stall_timeout_s=10\n");
+                } else {
+                    if (source_change_pending)
+                        fail_message("overlapping SOURCE_CHANGE events");
+                    source_change_pending = true;
+                    last_progress = monotonic_seconds();
+                    printf("source_change event=%" PRIu64
+                           " phase=dynamic changes=0x%x frames=%" PRIu64
+                           " action=drain-old-capture\n",
+                           source_change_events,
+                           event.u.src_change.changes, frames);
+                }
             } else if (event.type == V4L2_EVENT_EOS) {
                 eos_seen = true;
                 last_progress = monotonic_seconds();
@@ -1398,6 +1446,7 @@ int main(int argc, char **argv)
         }
 
         if (capture_started) {
+            bool capture_generation_last = false;
             for (;;) {
                 struct v4l2_plane plane = {0};
                 struct v4l2_buffer dequeued = {
@@ -1458,12 +1507,37 @@ int main(int argc, char **argv)
                     }
                 }
                 if (dequeued.flags & V4L2_BUF_FLAG_LAST) {
-                    last_seen = true;
-                    printf("capture_flag=LAST frames=%" PRIu64 "\n", frames);
+                    capture_generation_last = true;
+                    last_seen = !source_change_pending;
+                    printf("capture_flag=LAST frames=%" PRIu64
+                           " reason=%s bytesused=%u\n",
+                           frames,
+                           source_change_pending ? "source-change"
+                                                 : "end-of-stream",
+                           plane.bytesused);
                     break;
                 }
                 queue_capture(dequeued.index,
                               captures[dequeued.index].length);
+            }
+            if (capture_generation_last && source_change_pending) {
+                type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+                must_ioctl(VIDIOC_STREAMOFF, &type,
+                           "VIDIOC_STREAMOFF CAPTURE reconfigure");
+                release_capture_generation(&vk, captures, capture_count);
+                free_capture_buffers();
+                capture_count = setup_capture(&vk, captures, &layout,
+                                              expected_width,
+                                              expected_height);
+                type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+                must_ioctl(VIDIOC_STREAMON, &type,
+                           "VIDIOC_STREAMON CAPTURE reconfigure");
+                source_change_pending = false;
+                capture_reconfigurations++;
+                last_progress = monotonic_seconds();
+                printf("capture_reconfigured generation=%" PRIu64
+                       " frames=%" PRIu64 " output_stream_kept=1\n",
+                       capture_reconfigurations + 1U, frames);
             }
         }
     }
@@ -1479,9 +1553,11 @@ int main(int argc, char **argv)
     printf("summary access_units=%zu output_returned=%" PRIu64
            " frames=%" PRIu64 " sequence_drops=%" PRIu64
            " count_difference=%" PRIu64 " errors=%" PRIu64
+           " source_changes=%" PRIu64 " capture_reconfigurations=%" PRIu64
            " eos_event=%u last_buffer=%u\n",
            input.unit_count, output_returned, frames, sequence_drops,
-           count_difference, v4l2_errors, eos_seen, last_seen);
+           count_difference, v4l2_errors, source_change_events,
+           capture_reconfigurations, eos_seen, last_seen);
     printf("timing source_fps=%.6f achieved_fps=%.6f elapsed_s=%.6f"
            " source_duration_s=%.6f realtime_ratio=%.6f"
            " maximum_feed_lateness_ms=%.6f\n",
