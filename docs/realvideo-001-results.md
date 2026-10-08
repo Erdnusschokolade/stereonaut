@@ -157,3 +157,7 @@ Zustandsmaschine erreichte das leere `LAST` der ersten CAPTURE-Generation und
 validierte das neue Format erneut, aber die Neuanlage der zweiten großen
 CAPTURE-Generation scheiterte mit `ENOMEM`. Der vollständige Befund steht in
 `realvideo-001-run-02-results.md`.
+
+Die streng gegatete Wiederverwendung dieser bestehenden CAPTURE-Generation ist
+in Commit `9c48185` lokal vorbereitet. Der noch nicht aktiv ausgeführte Ablauf
+steht in `realvideo-001-run-03-test-plan.md`.

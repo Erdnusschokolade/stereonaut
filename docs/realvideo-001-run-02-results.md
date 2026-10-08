@@ -110,11 +110,15 @@ bestehenden CAPTURE-Generation:
 2. Nur fortfahren, wenn Format, coded/visible Maße, Stride, `sizeimage`, Plane-
    Layout und Buffergröße exakt kompatibel bleiben und die vorhandenen zwölf
    Buffer das aktuelle Minimum erfüllen.
-3. Bestehende DMA-BUF-/Vulkan-Imports behalten und den gestoppten Decoder mit
-   `V4L2_DEC_CMD_START` fortsetzen.
+3. CAPTURE stoppen, die bestehenden DMA-BUF-/Vulkan-Imports behalten, alle
+   vorhandenen Buffer erneut per `QBUF` einstellen und CAPTURE mit `STREAMON`
+   fortsetzen; OUTPUT bleibt dabei aktiv.
 4. Bei jeder Abweichung stoppen; keine kleinere Bufferzahl oder neue
    Allokationsstrategie im selben Lauf versuchen.
 
-Das wäre eine neue funktionale Variante. Sie wurde weder implementiert noch
-aktiv getestet und benötigt vor einer Ausführung eine neue Freigabe. Es wurden
-keine Paket-, Kernel-, Treiber-, Firmware- oder Systemänderungen vorgenommen.
+Diese funktionale Variante ist inzwischen lokal in Commit `9c48185`
+vorbereitet und geprüft. Der exakte Diff, die Gates und der begrenzte
+Laufvorschlag stehen in `realvideo-001-run-03-test-plan.md`. Sie wurde nicht auf
+dem Steam Frame ausgeführt und benötigt vor einer aktiven Ausführung eine neue
+Freigabe. Es wurden keine Paket-, Kernel-, Treiber-, Firmware- oder
+Systemänderungen vorgenommen.
