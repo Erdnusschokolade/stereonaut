@@ -1,0 +1,38 @@
+{
+  "width": 8192,
+  "visible_height": 4096,
+  "coded_height": 4096,
+  "selected_frames": [
+    0
+  ],
+  "reference_sha256": "775dba0fca937d3be19d607a8a44daff27df4e74ab8b0e22e383ea864795e040",
+  "frames": [
+    {
+      "frame": 0,
+      "readback_path": "tests/realvideo-001/realvideo-001-run-02-frame-00000000.nv12",
+      "readback_sha256": "775dba0fca937d3be19d607a8a44daff27df4e74ab8b0e22e383ea864795e040",
+      "visible_i420_sha256": "775dba0fca937d3be19d607a8a44daff27df4e74ab8b0e22e383ea864795e040",
+      "expected_i420_sha256": "775dba0fca937d3be19d607a8a44daff27df4e74ab8b0e22e383ea864795e040",
+      "different_bytes": 0,
+      "planes": {
+        "Y": {
+          "bytes": 33554432,
+          "different_bytes": 0,
+          "maximum_absolute_difference": 0
+        },
+        "U": {
+          "bytes": 8388608,
+          "different_bytes": 0,
+          "maximum_absolute_difference": 0
+        },
+        "V": {
+          "bytes": 8388608,
+          "different_bytes": 0,
+          "maximum_absolute_difference": 0
+        }
+      }
+    }
+  ],
+  "total_different_bytes": 0,
+  "exact_match": true
+}

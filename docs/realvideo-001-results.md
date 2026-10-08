@@ -151,3 +151,9 @@ folgt der offiziellen
 [stateful V4L2 Dynamic Resolution Change sequence](https://docs.kernel.org/userspace-api/media/v4l/dev-decoder.html#dynamic-resolution-change).
 Sie wurde noch nicht auf dem Steam Frame ausgeführt. Der exakt begrenzte
 Wiederholungsvorschlag steht in `realvideo-001-source-change-test-plan.md`.
+
+Nach Freigabe wurde dieser Wiederholungsvorschlag genau einmal ausgeführt. Die
+Zustandsmaschine erreichte das leere `LAST` der ersten CAPTURE-Generation und
+validierte das neue Format erneut, aber die Neuanlage der zweiten großen
+CAPTURE-Generation scheiterte mit `ENOMEM`. Der vollständige Befund steht in
+`realvideo-001-run-02-results.md`.
