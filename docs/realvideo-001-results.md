@@ -144,3 +144,10 @@ Diese Änderung ist ein neuer aktiver Testpfad und wurde im vorliegenden Lauf
 nicht ausprobiert. Sie benötigt vor einer erneuten Ausführung eine neue,
 konkrete Freigabe. Es wurden keine Kernel-, Treiber-, Firmware-, Paket- oder
 Systemänderungen vorgenommen und kein Recovery-/Neustartversuch durchgeführt.
+
+Die Zustandsmaschine wurde anschließend rein lokal im Commit `ceb39dc`
+vorbereitet und mit GCC sowie Clang unter `-Wall -Wextra -Werror` geprüft. Sie
+folgt der offiziellen
+[stateful V4L2 Dynamic Resolution Change sequence](https://docs.kernel.org/userspace-api/media/v4l/dev-decoder.html#dynamic-resolution-change).
+Sie wurde noch nicht auf dem Steam Frame ausgeführt. Der exakt begrenzte
+Wiederholungsvorschlag steht in `realvideo-001-source-change-test-plan.md`.
