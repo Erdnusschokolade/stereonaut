@@ -1,0 +1,21 @@
+--- docs/vulkan-video-diagnostics/run-07/vulkan-q10c-selftest.c	2026-10-08 21:33:17.446745995 +0200
++++ docs/vulkan-video-diagnostics/run-07/vulkan-q10c-selftest.corrected-not-executed.c	2026-10-08 21:34:05.022620107 +0200
+@@ -468,8 +468,7 @@
+            dedicated_requirements.prefersDedicatedAllocation,
+            dedicated_requirements.requiresDedicatedAllocation);
+     if (image_requirements.memoryRequirements.size != Q10C_SIZE ||
+-        image_requirements.memoryRequirements.alignment != 4096 ||
+-        !dedicated_requirements.requiresDedicatedAllocation)
++        image_requirements.memoryRequirements.alignment != 4096)
+         fail_message("image memory requirements differ from confirmed layout");
+ 
+     VkMemoryPropertyFlags image_flags = 0;
+@@ -480,6 +479,8 @@
+         .sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
+         .image = image,
+     };
++    printf("dedicated_allocation_selected=1 driver_required=%u\n",
++           dedicated_requirements.requiresDedicatedAllocation);
+     VkMemoryAllocateInfo image_allocation_info = {
+         .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+         .pNext = &dedicated_info,

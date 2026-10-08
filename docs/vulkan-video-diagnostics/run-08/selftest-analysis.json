@@ -1,0 +1,157 @@
+{
+  "captured_readback_after_fence": {
+    "bytes": 6266880,
+    "low_six_bits_nonzero": 0,
+    "sha256": "0ad8f4793283bb75af713746ab77f647997c80d213338833f5e198a88f422feb"
+  },
+  "captured_source_after_fence": {
+    "bytes": 6266880,
+    "low_six_bits_nonzero": 1645,
+    "sha256": "bce7ccb6df176b430fd4a55da25005052c466a74045912c639388aed127cb992"
+  },
+  "captured_source_vs_readback": {
+    "u": {
+      "different_10bit_samples": 172298,
+      "different_16bit_words": 172298,
+      "first_different_sample": {
+        "absolute_raw_difference": 640,
+        "baseline_10bit": 402,
+        "baseline_raw": 25728,
+        "candidate_10bit": 392,
+        "candidate_raw": 25088,
+        "x": 17,
+        "y": 0
+      },
+      "mae_raw": 7546.203431372549,
+      "maximum_absolute_raw_difference": 65152,
+      "samples": 522240
+    },
+    "v": {
+      "different_10bit_samples": 173237,
+      "different_16bit_words": 173237,
+      "first_different_sample": {
+        "absolute_raw_difference": 11968,
+        "baseline_10bit": 589,
+        "baseline_raw": 37696,
+        "candidate_10bit": 402,
+        "candidate_raw": 25728,
+        "x": 16,
+        "y": 0
+      },
+      "mae_raw": 6083.6890931372545,
+      "maximum_absolute_raw_difference": 65472,
+      "samples": 522240
+    },
+    "y": {
+      "different_10bit_samples": 699002,
+      "different_16bit_words": 699003,
+      "first_different_sample": {
+        "absolute_raw_difference": 15470,
+        "baseline_10bit": 693,
+        "baseline_raw": 44370,
+        "candidate_10bit": 935,
+        "candidate_raw": 59840,
+        "x": 0,
+        "y": 0
+      },
+      "mae_raw": 7515.182498946844,
+      "maximum_absolute_raw_difference": 65280,
+      "samples": 2088960
+    }
+  },
+  "dimensions": {
+    "chroma_height": 544,
+    "chroma_width": 960,
+    "height": 1088,
+    "width": 1920
+  },
+  "intended_synthetic_input": {
+    "bytes": 6266880,
+    "low_six_bits_nonzero": 0,
+    "sha256": "7192b373425caa2c4b0f1e6b3829969716a1b869ff0a39990a6c41818ee9d6c4"
+  },
+  "intended_vs_captured_source": {
+    "u": {
+      "different_10bit_samples": 0,
+      "different_16bit_words": 0,
+      "first_different_sample": null,
+      "mae_raw": 0.0,
+      "maximum_absolute_raw_difference": 0,
+      "samples": 522240
+    },
+    "v": {
+      "different_10bit_samples": 0,
+      "different_16bit_words": 0,
+      "first_different_sample": null,
+      "mae_raw": 0.0,
+      "maximum_absolute_raw_difference": 0,
+      "samples": 522240
+    },
+    "y": {
+      "different_10bit_samples": 2814,
+      "different_16bit_words": 2815,
+      "first_different_sample": {
+        "absolute_raw_difference": 44370,
+        "baseline_10bit": 0,
+        "baseline_raw": 0,
+        "candidate_10bit": 693,
+        "candidate_raw": 44370,
+        "x": 0,
+        "y": 0
+      },
+      "mae_raw": 25.827880380667892,
+      "maximum_absolute_raw_difference": 60642,
+      "samples": 2088960
+    }
+  },
+  "intended_vs_readback": {
+    "u": {
+      "different_10bit_samples": 172298,
+      "different_16bit_words": 172298,
+      "first_different_sample": {
+        "absolute_raw_difference": 640,
+        "baseline_10bit": 402,
+        "baseline_raw": 25728,
+        "candidate_10bit": 392,
+        "candidate_raw": 25088,
+        "x": 17,
+        "y": 0
+      },
+      "mae_raw": 7546.203431372549,
+      "maximum_absolute_raw_difference": 65152,
+      "samples": 522240
+    },
+    "v": {
+      "different_10bit_samples": 173237,
+      "different_16bit_words": 173237,
+      "first_different_sample": {
+        "absolute_raw_difference": 11968,
+        "baseline_10bit": 589,
+        "baseline_raw": 37696,
+        "candidate_10bit": 402,
+        "candidate_raw": 25728,
+        "x": 16,
+        "y": 0
+      },
+      "mae_raw": 6083.6890931372545,
+      "maximum_absolute_raw_difference": 65472,
+      "samples": 522240
+    },
+    "y": {
+      "different_10bit_samples": 696556,
+      "different_16bit_words": 696556,
+      "first_different_sample": {
+        "absolute_raw_difference": 59840,
+        "baseline_10bit": 0,
+        "baseline_raw": 0,
+        "candidate_10bit": 935,
+        "candidate_raw": 59840,
+        "x": 0,
+        "y": 0
+      },
+      "mae_raw": 7491.517555147058,
+      "maximum_absolute_raw_difference": 65280,
+      "samples": 2088960
+    }
+  }
+}

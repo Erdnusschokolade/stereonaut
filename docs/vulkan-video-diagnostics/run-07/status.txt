@@ -1,0 +1,43 @@
+local_syntax_check_exit_status=0
+local_syntax_check_flags=-std=c11 -O2 -Wall -Wextra -Werror -fsyntax-only
+frame_compile_exit_status=0
+run_exit_status=2
+timeout_command=timeout -k 3s 15s
+executed_source_sha256=e1212141d483f9eab2c917f8336e47643633d69ece28042a09377c9e9502a7d9
+remote_log_sha256=0a7b896d30858e1cb729d41336cb28c9af145195a408225bef956816be511d3f
+
+capability_qcom_modifier=yes
+capability_memory_planes=2
+capability_features=0x8ff001
+capability_transfer_src=yes
+capability_transfer_dst=yes
+capability_combined_usage_query=VK_SUCCESS
+capability_max_extent=16384x16384
+image_create=success
+image_memory_size=4210688
+image_memory_alignment=4096
+image_memory_type_bits=0x7
+image_prefers_dedicated=0
+image_requires_dedicated=0
+
+memory_allocated=no
+image_memory_bound=no
+queue_submissions=0
+source_output_created=no
+readback_output_created=no
+difference_image_created=no
+v4l2_used=no
+decoder_used=no
+dmabuf_used=no
+external_memory_used=no
+foreign_queue_ownership_used=no
+
+The single approved program run stopped before memory allocation and before
+GPU queue work. The fixed size and alignment matched. The probe incorrectly
+treated requiresDedicatedAllocation=0 as incompatible even though it was going
+to select a dedicated allocation explicitly. No retry or active variant ran.
+
+Locally prepared correction (not transferred or run): remove only the
+requiresDedicatedAllocation==1 guard while retaining an explicit
+VkMemoryDedicatedAllocateInfo allocation.
+corrected_candidate_sha256=5f32593e3fdf2cb562a37194aac1cb45ef4a485a265c725f8b34d86facada412

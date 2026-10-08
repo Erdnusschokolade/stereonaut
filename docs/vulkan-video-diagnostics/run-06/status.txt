@@ -1,0 +1,43 @@
+compile_exit_status=0
+run_exit_status=0
+timeout_command=timeout -k 3s 15s
+fixture_sha256=343ab95a434112472268177e7730aa9e1478731d0a9be472522dfe3c7b47790d
+source_sha256=dc10048c04548b739b7d34f72ca1194ae8f10b3dcc0933b0e2eaab30ca9edd47
+remote_log_sha256=63cc57d5860e48283a70d908adc778435bde0023b611a552ce2a2c5666e472c4
+readback_sha256=6f9884a1414db9fa0f0c4574e1bcaa884bd50f7c59673d07e73b826128afce7d
+readback_bytes=6266880
+run04_readback_sha256=8b30ec89b13f741303fd9623ad61f472c306594f18c20c48fca851534aff601b
+
+sync_fd_features=0x3
+sync_fd_compatible_handle_types=0x11
+sync_fd_importable=yes
+sync_file_export=DMA_BUF_SYNC_READ
+sync_file_vulkan_import=temporary
+sync_file_waited_by_transfer_submit=yes
+gpu_completion_sync_file_imported_to_dmabuf=no
+gpu_fence=signaled
+capture_buffer_requeued_after_fence=yes
+
+bit_exact_equal_to_run04=no
+different_bytes_vs_run04=286594
+different_words_vs_run04=183413
+different_visible_y_samples_vs_run04=57901
+different_visible_u_samples_vs_run04=62788
+different_visible_v_samples_vs_run04=62724
+
+best_reference_frame=31
+best_reference_overall_rmse=478.0151599812911
+visible_y_different_samples_vs_reference=2070140
+visible_u_different_samples_vs_reference=345802
+visible_v_different_samples_vs_reference=345298
+precision_exact_visible_match=no
+p010_low_six_bits_nonzero=0
+visible_luma_values_not_divisible_by_4=468202
+
+The approved run was executed exactly once. The explicit producer sync_file
+was imported as a temporary Vulkan SYNC_FD semaphore payload and waited by the
+existing transfer submission. The resulting readback differs from run 04 but
+remains structurally wrong and is slightly farther from the software reference.
+The test did not separately inspect whether Iris had attached a meaningful
+producer fence to dma_resv. No second run or alternative synchronization,
+layout, or import variant was used.

@@ -1,0 +1,21 @@
+compile_exit_status=0
+run_exit_status=0
+fixture_sha256=343ab95a434112472268177e7730aa9e1478731d0a9be472522dfe3c7b47790d
+source_sha256=1e0ba214bf85e4987717365c9bb02d807e1a258f1fe0b65265fc9b2f32f26e7b
+remote_log_sha256=f456e5e2d5caaa313ba42bef3db41a36bdfbae8bb86ae8970b742e981539295b
+readback_sha256=8b30ec89b13f741303fd9623ad61f472c306594f18c20c48fca851534aff601b
+readback_bytes=6266880
+
+v4l2_q10c_source_change=confirmed
+dmabuf_export_count=1
+vulkan_dedicated_import=confirmed
+gpu_fence=signaled
+capture_buffer_requeued_after_fence=yes
+cpu_q10c_mapping_or_read=no
+gpu_readbacks=1
+precision_exact_visible_match=no
+precision_more_than_8_bit_precision=yes
+
+The run completed all approved V4L2/Vulkan steps once. The visible output did
+not match the software reference, so this is not a correctness or lossless
+10-bit proof. No further active variant was run.

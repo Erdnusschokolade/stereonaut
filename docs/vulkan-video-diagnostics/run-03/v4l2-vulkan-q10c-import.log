@@ -1,0 +1,7 @@
+fixture_bytes=15977 access_units=60
+v4l2_driver=iris_driver card=iris_decoder
+output_buffers=4
+capture_format fourcc=Q10C width=1920 height=1088 planes=1 stride=2560 sizeimage=4210688
+visible_rect left=0 top=0 width=1920 height=1080
+capture_buffers=12 cpu_mapped=no
+VIDIOC_DQEVENT: errno=2 (No such file or directory)

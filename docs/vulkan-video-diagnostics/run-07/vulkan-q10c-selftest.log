@@ -1,0 +1,9 @@
+test extent=1920x1088 format=1000156013 modifier=0x0500000000000001 usage=TRANSFER_DST|TRANSFER_SRC
+memory_plane=0 offset=0 row_pitch=2560
+memory_plane=1 offset=2805760 row_pitch=2560
+vulkan_device=Turnip Adreno (TM) 750 vendor=0x5143 device=0x43051401
+capability_modifier=0x0500000000000001 memory_planes=2 features=0x8ff001 transfer_src=1 transfer_dst=1
+capability_combined_usage result=0 max_extent=16384x16384 max_mips=15 max_layers=2048
+capability_preflight=supported gpu_work_not_started_yet
+image_memory size=4210688 alignment=4096 type_bits=0x7 preferred_dedicated=0 required_dedicated=0
+image memory requirements differ from confirmed layout

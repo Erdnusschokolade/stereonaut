@@ -1,0 +1,66 @@
+{
+  "baseline": {
+    "bytes": 6266880,
+    "low_six_bits_nonzero": 0,
+    "path": "docs/vulkan-video-diagnostics/run-04/p010-readback.bin",
+    "sha256": "8b30ec89b13f741303fd9623ad61f472c306594f18c20c48fca851534aff601b"
+  },
+  "bit_exact_equal": false,
+  "candidate": {
+    "bytes": 6266880,
+    "low_six_bits_nonzero": 0,
+    "path": "docs/vulkan-video-diagnostics/run-06/p010-readback-sync.bin",
+    "sha256": "6f9884a1414db9fa0f0c4574e1bcaa884bd50f7c59673d07e73b826128afce7d"
+  },
+  "different_bytes": 286594,
+  "different_words": 183413,
+  "first_different_byte": 122881,
+  "maximum_absolute_raw_word_difference": 65472,
+  "planes_high_10_bits": {
+    "u": {
+      "changed_bounding_box": {
+        "x_max": 959,
+        "x_min": 0,
+        "y_max": 539,
+        "y_min": 0
+      },
+      "correlation": 0.864991566521822,
+      "different_fraction": 0.12111882716049382,
+      "different_samples": 62788,
+      "mae": 44.61579861111111,
+      "maximum_absolute_difference": 1023,
+      "rmse": 153.9123514254015,
+      "samples": 518400
+    },
+    "v": {
+      "changed_bounding_box": {
+        "x_max": 959,
+        "x_min": 0,
+        "y_max": 539,
+        "y_min": 0
+      },
+      "correlation": 0.779764100212055,
+      "different_fraction": 0.12099537037037036,
+      "different_samples": 62724,
+      "mae": 52.560144675925926,
+      "maximum_absolute_difference": 1023,
+      "rmse": 180.23195067355755,
+      "samples": 518400
+    },
+    "y": {
+      "changed_bounding_box": {
+        "x_max": 1915,
+        "x_min": 0,
+        "y_max": 1071,
+        "y_min": 32
+      },
+      "correlation": 0.9756612395768647,
+      "different_fraction": 0.027922935956790122,
+      "different_samples": 57901,
+      "mae": 8.751517650462963,
+      "maximum_absolute_difference": 1023,
+      "rmse": 64.137548772301,
+      "samples": 2073600
+    }
+  }
+}

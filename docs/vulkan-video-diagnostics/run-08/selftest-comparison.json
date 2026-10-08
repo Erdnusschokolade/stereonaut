@@ -1,0 +1,87 @@
+{
+  "baseline": {
+    "bytes": 6266880,
+    "low_six_bits_nonzero": 1645,
+    "path": "docs/vulkan-video-diagnostics/run-08/p010-selftest-source.bin",
+    "sha256": "bce7ccb6df176b430fd4a55da25005052c466a74045912c639388aed127cb992"
+  },
+  "bit_exact_equal": false,
+  "candidate": {
+    "bytes": 6266880,
+    "low_six_bits_nonzero": 0,
+    "path": "docs/vulkan-video-diagnostics/run-08/p010-selftest-readback.bin",
+    "sha256": "0ad8f4793283bb75af713746ab77f647997c80d213338833f5e198a88f422feb"
+  },
+  "different_bytes": 1063304,
+  "different_words": 1044538,
+  "first_different_byte": 0,
+  "maximum_absolute_raw_word_difference": 65472,
+  "planes_high_10_bits": {
+    "u": {
+      "changed_bounding_box": {
+        "x_max": 959,
+        "x_min": 0,
+        "y_max": 539,
+        "y_min": 0
+      },
+      "correlation": 0.6526412800779696,
+      "different_fraction": 0.3303896604938272,
+      "different_samples": 171274,
+      "first_different_sample": {
+        "absolute_difference": 10,
+        "baseline": 402,
+        "candidate": 392,
+        "x": 17,
+        "y": 0
+      },
+      "mae": 117.98517361111111,
+      "maximum_absolute_difference": 1018,
+      "rmse": 245.9598662198674,
+      "samples": 518400
+    },
+    "v": {
+      "changed_bounding_box": {
+        "x_max": 959,
+        "x_min": 0,
+        "y_max": 539,
+        "y_min": 0
+      },
+      "correlation": 0.7217556913593696,
+      "different_fraction": 0.33220100308641975,
+      "different_samples": 172213,
+      "first_different_sample": {
+        "absolute_difference": 187,
+        "baseline": 589,
+        "candidate": 402,
+        "x": 16,
+        "y": 0
+      },
+      "mae": 94.88847029320988,
+      "maximum_absolute_difference": 1023,
+      "rmse": 220.45400833220896,
+      "samples": 518400
+    },
+    "y": {
+      "changed_bounding_box": {
+        "x_max": 1919,
+        "x_min": 0,
+        "y_max": 1079,
+        "y_min": 0
+      },
+      "correlation": 0.6503122721329708,
+      "different_fraction": 0.3327174961419753,
+      "different_samples": 689923,
+      "first_different_sample": {
+        "absolute_difference": 242,
+        "baseline": 693,
+        "candidate": 935,
+        "x": 0,
+        "y": 0
+      },
+      "mae": 116.93051408179012,
+      "maximum_absolute_difference": 1018,
+      "rmse": 246.49242158242805,
+      "samples": 2073600
+    }
+  }
+}

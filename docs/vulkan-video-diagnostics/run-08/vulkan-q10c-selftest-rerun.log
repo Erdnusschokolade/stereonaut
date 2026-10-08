@@ -1,0 +1,17 @@
+test extent=1920x1088 format=1000156013 modifier=0x0500000000000001 usage=TRANSFER_DST|TRANSFER_SRC
+memory_plane=0 offset=0 row_pitch=2560
+memory_plane=1 offset=2805760 row_pitch=2560
+vulkan_device=Turnip Adreno (TM) 750 vendor=0x5143 device=0x43051401
+capability_modifier=0x0500000000000001 memory_planes=2 features=0x8ff001 transfer_src=1 transfer_dst=1
+capability_combined_usage result=0 max_extent=16384x16384 max_mips=15 max_layers=2048
+capability_preflight=supported gpu_work_not_started_yet
+image_memory size=4210688 alignment=4096 type_bits=0x7 preferred_dedicated=0 required_dedicated=0
+dedicated_allocation_selected=1 driver_required=0
+image_memory_bound type=0 flags=0x7 bytes=4210688
+staging_buffer size=6266880 memory_type=0 flags=0x7
+readback_buffer size=6266880 memory_type=0 flags=0x7
+gpu_fence=signaled submissions=1
+comparison words=3133440 different=1044538 y_different=699003 uv_component_different=345535 max_raw_difference=65472
+source_written=p010-selftest-source.bin readback_written=p010-selftest-readback.bin bytes=6266880
+difference_image_written=vulkan-selftest-y-difference.pgm
+result=mismatch

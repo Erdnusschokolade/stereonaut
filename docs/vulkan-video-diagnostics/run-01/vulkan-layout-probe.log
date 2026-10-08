@@ -1,0 +1,6 @@
+enumerated_modifier=0x0500000000000001 memory_planes=2 features=0x8ff001
+create_image result=0 extent=1920x1088 format=1000156013
+chosen_modifier=0x0500000000000001
+memory size=6299648 alignment=4096 memory_type_bits=0x7 prefers_dedicated=1 requires_dedicated=1
+memory_plane=0 offset=0 size=4177920 row_pitch=3840 array_pitch=4177920 depth_pitch=4177920
+memory_plane=1 offset=0 size=2088960 row_pitch=3840 array_pitch=2088960 depth_pitch=2088960

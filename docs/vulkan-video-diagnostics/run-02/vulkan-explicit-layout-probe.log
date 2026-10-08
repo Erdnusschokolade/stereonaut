@@ -1,0 +1,8 @@
+run_exit_status=0
+requested_modifier=0x0500000000000001 extent=1920x1088 format=1000156013 usage=SAMPLED|TRANSFER_SRC
+requested_memory_plane=0 offset=0 row_pitch=2560
+requested_memory_plane=1 offset=2805760 row_pitch=2560
+enumerated_modifier=0x0500000000000001 memory_planes=2 features=0x8ff001
+create_image result=0
+chosen_modifier=0x0500000000000001
+memory size=4210688 alignment=4096 memory_type_bits=0x7 prefers_dedicated=1 requires_dedicated=1 iris_buffer_size=4210688

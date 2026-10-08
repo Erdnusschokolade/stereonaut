@@ -1,0 +1,13 @@
+compile_exit_status=0
+run_exit_status=2
+readback_exists=no
+dma_buf_exports=0
+vulkan_initialized=no
+
+executed_source_sha256=3adfc9816aa56252d12e4fb201848f89de823c40a5991d3b7a969159cfef3b45
+remote_binary_sha256=87bebef119c6e98a9f1be7e429469276a9f07e548b87fe8b22760834419da9b8
+remote_log_sha256=31bb4f2b3559846c50443e6f354da0f7b6730d6f39d088c1b025499cb7d0184c
+
+The one authorized run stopped after the successful SOURCE_CHANGE handling.
+No CAPTURE buffer was dequeued or exported, and Vulkan was never initialized.
+The executed source is preserved as v4l2-vulkan-q10c-import.executed.c.

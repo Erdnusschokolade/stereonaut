@@ -1,0 +1,23 @@
+{
+  "actual_luma_values_not_divisible_by_4": 469547,
+  "actual_unique_luma_values": 601,
+  "exact_visible_match": false,
+  "more_than_8_bit_precision": true,
+  "p010_low_six_bits_nonzero": 0,
+  "readback_bytes": 6266880,
+  "u": {
+    "different_samples": 349326,
+    "max_abs_difference": 960,
+    "samples": 518400
+  },
+  "v": {
+    "different_samples": 349107,
+    "max_abs_difference": 960,
+    "samples": 518400
+  },
+  "y": {
+    "different_samples": 2070773,
+    "max_abs_difference": 956,
+    "samples": 2073600
+  }
+}

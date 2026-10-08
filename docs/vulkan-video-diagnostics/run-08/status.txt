@@ -1,0 +1,49 @@
+local_syntax_check_exit_status=0
+frame_compile_exit_status=0
+run_exit_status=1
+timeout_command=timeout -k 3s 15s
+executed_source_sha256=5f32593e3fdf2cb562a37194aac1cb45ef4a485a265c725f8b34d86facada412
+remote_log_sha256=4921139e08fdc0e0ed6709f751e4da0822bafd85bf2a359b5f77fa8688c4e5d6
+
+capability_qcom_modifier=yes
+capability_memory_planes=2
+capability_transfer_src=yes
+capability_transfer_dst=yes
+capability_combined_usage_query=VK_SUCCESS
+image_memory_size=4210688
+image_memory_alignment=4096
+dedicated_allocation_selected=yes
+memory_bound=yes
+queue_submissions=1
+gpu_fence=signaled
+v4l2_used=no
+decoder_used=no
+dmabuf_used=no
+external_memory_used=no
+foreign_queue_ownership_used=no
+
+intended_synthetic_input_sha256=7192b373425caa2c4b0f1e6b3829969716a1b869ff0a39990a6c41818ee9d6c4
+captured_source_after_fence_sha256=bce7ccb6df176b430fd4a55da25005052c466a74045912c639388aed127cb992
+readback_sha256=0ad8f4793283bb75af713746ab77f647997c80d213338833f5e198a88f422feb
+source_bytes=6266880
+readback_bytes=6266880
+
+program_raw_different_words=1044538
+program_raw_y_words=699003
+program_raw_uv_component_words=345535
+offline_source_vs_readback_y_words=699003
+offline_source_vs_readback_u_words=172298
+offline_source_vs_readback_v_words=173237
+first_source_vs_readback_difference=Y(x=0,y=0):44370->59840
+first_intended_vs_readback_difference=Y(x=0,y=0):0->59840
+
+captured_source_differs_from_intended_y_words=2815
+captured_source_differs_from_intended_u_words=0
+captured_source_differs_from_intended_v_words=0
+diagnostic_image=intended-vs-readback-y-difference.png
+
+The one approved corrected self-test ran to a signaled fence and produced both
+P010 buffers. Its bit-exact comparison failed. No retry or parameter variant
+was run. The source buffer captured after the fence differs from the synthetic
+input in 2,815 Y words, so the report preserves both the intended input hash
+and the captured source hash.
