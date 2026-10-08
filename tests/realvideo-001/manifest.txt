@@ -1,5 +1,5 @@
 source=source.mkv
-preparation=stream-copy+hevc_mp4toannexb+AUD-insertion
+preparation=stream-copy+hevc_mp4toannexb+AUD-insertion+sequential-software-reference
 codec=hevc
 profile=Main
 pixel_format=yuv420p
@@ -11,4 +11,4 @@ selected_frames=0,3595,7190
 elementary_stream_bytes=755880785
 elementary_stream_sha256=f78332e37281b24c9c3a3304df785b914d97f84720f3cb5930e3bf0fcadcfa3d
 reference_bytes=150994944
-reference_sha256=8e0de121a6a855c000ed069befa882f2701beee5971d9813aa1876fb48c76599
+reference_sha256=4a1da6b3fe877b61b23348455d81ea3d9e2d4d3bac3caad6546679044df590b0

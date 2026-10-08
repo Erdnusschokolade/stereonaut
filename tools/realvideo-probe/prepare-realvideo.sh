@@ -56,29 +56,41 @@ frame_count=$(python3 -c \
 middle_frame=$((frame_count / 2))
 last_frame=$((frame_count - 1))
 
-# The source container is indexed. Accurate input seeking decodes from the
-# preceding keyframe and avoids decoding the complete 8K excerpt three times.
-rate_numerator=${rate%/*}
-rate_denominator=${rate#*/}
-: > "$reference"
+# Decode the exact Annex-B stream sequentially. Timestamp-based seeking in the
+# source container may choose an adjacent frame at a target timestamp, whereas
+# the probe indexes decoded frames from the Annex-B access-unit sequence.
+ffmpeg -nostdin -hide_banner -loglevel warning -y -i "$elementary_stream" \
+    -map 0:v:0 \
+    -vf "select='eq(n\\,0)+eq(n\\,$middle_frame)+eq(n\\,$last_frame)'" \
+    -fps_mode passthrough -pix_fmt yuv420p -f rawvideo "$reference"
+
+frame_bytes=$((width * height * 3 / 2))
+expected_reference_bytes=$((3 * frame_bytes))
+reference_bytes=$(stat -c %s "$reference")
+[[ "$reference_bytes" -eq "$expected_reference_bytes" ]] || {
+    echo "sequential reference size $reference_bytes != $expected_reference_bytes" >&2
+    exit 2
+}
+
+slot=0
 for selected_frame in 0 "$middle_frame" "$last_frame"; do
-    timestamp=$(awk -v n="$selected_frame" -v num="$rate_numerator" \
-        -v den="$rate_denominator" 'BEGIN { printf "%.9f", n * den / num }')
     selected_path=$(printf '%s/reference-frame-%08d.i420' \
         "$output_directory" "$selected_frame")
-    ffmpeg -nostdin -hide_banner -loglevel warning -y -ss "$timestamp" \
-        -i "$input" -map 0:v:0 -frames:v 1 -pix_fmt yuv420p \
-        -f rawvideo "$selected_path"
-    cat "$selected_path" >> "$reference"
+    dd if="$reference" of="$selected_path" bs="$frame_bytes" count=1 \
+        skip="$slot" status=none
+    [[ $(stat -c %s "$selected_path") -eq "$frame_bytes" ]] || {
+        echo "reference frame $selected_frame is short" >&2
+        exit 2
+    }
+    slot=$((slot + 1))
 done
 
 stream_sha256=$(sha256sum "$elementary_stream" | awk '{print $1}')
 reference_sha256=$(sha256sum "$reference" | awk '{print $1}')
 stream_bytes=$(stat -c %s "$elementary_stream")
-reference_bytes=$(stat -c %s "$reference")
 {
     printf 'source=%s\n' "$input"
-    printf 'preparation=stream-copy+hevc_mp4toannexb+AUD-insertion\n'
+    printf 'preparation=stream-copy+hevc_mp4toannexb+AUD-insertion+sequential-software-reference\n'
     printf 'codec=hevc\nprofile=Main\npixel_format=yuv420p\n'
     printf 'width=%s\nvisible_height=%s\nframe_rate=%s\n' \
         "$width" "$height" "$rate"
