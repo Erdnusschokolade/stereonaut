@@ -29,6 +29,6 @@ den Fehler auf die Wiederaufnahme nach `STREAMOFF` ein; die Buffer- und
 Vulkan-Kompatibilität waren bereits bestätigt. Ein wiederholter Lauf wurde
 nicht gestartet.
 
-Der nächste vorbereitete Kandidat in `realvideo-001-run-05-test-plan.md`
-behält CAPTURE streaming, reiht nur den leeren LAST-Buffer erneut ein und
-verwendet `V4L2_DEC_CMD_START`, wie für diesen kompatiblen Zustand vorgesehen.
+Der nachfolgende Run 05 behielt CAPTURE streaming, reihte nur den leeren
+LAST-Buffer erneut ein und verwendete `V4L2_DEC_CMD_START`. Er verarbeitete den
+gesamten Stream erfolgreich; siehe `realvideo-001-run-05-results.md`.

@@ -169,5 +169,15 @@ Run 04 behandelt ausschließlich die für diesen Treiber bestätigte
 Nichtverfügbarkeit dieses Controls als einen protokollierten Zustand. Der
 ausgeführte Lauf bestätigte alle Buffer-Gates, scheiterte aber am anschließenden
 CAPTURE-`STREAMON` mit `ENOMEM`; Einzelheiten stehen in
-`realvideo-001-run-04-results.md`. Der korrigierte, noch nicht ausgeführte
-Decoder-START-Pfad ist in `realvideo-001-run-05-test-plan.md` dokumentiert.
+`realvideo-001-run-04-results.md`.
+
+## Abschließendes Ergebnis: Run 05
+
+Der korrigierte Decoder-START-Pfad verarbeitete anschließend den vollständigen
+120-Sekunden-Stream mit allen 7.191 Access Units und 7.191 CAPTURE-Frames,
+ohne Drops, V4L2- oder Vulkanfehler. Der kompatible SOURCE_CHANGE nach Frame
+300 wurde einmal ohne Reallokation erfolgreich fortgesetzt. Die drei
+sequentiell aus dem getesteten Annex-B-Stream erzeugten Software-Referenzen
+für Frame 0, 3595 und 7190 stimmen jeweils bytegenau mit den GPU-Readbacks
+überein. Die vollständigen Metriken, Referenzkorrektur und die Einschätzung für
+Realvideo 002 stehen in `realvideo-001-run-05-results.md`.

@@ -1,0 +1,145 @@
+input_bytes=755880785 access_units=7191 largest_access_unit=1058608
+source width=8192 visible_height=4096 fps=60000/1001 duration_s=119.969850
+vulkan_device=Turnip Adreno (TM) 750 vendor=0x5143 device=0x43051401 timestamp_period_ns=52.083332
+vulkan_preflight nv12_linear=1 memory_planes=2 sampled=1 transfer_src=1 external_features=0x7
+sync_fd_preflight importable=1 features=0x3
+vulkan_preflight=success queue_family=0 timestamp_bits=48 decoder_stream_not_started_yet
+v4l2_device=/dev/video-dec0 driver=iris_driver card=iris_decoder bus=platform:iris_bus
+output_format fourcc=HEVC width=8192 height=4096 sizeimage=16588800
+output_buffers=6
+capture_format fourcc=NV12 width=8192 height=4096 planes=1 stride=8192 sizeimage=50331648 colorspace=3 xfer=1 ycbcr=2 quant=2
+visible_rect left=0 top=0 width=8192 height=4096
+nv12_contract modifier=DRM_FORMAT_MOD_LINEAR memory_planes=2 v4l2_memory_planes=1 y_offset=0 uv_offset=33554432 row_pitch=8192 required_bytes=50331648
+transfer_buffer bytes=50331648 memory_type=0 flags=0x7
+min_buffers_control=unavailable errno=22
+capture_allocation index=0 length=50331648
+dmabuf_export index=0 fd=9 size=50331648
+vulkan_layout index=0 memory_plane=0 offset=0 row_pitch=8192 size=33554432
+vulkan_layout index=0 memory_plane=1 offset=33554432 row_pitch=8192 size=16777216
+image_memory index=0 size=50331648 alignment=64 type_bits=0x7 dedicated_required=1
+dmabuf_import index=0 bytes=50331648 fd_type_bits=0x7 intersection=0x7 memory_type=0 flags=0x7 dedicated=1
+capture_allocation index=1 length=50331648
+dmabuf_export index=1 fd=11 size=50331648
+vulkan_layout index=1 memory_plane=0 offset=0 row_pitch=8192 size=33554432
+vulkan_layout index=1 memory_plane=1 offset=33554432 row_pitch=8192 size=16777216
+image_memory index=1 size=50331648 alignment=64 type_bits=0x7 dedicated_required=1
+dmabuf_import index=1 bytes=50331648 fd_type_bits=0x7 intersection=0x7 memory_type=0 flags=0x7 dedicated=1
+capture_allocation index=2 length=50331648
+dmabuf_export index=2 fd=12 size=50331648
+vulkan_layout index=2 memory_plane=0 offset=0 row_pitch=8192 size=33554432
+vulkan_layout index=2 memory_plane=1 offset=33554432 row_pitch=8192 size=16777216
+image_memory index=2 size=50331648 alignment=64 type_bits=0x7 dedicated_required=1
+dmabuf_import index=2 bytes=50331648 fd_type_bits=0x7 intersection=0x7 memory_type=0 flags=0x7 dedicated=1
+capture_allocation index=3 length=50331648
+dmabuf_export index=3 fd=13 size=50331648
+vulkan_layout index=3 memory_plane=0 offset=0 row_pitch=8192 size=33554432
+vulkan_layout index=3 memory_plane=1 offset=33554432 row_pitch=8192 size=16777216
+image_memory index=3 size=50331648 alignment=64 type_bits=0x7 dedicated_required=1
+dmabuf_import index=3 bytes=50331648 fd_type_bits=0x7 intersection=0x7 memory_type=0 flags=0x7 dedicated=1
+capture_allocation index=4 length=50331648
+dmabuf_export index=4 fd=14 size=50331648
+vulkan_layout index=4 memory_plane=0 offset=0 row_pitch=8192 size=33554432
+vulkan_layout index=4 memory_plane=1 offset=33554432 row_pitch=8192 size=16777216
+image_memory index=4 size=50331648 alignment=64 type_bits=0x7 dedicated_required=1
+dmabuf_import index=4 bytes=50331648 fd_type_bits=0x7 intersection=0x7 memory_type=0 flags=0x7 dedicated=1
+capture_allocation index=5 length=50331648
+dmabuf_export index=5 fd=15 size=50331648
+vulkan_layout index=5 memory_plane=0 offset=0 row_pitch=8192 size=33554432
+vulkan_layout index=5 memory_plane=1 offset=33554432 row_pitch=8192 size=16777216
+image_memory index=5 size=50331648 alignment=64 type_bits=0x7 dedicated_required=1
+dmabuf_import index=5 bytes=50331648 fd_type_bits=0x7 intersection=0x7 memory_type=0 flags=0x7 dedicated=1
+capture_allocation index=6 length=50331648
+dmabuf_export index=6 fd=16 size=50331648
+vulkan_layout index=6 memory_plane=0 offset=0 row_pitch=8192 size=33554432
+vulkan_layout index=6 memory_plane=1 offset=33554432 row_pitch=8192 size=16777216
+image_memory index=6 size=50331648 alignment=64 type_bits=0x7 dedicated_required=1
+dmabuf_import index=6 bytes=50331648 fd_type_bits=0x7 intersection=0x7 memory_type=0 flags=0x7 dedicated=1
+capture_allocation index=7 length=50331648
+dmabuf_export index=7 fd=17 size=50331648
+vulkan_layout index=7 memory_plane=0 offset=0 row_pitch=8192 size=33554432
+vulkan_layout index=7 memory_plane=1 offset=33554432 row_pitch=8192 size=16777216
+image_memory index=7 size=50331648 alignment=64 type_bits=0x7 dedicated_required=1
+dmabuf_import index=7 bytes=50331648 fd_type_bits=0x7 intersection=0x7 memory_type=0 flags=0x7 dedicated=1
+capture_allocation index=8 length=50331648
+dmabuf_export index=8 fd=18 size=50331648
+vulkan_layout index=8 memory_plane=0 offset=0 row_pitch=8192 size=33554432
+vulkan_layout index=8 memory_plane=1 offset=33554432 row_pitch=8192 size=16777216
+image_memory index=8 size=50331648 alignment=64 type_bits=0x7 dedicated_required=1
+dmabuf_import index=8 bytes=50331648 fd_type_bits=0x7 intersection=0x7 memory_type=0 flags=0x7 dedicated=1
+capture_allocation index=9 length=50331648
+dmabuf_export index=9 fd=19 size=50331648
+vulkan_layout index=9 memory_plane=0 offset=0 row_pitch=8192 size=33554432
+vulkan_layout index=9 memory_plane=1 offset=33554432 row_pitch=8192 size=16777216
+image_memory index=9 size=50331648 alignment=64 type_bits=0x7 dedicated_required=1
+dmabuf_import index=9 bytes=50331648 fd_type_bits=0x7 intersection=0x7 memory_type=0 flags=0x7 dedicated=1
+capture_allocation index=10 length=50331648
+dmabuf_export index=10 fd=20 size=50331648
+vulkan_layout index=10 memory_plane=0 offset=0 row_pitch=8192 size=33554432
+vulkan_layout index=10 memory_plane=1 offset=33554432 row_pitch=8192 size=16777216
+image_memory index=10 size=50331648 alignment=64 type_bits=0x7 dedicated_required=1
+dmabuf_import index=10 bytes=50331648 fd_type_bits=0x7 intersection=0x7 memory_type=0 flags=0x7 dedicated=1
+capture_allocation index=11 length=50331648
+dmabuf_export index=11 fd=21 size=50331648
+vulkan_layout index=11 memory_plane=0 offset=0 row_pitch=8192 size=33554432
+vulkan_layout index=11 memory_plane=1 offset=33554432 row_pitch=8192 size=16777216
+image_memory index=11 size=50331648 alignment=64 type_bits=0x7 dedicated_required=1
+dmabuf_import index=11 bytes=50331648 fd_type_bits=0x7 intersection=0x7 memory_type=0 flags=0x7 dedicated=1
+capture_buffers=12 imported_images=12 cpu_mapped=0
+source_change event=1 phase=initial changes=0x1
+playback_started paced=1 maximum_runtime_factor=3 deadline_margin_s=30 stall_timeout_s=10
+selected_readback frame=0 path=realvideo-001-run-05-frame-00000000.nv12 bytes=50331648
+frame=0 capture_index=0 sequence=0 bytesused=50331648 timestamp=0.000000 gpu_ms=3.931562 gpu_wall_ms=10.770046 selected=1
+frame=299 capture_index=0 sequence=0 bytesused=50331648 timestamp=4.988316 gpu_ms=4.069323 gpu_wall_ms=4.514562 selected=0
+source_change event=2 phase=dynamic changes=0x1 frames=300 action=drain-old-capture
+capture_flag=LAST frames=300 reason=source-change bytesused=0
+capture_format fourcc=NV12 width=8192 height=4096 planes=1 stride=8192 sizeimage=50331648 colorspace=3 xfer=1 ycbcr=2 quant=2
+visible_rect left=0 top=0 width=8192 height=4096
+capture_reuse_check memory_compatible=1 compose_unchanged=1 existing_buffers=12
+nv12_contract modifier=DRM_FORMAT_MOD_LINEAR memory_planes=2 v4l2_memory_planes=1 y_offset=0 uv_offset=33554432 row_pitch=8192 required_bytes=50331648
+min_buffers_control=unavailable errno=22
+capture_reuse_allocation index=0 length=50331648
+capture_reuse_allocation index=1 length=50331648
+capture_reuse_allocation index=2 length=50331648
+capture_reuse_allocation index=3 length=50331648
+capture_reuse_allocation index=4 length=50331648
+capture_reuse_allocation index=5 length=50331648
+capture_reuse_allocation index=6 length=50331648
+capture_reuse_allocation index=7 length=50331648
+capture_reuse_allocation index=8 length=50331648
+capture_reuse_allocation index=9 length=50331648
+capture_reuse_allocation index=10 length=50331648
+capture_reuse_allocation index=11 length=50331648
+capture_reused generation=2 frames=300 output_stream_kept=1 capture_stream_kept=1 vulkan_imports_kept=1 last_index=0
+frame=599 capture_index=1 sequence=0 bytesused=50331648 timestamp=9.993316 gpu_ms=3.855989 gpu_wall_ms=4.324153 selected=0
+frame=899 capture_index=0 sequence=0 bytesused=50331648 timestamp=14.998316 gpu_ms=4.097708 gpu_wall_ms=4.534249 selected=0
+frame=1199 capture_index=0 sequence=0 bytesused=50331648 timestamp=20.003316 gpu_ms=4.121667 gpu_wall_ms=4.710388 selected=0
+frame=1499 capture_index=0 sequence=0 bytesused=50331648 timestamp=25.008316 gpu_ms=3.937031 gpu_wall_ms=4.406389 selected=0
+frame=1799 capture_index=1 sequence=0 bytesused=50331648 timestamp=30.013316 gpu_ms=4.022760 gpu_wall_ms=4.496438 selected=0
+frame=2099 capture_index=0 sequence=0 bytesused=50331648 timestamp=35.018316 gpu_ms=3.974896 gpu_wall_ms=4.580133 selected=0
+frame=2399 capture_index=0 sequence=0 bytesused=50331648 timestamp=40.023316 gpu_ms=4.054062 gpu_wall_ms=4.485710 selected=0
+frame=2699 capture_index=1 sequence=0 bytesused=50331648 timestamp=45.028316 gpu_ms=3.983750 gpu_wall_ms=4.427222 selected=0
+frame=2999 capture_index=1 sequence=0 bytesused=50331648 timestamp=50.033316 gpu_ms=3.978229 gpu_wall_ms=4.472897 selected=0
+frame=3299 capture_index=0 sequence=0 bytesused=50331648 timestamp=55.038316 gpu_ms=4.106979 gpu_wall_ms=4.513729 selected=0
+selected_readback frame=3595 path=realvideo-001-run-05-frame-00003595.nv12 bytes=50331648
+frame=3595 capture_index=0 sequence=0 bytesused=50331648 timestamp=59.976583 gpu_ms=4.463177 gpu_wall_ms=4.977982 selected=1
+frame=3599 capture_index=2 sequence=0 bytesused=50331648 timestamp=60.043316 gpu_ms=4.011927 gpu_wall_ms=4.435294 selected=0
+frame=3899 capture_index=1 sequence=0 bytesused=50331648 timestamp=65.048316 gpu_ms=4.071094 gpu_wall_ms=4.655703 selected=0
+frame=4199 capture_index=0 sequence=0 bytesused=50331648 timestamp=70.053316 gpu_ms=4.096719 gpu_wall_ms=4.551123 selected=0
+frame=4499 capture_index=1 sequence=0 bytesused=50331648 timestamp=75.058316 gpu_ms=4.092292 gpu_wall_ms=4.572477 selected=0
+frame=4799 capture_index=0 sequence=0 bytesused=50331648 timestamp=80.063316 gpu_ms=3.901094 gpu_wall_ms=4.518989 selected=0
+frame=5099 capture_index=0 sequence=0 bytesused=50331648 timestamp=85.068316 gpu_ms=4.029792 gpu_wall_ms=4.489824 selected=0
+frame=5399 capture_index=1 sequence=0 bytesused=50331648 timestamp=90.073316 gpu_ms=3.997187 gpu_wall_ms=4.447690 selected=0
+frame=5699 capture_index=1 sequence=0 bytesused=50331648 timestamp=95.078316 gpu_ms=4.330104 gpu_wall_ms=4.754710 selected=0
+frame=5999 capture_index=1 sequence=0 bytesused=50331648 timestamp=100.083316 gpu_ms=4.029531 gpu_wall_ms=4.510865 selected=0
+frame=6299 capture_index=1 sequence=0 bytesused=50331648 timestamp=105.088316 gpu_ms=4.094062 gpu_wall_ms=4.548728 selected=0
+frame=6599 capture_index=1 sequence=0 bytesused=50331648 timestamp=110.093316 gpu_ms=3.949687 gpu_wall_ms=4.476023 selected=0
+frame=6899 capture_index=0 sequence=0 bytesused=50331648 timestamp=115.098316 gpu_ms=4.014792 gpu_wall_ms=4.516334 selected=0
+decoder_drain_sent queued_access_units=7191
+selected_readback frame=7190 path=realvideo-001-run-05-frame-00007190.nv12 bytes=50331648
+frame=7190 capture_index=0 sequence=0 bytesused=50331648 timestamp=119.953166 gpu_ms=4.122500 gpu_wall_ms=4.650026 selected=1
+capture_flag=LAST frames=7191 reason=end-of-stream bytesused=0
+summary access_units=7191 output_returned=7191 frames=7191 sequence_drops=0 count_difference=0 errors=0 source_changes=2 capture_reconfigurations=1 eos_event=0 last_buffer=1
+timing source_fps=59.940060 achieved_fps=59.899617 elapsed_s=120.050850 source_duration_s=119.969850 realtime_ratio=0.999325 maximum_feed_lateness_ms=90.220596
+decode_timing samples=7191 mean_ms=15.847582 max_ms=89.123846
+gpu_timing samples=7191 mean_ms=4.235276 max_ms=6.268021 wall_mean_ms=4.740742 wall_max_ms=10.770046
+result=success realtime_target_met=0

@@ -1,0 +1,90 @@
+{
+  "width": 8192,
+  "visible_height": 4096,
+  "coded_height": 4096,
+  "selected_frames": [
+    0,
+    3595,
+    7190
+  ],
+  "reference_sha256": "4a1da6b3fe877b61b23348455d81ea3d9e2d4d3bac3caad6546679044df590b0",
+  "frames": [
+    {
+      "frame": 0,
+      "readback_path": "tests/realvideo-001/realvideo-001-run-05-frame-00000000.nv12",
+      "readback_sha256": "775dba0fca937d3be19d607a8a44daff27df4e74ab8b0e22e383ea864795e040",
+      "visible_i420_sha256": "775dba0fca937d3be19d607a8a44daff27df4e74ab8b0e22e383ea864795e040",
+      "expected_i420_sha256": "775dba0fca937d3be19d607a8a44daff27df4e74ab8b0e22e383ea864795e040",
+      "different_bytes": 0,
+      "planes": {
+        "Y": {
+          "bytes": 33554432,
+          "different_bytes": 0,
+          "maximum_absolute_difference": 0
+        },
+        "U": {
+          "bytes": 8388608,
+          "different_bytes": 0,
+          "maximum_absolute_difference": 0
+        },
+        "V": {
+          "bytes": 8388608,
+          "different_bytes": 0,
+          "maximum_absolute_difference": 0
+        }
+      }
+    },
+    {
+      "frame": 3595,
+      "readback_path": "tests/realvideo-001/realvideo-001-run-05-frame-00003595.nv12",
+      "readback_sha256": "dce4c9eac4acd43e0e18720a319fafdd4d0c33ea727993c65c2858fb2078f80f",
+      "visible_i420_sha256": "56f659c5c76bc5946cf13d6cbcc38e8ea147d33ea2b14c4a61121901d84a4c4c",
+      "expected_i420_sha256": "56f659c5c76bc5946cf13d6cbcc38e8ea147d33ea2b14c4a61121901d84a4c4c",
+      "different_bytes": 0,
+      "planes": {
+        "Y": {
+          "bytes": 33554432,
+          "different_bytes": 0,
+          "maximum_absolute_difference": 0
+        },
+        "U": {
+          "bytes": 8388608,
+          "different_bytes": 0,
+          "maximum_absolute_difference": 0
+        },
+        "V": {
+          "bytes": 8388608,
+          "different_bytes": 0,
+          "maximum_absolute_difference": 0
+        }
+      }
+    },
+    {
+      "frame": 7190,
+      "readback_path": "tests/realvideo-001/realvideo-001-run-05-frame-00007190.nv12",
+      "readback_sha256": "1276259c6f41f630616a6be877c6100be29cbcc0006bd471bc992465e2e1e7a7",
+      "visible_i420_sha256": "e14dfbe57b30e89dc4d054de2c9d75bca3abcb783212bbd99d79ef1f9ad14fac",
+      "expected_i420_sha256": "e14dfbe57b30e89dc4d054de2c9d75bca3abcb783212bbd99d79ef1f9ad14fac",
+      "different_bytes": 0,
+      "planes": {
+        "Y": {
+          "bytes": 33554432,
+          "different_bytes": 0,
+          "maximum_absolute_difference": 0
+        },
+        "U": {
+          "bytes": 8388608,
+          "different_bytes": 0,
+          "maximum_absolute_difference": 0
+        },
+        "V": {
+          "bytes": 8388608,
+          "different_bytes": 0,
+          "maximum_absolute_difference": 0
+        }
+      }
+    }
+  ],
+  "total_different_bytes": 0,
+  "exact_match": true
+}
