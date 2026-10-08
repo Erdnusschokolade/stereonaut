@@ -1633,6 +1633,8 @@ int main(int argc, char **argv)
                     fail_message("SOURCE_CHANGE CAPTURE memory contract changed");
                 if (!compose_unchanged)
                     fail_message("SOURCE_CHANGE visible compose region changed");
+                if (capture_count != 12U)
+                    fail_message("SOURCE_CHANGE CAPTURE count is not twelve");
                 validate_capture_contract(&updated_contract, &updated_layout,
                                           expected_width, expected_height);
                 struct capture_minimum minimum = query_capture_minimum();
