@@ -71,3 +71,9 @@ For startup synchronization, demux may fill its bounded queues while audio
 remains paused. Audio is released only when Iris dequeues the first decoded
 CAPTURE frame. This prevents decoder/OpenXR setup time from making the audio
 clock start hundreds of milliseconds ahead of video.
+
+Compressed video may be queued up to 500 ms ahead of the audio clock. The
+twelve CAPTURE buffers provide the actual decoded-frame bound, while this
+larger compressed lead keeps Iris fed despite roughly 90 ms of measured 8K
+decode latency. Presentation still holds early frames and retains the 100-ms
+late-drop threshold.
