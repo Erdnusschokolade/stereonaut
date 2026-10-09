@@ -97,12 +97,12 @@ int jf_config_load(struct jf_config *config, char *error, size_t error_size)
     memset(config, 0, sizeof(*config));
     char path[640];
     if (config_path(path, sizeof(path), false) < 0) {
-        set_error(error, error_size, "KEIN KONFIGURATIONSVERZEICHNIS");
+        set_error(error, error_size, "Kein Konfigurationsverzeichnis");
         return -1;
     }
     json_object *root = json_object_from_file(path);
     if (!root) {
-        set_error(error, error_size, "JELLYFIN NICHT EINGERICHTET");
+        set_error(error, error_size, "Jellyfin ist nicht eingerichtet");
         return -1;
     }
     copy_string(config->server, sizeof(config->server),
@@ -118,7 +118,7 @@ int jf_config_load(struct jf_config *config, char *error, size_t error_size)
     while (length && config->server[length - 1] == '/')
         config->server[--length] = '\0';
     if (!config->server[0]) {
-        set_error(error, error_size, "JELLYFIN-SERVER FEHLT IN DER KONFIGURATION");
+        set_error(error, error_size, "Jellyfin-Server fehlt in der Konfiguration");
         return -1;
     }
     if (!config->device_id[0]) {
@@ -141,11 +141,11 @@ static int config_save(const struct jf_config *config, char *error,
     char directory[640], path[640];
     if (config_path(directory, sizeof(directory), true) < 0 ||
         config_path(path, sizeof(path), false) < 0) {
-        set_error(error, error_size, "KEIN KONFIGURATIONSVERZEICHNIS");
+        set_error(error, error_size, "Kein Konfigurationsverzeichnis");
         return -1;
     }
     if (mkdir(directory, 0700) < 0 && errno != EEXIST) {
-        set_error(error, error_size, "KONFIGURATION NICHT SCHREIBBAR");
+        set_error(error, error_size, "Konfiguration nicht schreibbar");
         return -1;
     }
     json_object *root = json_object_new_object();
@@ -167,7 +167,7 @@ static int config_save(const struct jf_config *config, char *error,
     }
     json_object_put(root);
     if (result < 0)
-        set_error(error, error_size, "KONFIGURATION NICHT SCHREIBBAR");
+        set_error(error, error_size, "Konfiguration nicht schreibbar");
     return result;
 }
 
@@ -269,18 +269,18 @@ static int json_call(const struct jf_config *config, const char *method,
     long status = http_request(config, method, path, body, &response);
     int result = 0;
     if (status < 0) {
-        set_error(error, error_size, "JELLYFIN-SERVER NICHT ERREICHBAR");
+        set_error(error, error_size, "Jellyfin-Server nicht erreichbar");
         result = -1;
     } else if (status == 401 || status == 403) {
-        set_error(error, error_size, "JELLYFIN-ANMELDUNG ABGELAUFEN");
+        set_error(error, error_size, "Jellyfin-Anmeldung abgelaufen");
         result = JF_AUTH_RETRY;
     } else if (status < 200 || status >= 300) {
-        set_error(error, error_size, "JELLYFIN-FEHLER HTTP %ld", status);
+        set_error(error, error_size, "Jellyfin-Fehler (HTTP %ld)", status);
         result = -1;
     } else {
         *root = response.data ? json_tokener_parse(response.data) : NULL;
         if (!*root) {
-            set_error(error, error_size, "UNGUELTIGE ANTWORT VOM SERVER");
+            set_error(error, error_size, "Ungültige Antwort vom Server");
             result = -1;
         }
     }
@@ -302,7 +302,7 @@ int jf_quickconnect_start(struct jf_config *config, char code[16],
     const char *code_text = json_string(root, "Code");
     const char *secret_text = json_string(root, "Secret");
     if (!code_text || !secret_text) {
-        set_error(error, error_size, "QUICK CONNECT IST AUF DEM SERVER AUS");
+        set_error(error, error_size, "Quick Connect ist auf dem Server ausgeschaltet");
         json_object_put(root);
         return -1;
     }
@@ -341,7 +341,7 @@ int jf_quickconnect_poll(struct jf_config *config, const char *secret,
     if (json_object_object_get_ex(root, "User", &user))
         user_id = json_string(user, "Id");
     if (!token || !user_id) {
-        set_error(error, error_size, "ANMELDUNG VOM SERVER ABGELEHNT");
+        set_error(error, error_size, "Anmeldung vom Server abgelehnt");
         json_object_put(root);
         return -1;
     }
@@ -393,8 +393,27 @@ static int collect_items(json_object *root, bool filter_views,
                          strcmp(type, "livetv") == 0))
                 continue;
         }
-        json_object *folder = NULL;
+        json_object *folder = NULL, *value = NULL, *tags = NULL;
         copy_string(list[used].id, sizeof(list[used].id), id);
+        const char *primary = NULL;
+        if (json_object_object_get_ex(entry, "ImageTags", &tags))
+            primary = json_string(tags, "Primary");
+        if (json_object_object_get_ex(entry, "BackdropImageTags", &tags) &&
+            json_object_is_type(tags, json_type_array) &&
+            json_object_array_length(tags) > 0 &&
+            json_object_is_type(json_object_array_get_idx(tags, 0),
+                                json_type_string))
+            snprintf(list[used].image, sizeof(list[used].image),
+                     "Backdrop/0?tag=%.48s",
+                     json_object_get_string(
+                         json_object_array_get_idx(tags, 0)));
+        else if (primary)
+            snprintf(list[used].image, sizeof(list[used].image),
+                     "Primary?tag=%.48s", primary);
+        if (json_object_object_get_ex(entry, "RunTimeTicks", &value))
+            list[used].runtime_ticks = json_object_get_int64(value);
+        if (json_object_object_get_ex(entry, "ProductionYear", &value))
+            list[used].year = json_object_get_int(value);
         copy_string(list[used].name, sizeof(list[used].name), name);
         list[used].is_folder =
             filter_views ||
@@ -421,7 +440,7 @@ int jf_list_views(const struct jf_config *config, struct jf_item **items,
     result = collect_items(root, true, items, count);
     json_object_put(root);
     if (result < 0)
-        set_error(error, error_size, "NICHT GENUG SPEICHER");
+        set_error(error, error_size, "Nicht genug Speicher");
     return result;
 }
 
@@ -442,7 +461,7 @@ int jf_list_children(const struct jf_config *config, const char *parent_id,
     result = collect_items(root, false, items, count);
     json_object_put(root);
     if (result < 0)
-        set_error(error, error_size, "NICHT GENUG SPEICHER");
+        set_error(error, error_size, "Nicht genug Speicher");
     return result;
 }
 
@@ -519,7 +538,7 @@ int jf_resolve_playback(const struct jf_config *config, const char *item_id,
         !json_object_is_type(sources, json_type_array) ||
         json_object_array_length(sources) == 0 ||
         !(source = json_object_array_get_idx(sources, 0))) {
-        set_error(error, error_size, "KEINE ABSPIELQUELLE VOM SERVER");
+        set_error(error, error_size, "Keine Abspielquelle vom Server");
         json_object_put(root);
         return -1;
     }
@@ -535,7 +554,7 @@ int jf_resolve_playback(const struct jf_config *config, const char *item_id,
         }
     }
     if (!has_video) {
-        set_error(error, error_size, "VIDEODATEI AUF DEM SERVER DEFEKT");
+        set_error(error, error_size, "Videodatei auf dem Server defekt");
         json_object_put(root);
         return JF_BROKEN_ITEM;
     }
@@ -555,7 +574,7 @@ int jf_resolve_playback(const struct jf_config *config, const char *item_id,
         int written = snprintf(playback->url, sizeof(playback->url), "%s%s",
                                config->server, stripped);
         if (written < 0 || (size_t)written >= sizeof(playback->url)) {
-            set_error(error, error_size, "STREAM-ADRESSE ZU LANG");
+            set_error(error, error_size, "Stream-Adresse zu lang");
             json_object_put(root);
             return -1;
         }
@@ -563,11 +582,31 @@ int jf_resolve_playback(const struct jf_config *config, const char *item_id,
         copy_string(playback->play_session, sizeof(playback->play_session),
                     json_string(root, "PlaySessionId"));
     } else {
-        set_error(error, error_size, "TITEL KANN NICHT ABGESPIELT WERDEN");
+        set_error(error, error_size, "Titel kann nicht abgespielt werden");
         json_object_put(root);
         return -1;
     }
     json_object_put(root);
+    return 0;
+}
+
+int jf_fetch_image(const struct jf_config *config, const char *item_id,
+                   const char *image, int max_width, char **data,
+                   size_t *size)
+{
+    *data = NULL;
+    *size = 0;
+    char path[256];
+    snprintf(path, sizeof(path), "/Items/%s/Images/%s%cfillWidth=%d&quality=85",
+             item_id, image, strchr(image, '?') ? '&' : '?', max_width);
+    struct buffer response;
+    long status = http_request(config, "GET", path, NULL, &response);
+    if (status < 200 || status >= 300 || !response.size) {
+        free(response.data);
+        return -1;
+    }
+    *data = response.data;
+    *size = response.size;
     return 0;
 }
 

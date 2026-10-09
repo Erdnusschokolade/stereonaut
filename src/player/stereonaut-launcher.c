@@ -267,13 +267,13 @@ int main(int argc, char **argv)
             fprintf(stderr, "playback failed; returning to browser\n");
             if (exit_code == EXIT_BROKEN_SOURCE)
                 snprintf(browser_message, sizeof(browser_message),
-                         "VIDEODATEI AUF DEM SERVER DEFEKT");
+                         "Videodatei auf dem Server defekt");
             else if (exit_code == EXIT_SOURCE_FAILED)
                 snprintf(browser_message, sizeof(browser_message),
-                         "JELLYFIN ODER NETZWERK NICHT ERREICHBAR");
+                         "Jellyfin oder Netzwerk nicht erreichbar");
             else
                 snprintf(browser_message, sizeof(browser_message),
-                         "VIDEO- ODER AUDIOFORMAT WIRD DERZEIT NICHT UNTERSTUETZT");
+                         "Video- oder Audioformat wird derzeit nicht unterstützt");
         }
         if (send_command(PLAYER_UI_BROWSE, directory, browser_message,
                          -1) < 0) {

@@ -3,10 +3,11 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 /* Blocking Jellyfin REST client (libcurl + json-c). Every call may take
  * seconds; callers run it on a worker thread. Error strings are German and
- * limited to the browser font (no umlauts). */
+ * shown in the browser. */
 
 #define JF_ID_SIZE 48
 #define JF_AUTH_RETRY (-2) /* token missing, expired or rejected */
@@ -23,6 +24,11 @@ struct jf_item {
     char id[JF_ID_SIZE];
     char name[256];
     bool is_folder;
+    /* Image path below /Items/ID/Images/ for tiles: a landscape backdrop if
+     * there is one, otherwise the primary image ("" if neither). */
+    char image[96];
+    int64_t runtime_ticks; /* 0 if unknown; 10 000 000 ticks per second */
+    int year;              /* 0 if unknown */
 };
 
 struct jf_playback {
@@ -60,6 +66,11 @@ int jf_item_info(const struct jf_config *config, const char *id,
 int jf_resolve_playback(const struct jf_config *config, const char *item_id,
                         struct jf_playback *playback, char *error,
                         size_t error_size);
+/* Downloads an item image (`image` as in jf_item) scaled to `max_width`.
+ * On success *data is malloc'd and owned by the caller. */
+int jf_fetch_image(const struct jf_config *config, const char *item_id,
+                   const char *image, int max_width, char **data,
+                   size_t *size);
 /* Stops the server-side transcode of a finished or restarted playback. */
 void jf_stop_encoding(const struct jf_config *config,
                       const struct jf_playback *playback);

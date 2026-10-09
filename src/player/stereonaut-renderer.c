@@ -2077,7 +2077,7 @@ static XrCompositionLayerQuad make_ui_layer(const struct app *app)
 
 /* ---- browser mode ---------------------------------------------------- */
 
-#define BROWSER_PANEL_Z (-2.0f)
+#define BROWSER_PANEL_Z (-2.4f)
 
 static void create_browser_texture(struct app *app)
 {

@@ -12,8 +12,13 @@ enum file_browser_entry_kind {
 
 struct file_browser_entry {
     enum file_browser_entry_kind kind;
-    char *name;
+    char *name; /* UTF-8 */
     char *path;
+    /* Thumbnail source "ITEM_ID|IMAGE" for Jellyfin entries (see
+     * jf_fetch_image), NULL otherwise. */
+    char *image;
+    int64_t duration_us; /* 0 if unknown */
+    int year;            /* 0 if unknown */
 };
 
 struct file_browser_listing {
