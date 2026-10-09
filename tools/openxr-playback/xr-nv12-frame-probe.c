@@ -1325,9 +1325,10 @@ int main(int argc, char **argv)
      * path while this executable exercises only the frozen-frame renderer. */
     (void)execute_transfer;
     setvbuf(stdout, NULL, _IOLBF, 0);
-    if (argc != 6) {
+    if (argc != 7) {
         fprintf(stderr,
-                "usage: %s INPUT.hevc WIDTH VISIBLE_HEIGHT FPS_NUM FPS_DEN\n",
+                "usage: %s INPUT.hevc WIDTH VISIBLE_HEIGHT FPS_NUM FPS_DEN "
+                "TARGET_FRAME\n",
                 argv[0]);
         return 2;
     }
@@ -1335,10 +1336,13 @@ int main(int argc, char **argv)
     uint32_t expected_height = parse_u32(argv[3], "visible height");
     uint32_t fps_numerator = parse_u32(argv[4], "fps numerator");
     uint32_t fps_denominator = parse_u32(argv[5], "fps denominator");
+    uint32_t target_frame = parse_u32(argv[6], "target frame");
     if ((expected_width & 1U) || (expected_height & 1U))
         fail_message("NV12 requires even visible dimensions");
 
     struct input_stream input = read_input(argv[1]);
+    if (target_frame >= input.unit_count)
+        fail_message("target frame exceeds the input stream");
     if (input.largest_unit > UINT32_MAX)
         fail_message("largest access unit exceeds V4L2 bytesused range");
     double frame_interval =
@@ -1617,11 +1621,12 @@ int main(int argc, char **argv)
                                       queued_at[source_unit]) *
                                          1000.0);
                     }
-                    show_frame_in_openxr(&captures[dequeued.index], &layout);
-                    single_frame_shown = true;
                     frames++;
                     last_progress = monotonic_seconds();
-                    {
+                    if (frame_index == target_frame) {
+                        show_frame_in_openxr(&captures[dequeued.index],
+                                             &layout);
+                        single_frame_shown = true;
                         printf("frame=%" PRIu64 " capture_index=%u"
                                " sequence=%u bytesused=%u timestamp=%ld.%06ld"
                                " frozen_openxr=1\n",
@@ -1629,9 +1634,9 @@ int main(int argc, char **argv)
                                dequeued.sequence, plane.bytesused,
                                (long)dequeued.timestamp.tv_sec,
                                (long)dequeued.timestamp.tv_usec);
+                        last_seen = true;
+                        break;
                     }
-                    last_seen = true;
-                    break;
                 }
                 if (dequeued.flags & V4L2_BUF_FLAG_LAST) {
                     capture_generation_last = true;
@@ -1749,8 +1754,9 @@ int main(int argc, char **argv)
     free(queued_at);
     free(input.units);
     free(input.data);
-    bool success = single_frame_shown && frames == 1 && v4l2_errors == 0;
-    printf("result=%s mode=single-frozen-frame\n",
-           success ? "success" : "failure");
+    bool success = single_frame_shown && frames == (uint64_t)target_frame + 1U &&
+                   v4l2_errors == 0;
+    printf("result=%s mode=single-frozen-frame target_frame=%u\n",
+           success ? "success" : "failure", target_frame);
     return success ? 0 : 1;
 }
