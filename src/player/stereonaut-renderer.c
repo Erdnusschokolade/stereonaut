@@ -2423,11 +2423,13 @@ static void upload_browser(struct app *app)
         .commandBufferCount = 1,
         .pCommandBuffers = &app->browser_command,
     };
-    /* No wait for completion: the runtime synchronises with this queue on
-     * release, and the next upload waits for the fence before it touches the
-     * staging buffer again. */
+    /* SteamVR samples the image as soon as it is released, so the copy must
+     * be complete by then (otherwise it shows stale or empty content). */
     need_vk("vkQueueSubmit(browser)",
             vkQueueSubmit(app->queue, 1, &submit, app->browser_fence));
+    need_vk("vkWaitForFences(browser completion)",
+            vkWaitForFences(app->device, 1, &app->browser_fence, VK_TRUE,
+                            UINT64_C(5000000000)));
     app->browser_image_initialized[index] = true;
     XrSwapchainImageReleaseInfo release = {
         .type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO,
