@@ -34,7 +34,7 @@
 #define MAX_OUTPUT_BUFFERS 16U
 #define MAX_CAPTURE_BUFFERS 32U
 #define DRM_FORMAT_MOD_LINEAR UINT64_C(0)
-#define MAX_COMPRESSED_ACCESS_UNIT (16U * 1024U * 1024U)
+#define COMPRESSED_OUTPUT_CAPACITY (2U * 1024U * 1024U)
 #define VIDEO_FEED_AHEAD_US INT64_C(50000)
 #define VIDEO_LATE_DROP_US INT64_C(100000)
 
@@ -1603,7 +1603,7 @@ int main(int argc, char **argv)
     output_format.fmt.pix_mp.field = V4L2_FIELD_NONE;
     output_format.fmt.pix_mp.num_planes = 1;
     output_format.fmt.pix_mp.plane_fmt[0].sizeimage =
-        MAX_COMPRESSED_ACCESS_UNIT;
+        COMPRESSED_OUTPUT_CAPACITY;
     must_ioctl(VIDIOC_S_FMT, &output_format, "VIDIOC_S_FMT OUTPUT HEVC");
     if (output_format.fmt.pix_mp.pixelformat != V4L2_PIX_FMT_HEVC ||
         output_format.fmt.pix_mp.num_planes != 1 ||

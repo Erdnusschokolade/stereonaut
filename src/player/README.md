@@ -26,3 +26,8 @@ is ready. Container DTS controls decoder feed, while audio playback position
 is the presentation clock for decoded video frames. Iris chooses the
 compressed OUTPUT-buffer capacity; every access unit is checked against the
 actual allocation before it is queued.
+
+The current bounded OUTPUT allocation requests 2 MiB per compressed access
+unit. A file containing a larger unit stops with an explicit error instead of
+overrunning the V4L2 buffer. Dynamic OUTPUT resizing is outside this first
+streaming integration step.
