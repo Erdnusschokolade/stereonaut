@@ -10,3 +10,30 @@ Build on Steam Frame:
 cc -std=c11 -O2 -Wall -Wextra -Werror -o xr-vulkan-probe xr-vulkan-probe.c \
   -I/usr/include -lvulkan /opt/steamvr/bin/linuxarm64/libopenxr_loader.so
 ```
+
+`xr-nv12-playback-probe.c` combines the proven Iris/NV12 path with the
+OpenXR renderer. Its optional projection arguments are:
+
+```text
+--projection flat|180|360
+--stereo mono|sbs|tb
+--swap-eyes
+--frames N
+```
+
+Defaults are `flat`, `mono`, normal eye order and the full input stream.
+Projection and stereo layout are independent. In OpenXR primary stereo View 0
+is treated as the left eye and View 1 as the right eye. Equirectangular modes
+use view orientation but deliberately ignore view position.
+
+Build the combined probe and shaders on Steam Frame with:
+
+```sh
+sh build-nv12-playback-probe.sh
+```
+
+Run host-side mapping checks with:
+
+```sh
+python3 test-projection-math.py
+```

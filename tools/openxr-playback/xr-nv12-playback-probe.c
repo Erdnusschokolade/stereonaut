@@ -98,6 +98,13 @@ struct video_layout {
     uint64_t uv_offset;
 };
 
+struct playback_options {
+    uint32_t projection_mode;
+    uint32_t stereo_layout;
+    bool swap_eyes;
+    uint32_t frame_limit;
+};
+
 struct capture_contract {
     uint32_t pixel_format;
     uint32_t coded_width;
@@ -188,7 +195,7 @@ static void send_renderer_message(uint32_t type, uint32_t index,
 
 static void start_renderer(
     struct capture_buffer buffers[MAX_CAPTURE_BUFFERS], unsigned count,
-    const struct video_layout *layout)
+    const struct video_layout *layout, const struct playback_options *options)
 {
     int sockets[2];
     if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets) < 0)
@@ -221,6 +228,9 @@ static void start_renderer(
         .stride = layout->stride,
         .size = layout->sizeimage,
         .uv_offset = layout->uv_offset,
+        .projection_mode = options->projection_mode,
+        .stereo_layout = options->stereo_layout,
+        .swap_eyes = options->swap_eyes,
     };
     int fds[MAX_CAPTURE_BUFFERS];
     for (unsigned i = 0; i < count; ++i)
@@ -274,8 +284,10 @@ static void start_renderer(
         if (ready < 0 && errno != EINTR)
             fail_errno("poll renderer ready");
     }
-    printf("renderer_ready pid=%ld buffers=%u\n", (long)renderer_pid,
-           count);
+    printf("renderer_ready pid=%ld buffers=%u projection=%u stereo=%u"
+           " swap_eyes=%u\n",
+           (long)renderer_pid, count, options->projection_mode,
+           options->stereo_layout, options->swap_eyes);
 }
 
 static bool process_renderer_messages(
@@ -369,6 +381,45 @@ static uint32_t parse_u32(const char *text, const char *name)
         exit(2);
     }
     return (uint32_t)value;
+}
+
+static struct playback_options parse_playback_options(int argc, char **argv)
+{
+    struct playback_options options = {0};
+    for (int i = 7; i < argc; ++i) {
+        if (strcmp(argv[i], "--swap-eyes") == 0) {
+            options.swap_eyes = true;
+        } else if (strcmp(argv[i], "--projection") == 0) {
+            if (++i >= argc)
+                fail_message("--projection requires flat, 180, or 360");
+            if (strcmp(argv[i], "flat") == 0)
+                options.projection_mode = NV12_PROJECTION_FLAT;
+            else if (strcmp(argv[i], "180") == 0)
+                options.projection_mode = NV12_PROJECTION_EQUIRECT_180;
+            else if (strcmp(argv[i], "360") == 0)
+                options.projection_mode = NV12_PROJECTION_EQUIRECT_360;
+            else
+                fail_message("invalid --projection value");
+        } else if (strcmp(argv[i], "--stereo") == 0) {
+            if (++i >= argc)
+                fail_message("--stereo requires mono, sbs, or tb");
+            if (strcmp(argv[i], "mono") == 0)
+                options.stereo_layout = NV12_STEREO_MONO;
+            else if (strcmp(argv[i], "sbs") == 0)
+                options.stereo_layout = NV12_STEREO_SBS;
+            else if (strcmp(argv[i], "tb") == 0)
+                options.stereo_layout = NV12_STEREO_TB;
+            else
+                fail_message("invalid --stereo value");
+        } else if (strcmp(argv[i], "--frames") == 0) {
+            if (++i >= argc)
+                fail_message("--frames requires a positive frame count");
+            options.frame_limit = parse_u32(argv[i], "frame limit");
+        } else {
+            fail_message("unknown playback option");
+        }
+    }
+    return options;
 }
 
 static struct input_stream read_input(const char *path)
@@ -1471,13 +1522,15 @@ static void cleanup_vulkan(struct vulkan_context *vk,
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
-    if (argc != 7) {
+    if (argc < 7) {
         fprintf(stderr,
                 "usage: %s INPUT.hevc WIDTH VISIBLE_HEIGHT FPS_NUM FPS_DEN "
-                "READBACK_PREFIX\n",
+                "READBACK_PREFIX [--projection flat|180|360]"
+                " [--stereo mono|sbs|tb] [--swap-eyes] [--frames N]\n",
                 argv[0]);
         return 2;
     }
+    struct playback_options options = parse_playback_options(argc, argv);
     uint32_t expected_width = parse_u32(argv[2], "width");
     uint32_t expected_height = parse_u32(argv[3], "visible height");
     uint32_t fps_numerator = parse_u32(argv[4], "fps numerator");
@@ -1486,6 +1539,8 @@ int main(int argc, char **argv)
         fail_message("NV12 requires even visible dimensions");
 
     struct input_stream input = read_input(argv[1]);
+    if (options.frame_limit && options.frame_limit < input.unit_count)
+        input.unit_count = options.frame_limit;
     if (input.largest_unit > UINT32_MAX)
         fail_message("largest access unit exceeds V4L2 bytesused range");
     double frame_interval =
@@ -1494,6 +1549,10 @@ int main(int argc, char **argv)
     printf("source width=%u visible_height=%u fps=%u/%u duration_s=%.6f\n",
            expected_width, expected_height, fps_numerator, fps_denominator,
            source_duration);
+    printf("playback_config projection=%u stereo=%u swap_eyes=%u"
+           " frame_limit=%u\n",
+           options.projection_mode, options.stereo_layout,
+           options.swap_eyes, options.frame_limit);
 
     double *queued_at = calloc(input.unit_count, sizeof(*queued_at));
     if (!queued_at)
@@ -1639,7 +1698,8 @@ int main(int argc, char **argv)
                                                   &capture_contract, &layout,
                                                   expected_width,
                                                   expected_height);
-                    start_renderer(captures, capture_count, &layout);
+                    start_renderer(captures, capture_count, &layout,
+                                   &options);
                     type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
                     must_ioctl(VIDIOC_STREAMON, &type,
                                "VIDIOC_STREAMON CAPTURE");

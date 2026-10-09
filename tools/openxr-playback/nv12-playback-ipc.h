@@ -5,6 +5,18 @@
 
 #define NV12_IPC_MAX_BUFFERS 32U
 
+enum nv12_projection_mode {
+    NV12_PROJECTION_FLAT = 0,
+    NV12_PROJECTION_EQUIRECT_180 = 1,
+    NV12_PROJECTION_EQUIRECT_360 = 2,
+};
+
+enum nv12_stereo_layout {
+    NV12_STEREO_MONO = 0,
+    NV12_STEREO_SBS = 1,
+    NV12_STEREO_TB = 2,
+};
+
 enum nv12_ipc_type {
     NV12_IPC_INIT = 1,
     NV12_IPC_FRAME = 2,
@@ -25,6 +37,10 @@ struct nv12_ipc_message {
     uint64_t size;
     uint64_t uv_offset;
     uint64_t frame_index;
+    uint32_t projection_mode;
+    uint32_t stereo_layout;
+    uint32_t swap_eyes;
+    uint32_t reserved;
 };
 
 #endif

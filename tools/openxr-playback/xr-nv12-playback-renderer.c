@@ -31,6 +31,17 @@
 
 struct mat4 { float v[16]; };
 
+struct view_uniform {
+    struct mat4 mvp;
+    struct mat4 camera_to_world;
+    float fov_tangents[4];
+    int32_t modes[4];
+    float source_info[4];
+};
+
+_Static_assert(sizeof(struct view_uniform) <= UBO_STRIDE,
+               "view uniform exceeds dynamic UBO stride");
+
 struct video_buffer {
     int dma_buf_fd;
     VkImage image;
@@ -75,6 +86,8 @@ struct app {
     PFN_vkGetImageDrmFormatModifierPropertiesEXT get_modifier_properties;
     VkDeviceSize dma_buf_size;
     uint32_t video_width, video_height, video_stride;
+    uint32_t projection_mode, stereo_layout;
+    bool swap_eyes;
     VkDeviceSize uv_offset;
     VkBuffer uniform_buffer;
     VkDeviceMemory uniform_memory;
@@ -192,11 +205,21 @@ static void receive_initial_buffers(struct app *app)
     app->video_stride = message.stride;
     app->dma_buf_size = message.size;
     app->uv_offset = message.uv_offset;
+    app->projection_mode = message.projection_mode;
+    app->stereo_layout = message.stereo_layout;
+    app->swap_eyes = message.swap_eyes != 0;
     need(app->video_width == 8192 && app->video_height == 4096 &&
              app->video_stride == 8192 &&
              app->uv_offset == UINT64_C(33554432) &&
              app->dma_buf_size == UINT64_C(50331648),
          "NV12 IPC layout differs from the confirmed contract");
+    need(app->projection_mode <= NV12_PROJECTION_EQUIRECT_360,
+         "invalid projection mode in IPC contract");
+    need(app->stereo_layout <= NV12_STEREO_TB,
+         "invalid stereo layout in IPC contract");
+    printf("render_config projection=%u stereo=%u swap_eyes=%u"
+           " view0=left view1=right\n",
+           app->projection_mode, app->stereo_layout, app->swap_eyes);
 }
 
 static void send_ipc(struct app *app, uint32_t type, uint32_t index)
@@ -302,6 +325,21 @@ static struct mat4 view_from_pose(XrPosef pose)
     result.v[13] = -(result.v[1] * pose.position.x + result.v[5] * pose.position.y + result.v[9] * pose.position.z);
     result.v[14] = -(result.v[2] * pose.position.x + result.v[6] * pose.position.y + result.v[10] * pose.position.z);
     return result;
+}
+
+static struct mat4 rotation_from_pose(XrPosef pose)
+{
+    float x = pose.orientation.x, y = pose.orientation.y;
+    float z = pose.orientation.z, w = pose.orientation.w;
+    /* Camera-to-LOCAL rotation. Position is deliberately excluded so
+     * equirectangular video cannot acquire geometry parallax from head or
+     * physical eye translation. */
+    return (struct mat4){{
+        1 - 2*y*y - 2*z*z, 2*x*y + 2*z*w,     2*x*z - 2*y*w,     0,
+        2*x*y - 2*z*w,     1 - 2*x*x - 2*z*z, 2*y*z + 2*x*w,     0,
+        2*x*z + 2*y*w,     2*y*z - 2*x*w,     1 - 2*x*x - 2*y*y, 0,
+        0,                 0,                 0,                 1,
+    }};
 }
 
 static struct mat4 projection_from_fov(XrFovf fov)
@@ -724,7 +762,9 @@ static void create_pipeline(struct app *app)
     }
     VkDescriptorSetLayoutBinding bindings[2] = {
         {.binding = 0, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
-         .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_VERTEX_BIT},
+         .descriptorCount = 1,
+         .stageFlags = VK_SHADER_STAGE_VERTEX_BIT |
+                       VK_SHADER_STAGE_FRAGMENT_BIT},
         {.binding = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
          .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
          .pImmutableSamplers = &app->video_sampler},
@@ -794,7 +834,11 @@ static void create_render_resources(struct app *app)
     need_vk("vkAllocateDescriptorSets",
             vkAllocateDescriptorSets(app->device, &descriptor_allocate,
                                      sets));
-    VkDescriptorBufferInfo descriptor_buffer = {.buffer = app->uniform_buffer, .offset = 0, .range = sizeof(struct mat4)};
+    VkDescriptorBufferInfo descriptor_buffer = {
+        .buffer = app->uniform_buffer,
+        .offset = 0,
+        .range = sizeof(struct view_uniform),
+    };
     for (uint32_t i = 0; i < app->video_buffer_count; ++i) {
         app->video_buffers[i].descriptor_set = sets[i];
         VkDescriptorImageInfo descriptor_image = {
@@ -858,7 +902,30 @@ static void render_frame(struct app *app)
     for (uint32_t eye = 0; eye < 2; ++eye) {
         struct mat4 projection = projection_from_fov(views[eye].fov);
         struct mat4 view = view_from_pose(views[eye].pose);
-        *(struct mat4 *)((uint8_t *)app->uniform_mapping + eye * UBO_STRIDE) = multiply(projection, view);
+        struct view_uniform uniform = {
+            .mvp = multiply(projection, view),
+            .camera_to_world = rotation_from_pose(views[eye].pose),
+            .fov_tangents = {
+                tanf(views[eye].fov.angleLeft),
+                tanf(views[eye].fov.angleRight),
+                tanf(views[eye].fov.angleDown),
+                tanf(views[eye].fov.angleUp),
+            },
+            .modes = {
+                (int32_t)app->projection_mode,
+                (int32_t)app->stereo_layout,
+                (int32_t)eye,
+                app->swap_eyes,
+            },
+            .source_info = {
+                (float)app->video_width,
+                (float)app->video_height,
+                1.0f / (float)app->video_width,
+                1.0f / (float)app->video_height,
+            },
+        };
+        memcpy((uint8_t *)app->uniform_mapping + eye * UBO_STRIDE,
+               &uniform, sizeof(uniform));
     }
     need_vk("vkWaitForFences(render)", vkWaitForFences(app->device, 1, &app->fence, VK_TRUE, UINT64_C(5000000000)));
     need_vk("vkResetFences(render)", vkResetFences(app->device, 1, &app->fence));
