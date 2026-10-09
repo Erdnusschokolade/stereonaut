@@ -65,19 +65,11 @@ oben links sowie einem rot-blauen vertikalen Verlauf und Schachbrettmuster
 sichtbar. Die Orientierung war damit korrekt; die Darstellung blieb bei
 Kopfbewegungen stabil.
 
-## Noch offen
+## Folgestand
 
-Der nächste Implementierungsschritt muss die Realvideo-001-Komponenten
-semantisch unverändert in dieselbe, von OpenXR erzeugte Vulkan-Device
-integrieren:
-
-1. die zwölf Iris-NV12-CAPTURE-Buffers und ihre linearen DMA-BUF-Imports;
-2. einen YCbCr-Conversion-Sampler für `VK_FORMAT_G8_B8R8_2PLANE_420_UNORM`;
-3. pro Bild das Warten auf den Producer-Sync-FD und die Rückgabe des
-   CAPTURE-Buffers erst nach dem Render-Fence;
-4. einen Decoderpoll, der vom `xrWaitFrame` getrennt bleibt, sowie die
-   Wiederverwendung des letzten vollständigen Bildes;
-5. einen mehrminütigen Lauf mit dem echten HEVC-Main-8-Bit-Teststream.
-
-Bis dahin darf die Quad-Probe nicht als Realvideo-Wiedergabe oder als
-Nachweis der NV12-Farbkonversion gelten.
+Die hier noch offene Integration wurde am 2026-10-09 umgesetzt und über den
+vollständigen 120-Sekunden-Stream nachgewiesen. Die zwölf Iris-NV12-DMA-BUFs
+werden direkt mit `VK_FORMAT_G8_B8R8_2PLANE_420_UNORM` gesampelt; Decoder und
+`xrWaitFrame` laufen getrennt, und CAPTURE-Indizes gehen erst nach dem
+Render-Fence zurück an Iris. Befunde und Messwerte stehen in
+`realvideo-002-results.md`.
