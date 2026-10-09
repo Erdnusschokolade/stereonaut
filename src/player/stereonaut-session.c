@@ -33,6 +33,7 @@
 
 #define MAX_OUTPUT_BUFFERS 16U
 #define MAX_CAPTURE_BUFFERS 32U
+#define REQUESTED_OUTPUT_BUFFERS 2U
 #define DRM_FORMAT_MOD_LINEAR UINT64_C(0)
 #define COMPRESSED_OUTPUT_CAPACITY (2U * 1024U * 1024U)
 #define VIDEO_FEED_AHEAD_US INT64_C(50000)
@@ -1184,7 +1185,7 @@ static unsigned allocate_output_buffers(
     struct output_buffer buffers[MAX_OUTPUT_BUFFERS])
 {
     struct v4l2_requestbuffers request = {
-        .count = 6,
+        .count = REQUESTED_OUTPUT_BUFFERS,
         .type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
         .memory = V4L2_MEMORY_MMAP,
     };
@@ -1210,7 +1211,8 @@ static unsigned allocate_output_buffers(
             fail_errno("mmap OUTPUT");
         buffers[i].free = true;
     }
-    printf("output_buffers=%u\n", request.count);
+    printf("output_buffers=%u requested=%u\n", request.count,
+           REQUESTED_OUTPUT_BUFFERS);
     return request.count;
 }
 
