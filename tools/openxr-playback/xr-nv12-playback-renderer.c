@@ -57,9 +57,11 @@ struct app {
     XrSystemId system;
     XrSession session;
     XrSpace space;
+    XrSpace view_space;
     XrSessionState state;
     bool running;
     bool xr_should_render;
+    bool view_geometry_logged;
     VkInstance instance;
     VkPhysicalDevice physical;
     VkDevice device;
@@ -893,6 +895,36 @@ static void render_frame(struct app *app)
     need_xr("xrLocateViews", xrLocateViews(app->session, &locate, &view_state, 2, &count, views));
     need(count == 2 && (view_state.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT) &&
              (view_state.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT), "OpenXR returned no valid stereo pose");
+    XrSpaceLocation center = {.type = XR_TYPE_SPACE_LOCATION};
+    need_xr("xrLocateSpace(VIEW)",
+            xrLocateSpace(app->view_space, app->space,
+                          frame_state.predictedDisplayTime, &center));
+    need((center.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0,
+         "OpenXR returned no valid VIEW orientation");
+    if (!app->view_geometry_logged) {
+        printf("openxr_view_geometry"
+               " left_pose=(%.9f,%.9f,%.9f;%.9f,%.9f,%.9f,%.9f)"
+               " left_fov=(%.9f,%.9f,%.9f,%.9f)"
+               " right_pose=(%.9f,%.9f,%.9f;%.9f,%.9f,%.9f,%.9f)"
+               " right_fov=(%.9f,%.9f,%.9f,%.9f)"
+               " center_pose=(%.9f,%.9f,%.9f;%.9f,%.9f,%.9f,%.9f)\n",
+               views[0].pose.position.x, views[0].pose.position.y,
+               views[0].pose.position.z, views[0].pose.orientation.x,
+               views[0].pose.orientation.y, views[0].pose.orientation.z,
+               views[0].pose.orientation.w, views[0].fov.angleLeft,
+               views[0].fov.angleRight, views[0].fov.angleDown,
+               views[0].fov.angleUp, views[1].pose.position.x,
+               views[1].pose.position.y, views[1].pose.position.z,
+               views[1].pose.orientation.x, views[1].pose.orientation.y,
+               views[1].pose.orientation.z, views[1].pose.orientation.w,
+               views[1].fov.angleLeft, views[1].fov.angleRight,
+               views[1].fov.angleDown, views[1].fov.angleUp,
+               center.pose.position.x, center.pose.position.y,
+               center.pose.position.z, center.pose.orientation.x,
+               center.pose.orientation.y, center.pose.orientation.z,
+               center.pose.orientation.w);
+        app->view_geometry_logged = true;
+    }
     XrSwapchainImageAcquireInfo acquire = {.type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
     uint32_t image_index = 0;
     need_xr("xrAcquireSwapchainImage", xrAcquireSwapchainImage(app->swapchain, &acquire, &image_index));
@@ -1054,6 +1086,9 @@ int main(int argc, char **argv)
     }
     XrReferenceSpaceCreateInfo space_info = {.type = XR_TYPE_REFERENCE_SPACE_CREATE_INFO, .referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL, .poseInReferenceSpace = {{0,0,0,1},{0,0,0}}};
     need_xr("xrCreateReferenceSpace", xrCreateReferenceSpace(app.session, &space_info, &app.space));
+    space_info.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW;
+    need_xr("xrCreateReferenceSpace(VIEW)",
+            xrCreateReferenceSpace(app.session, &space_info, &app.view_space));
     initialize_swapchain(&app);
     import_nv12_frames(&app);
     create_render_resources(&app);
