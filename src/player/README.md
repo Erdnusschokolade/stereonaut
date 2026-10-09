@@ -52,3 +52,17 @@ keyframe but discards complete PCM frames before the target and trims the
 crossing frame at 48-kHz sample precision. The ALSA clock is rebased to the
 first retained sample. The decode-only seek check reaches 11.008167 seconds
 after a 10-second request without exposing the pre-target samples.
+
+`stereonaut-browser` is a decoder-free native OpenXR process. It uploads a
+CPU-rasterized 1024×768 panel to a Vulkan-backed quad-layer swapchain, locates
+both controller aim poses, intersects their rays with the panel and treats a
+simple-controller select action as a click. The panel provides nine entries
+per page, previous/next paging and an exit button. Selecting directories asks
+the asynchronous browser worker for a new listing; selecting a media file
+returns its absolute path over a fixed-size local socket message.
+
+`stereonaut-launcher` keeps the user-facing browser/playback loop outside both
+OpenXR child processes. It starts in `$HOME`, launches the browser, starts the
+container playback session for the selected path, and returns to that file's
+directory after playback finishes or reports a controlled error. Run the
+current application bundle with `run-stereonaut.sh`.

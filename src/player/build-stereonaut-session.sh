@@ -26,6 +26,16 @@ cc -std=c11 -O2 -Wall -Wextra -Werror \
   "$project_dir/tools/openxr-playback/xr-nv12-playback-renderer.c" \
   -lvulkan -lm "$openxr_loader"
 
+cc -std=c11 -O2 -Wall -Wextra -Werror \
+  -I/usr/include -I"$script_dir" \
+  -o "$build_dir/stereonaut-browser" \
+  "$script_dir/stereonaut-browser.c" "$script_dir/file-browser.c" \
+  -lvulkan -lm -pthread "$openxr_loader"
+
+cc -std=c11 -O2 -Wall -Wextra -Werror \
+  -I"$script_dir" -o "$build_dir/stereonaut-launcher" \
+  "$script_dir/stereonaut-launcher.c"
+
 glslc -fshader-stage=vert \
   "$project_dir/tools/openxr-playback/video-projection.vert" \
   -o "$build_dir/video-projection.vert.spv"
