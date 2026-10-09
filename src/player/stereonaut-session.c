@@ -1657,6 +1657,7 @@ int main(int argc, char **argv)
     bool drain_sent = false;
     bool last_seen = false;
     bool eos_seen = false;
+    bool audio_started = false;
     double playback_start = 0.0;
     double deadline = initial_start + 10.0;
     double last_progress = initial_start;
@@ -1714,12 +1715,6 @@ int main(int argc, char **argv)
                                "VIDIOC_STREAMON CAPTURE");
                     capture_started = true;
                     playback_start = monotonic_seconds();
-                    if (media_pipeline_pause(pipeline, false, pipeline_error,
-                                             sizeof(pipeline_error)) < 0) {
-                        fprintf(stderr, "start audio playback: %s\n",
-                                pipeline_error);
-                        return 2;
-                    }
                     last_progress = playback_start;
                     deadline = playback_start +
                                (source_duration > 0.0
@@ -1880,6 +1875,18 @@ int main(int argc, char **argv)
                                           outputs[i].queued_at) * 1000.0);
                             break;
                         }
+                    }
+                    if (!audio_started) {
+                        if (media_pipeline_pause(
+                                pipeline, false, pipeline_error,
+                                sizeof(pipeline_error)) < 0) {
+                            fprintf(stderr, "start audio playback: %s\n",
+                                    pipeline_error);
+                            return 2;
+                        }
+                        audio_started = true;
+                        printf("audio_started first_video_pts_us=%" PRId64
+                               "\n", frame_pts_us);
                     }
                     if (renderer_outstanding[dequeued.index])
                         fail_message("Iris returned a renderer-owned buffer");
