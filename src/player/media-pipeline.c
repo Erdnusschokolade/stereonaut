@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #define VIDEO_QUEUE_CAPACITY 24
 #define AUDIO_QUEUE_CAPACITY 256
@@ -32,12 +33,22 @@ struct media_pipeline {
     bool stopping;
     bool paused;
     bool audio_has_started;
+    int64_t cached_audio_clock_us;
+    int64_t cached_audio_clock_at_us;
     bool failed;
     char failure[512];
 };
 
 static int start_workers(struct media_pipeline *pipeline,
                          char *error, size_t error_size);
+
+static int64_t monotonic_us(void)
+{
+    struct timespec value;
+    if (clock_gettime(CLOCK_MONOTONIC, &value) < 0)
+        return 0;
+    return (int64_t)value.tv_sec * INT64_C(1000000) + value.tv_nsec / 1000;
+}
 
 static void set_error(char *error, size_t size, const char *format, ...)
 {
@@ -123,6 +134,7 @@ static void *audio_worker(void *argument)
         pthread_mutex_lock(&pipeline->audio_mutex);
         result = audio_output_push(pipeline->audio, packet.packet,
                                    error, sizeof(error));
+        int64_t audio_clock = audio_output_clock_us(pipeline->audio);
         pthread_mutex_unlock(&pipeline->audio_mutex);
         media_packet_unref(&packet);
         if (result < 0) {
@@ -131,6 +143,8 @@ static void *audio_worker(void *argument)
         }
         pthread_mutex_lock(&pipeline->state_mutex);
         pipeline->audio_has_started = true;
+        pipeline->cached_audio_clock_us = audio_clock;
+        pipeline->cached_audio_clock_at_us = monotonic_us();
         pthread_mutex_unlock(&pipeline->state_mutex);
     }
     if (reached_eof) {
@@ -178,6 +192,7 @@ int media_pipeline_open(struct media_pipeline **result, const char *path,
     }
     pipeline->state_condition_initialized = true;
     pipeline->paused = start_paused;
+    pipeline->cached_audio_clock_us = AV_NOPTS_VALUE;
     if (packet_queue_initialize(&pipeline->video_queue,
                                 VIDEO_QUEUE_CAPACITY) < 0 ||
         packet_queue_initialize(&pipeline->audio_queue,
@@ -287,9 +302,11 @@ int64_t media_pipeline_clock_us(struct media_pipeline *pipeline)
 {
     if (!pipeline)
         return AV_NOPTS_VALUE;
-    pthread_mutex_lock(&pipeline->audio_mutex);
-    int64_t result = audio_output_clock_us(pipeline->audio);
-    pthread_mutex_unlock(&pipeline->audio_mutex);
+    pthread_mutex_lock(&pipeline->state_mutex);
+    int64_t result = pipeline->cached_audio_clock_us;
+    if (result != AV_NOPTS_VALUE && !pipeline->paused)
+        result += monotonic_us() - pipeline->cached_audio_clock_at_us;
+    pthread_mutex_unlock(&pipeline->state_mutex);
     return result;
 }
 
@@ -308,9 +325,14 @@ int media_pipeline_pause(struct media_pipeline *pipeline, bool paused,
     pthread_mutex_lock(&pipeline->audio_mutex);
     int result = audio_output_pause(pipeline->audio, paused,
                                     error, error_size);
+    int64_t audio_clock = audio_output_clock_us(pipeline->audio);
     pthread_mutex_unlock(&pipeline->audio_mutex);
     if (result < 0)
         return -1;
+    pthread_mutex_lock(&pipeline->state_mutex);
+    pipeline->cached_audio_clock_us = audio_clock;
+    pipeline->cached_audio_clock_at_us = monotonic_us();
+    pthread_mutex_unlock(&pipeline->state_mutex);
     return 0;
 }
 
@@ -358,6 +380,8 @@ int media_pipeline_seek(struct media_pipeline *pipeline, int64_t target_us,
     pipeline->stopping = false;
     pipeline->paused = paused;
     pipeline->audio_has_started = false;
+    pipeline->cached_audio_clock_us = AV_NOPTS_VALUE;
+    pipeline->cached_audio_clock_at_us = 0;
     pipeline->failed = false;
     pipeline->failure[0] = '\0';
     pthread_mutex_unlock(&pipeline->state_mutex);

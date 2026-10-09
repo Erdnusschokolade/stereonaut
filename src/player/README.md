@@ -82,3 +82,9 @@ The ALSA sample-position clock is capped by monotonic time since the first PCM
 write, with pause intervals removed. This preserves the backend position when
 it is useful while preventing PipeWire's ALSA compatibility layer from making
 queued samples appear to have played hundreds of milliseconds early.
+
+The video scheduler never calls ALSA while the audio worker may be blocked in
+`snd_pcm_writei`. The worker publishes a clock snapshot after each decoded
+audio packet; readers extrapolate that snapshot with monotonic time between
+updates. This keeps audio as master without serializing V4L2 progress on audio
+device I/O.
