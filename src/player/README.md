@@ -28,7 +28,7 @@ compressed OUTPUT-buffer capacity; every access unit is checked against the
 actual allocation before it is queued.
 
 The current bounded OUTPUT format requests 2 MiB per compressed access unit,
-but Iris may negotiate a larger allocation from the coded dimensions. To keep
-the 8K memory footprint bounded, the session requests two OUTPUT buffers.
-Every access unit is checked against their actual length. A larger unit stops
-with an explicit error instead of overrunning the V4L2 buffer.
+but Iris may negotiate a larger allocation from the coded dimensions. The
+session retains the six-OUTPUT-buffer queue validated by the continuous 8K60
+probe. Every access unit is checked against the actual buffer length. A larger
+unit stops with an explicit error instead of overrunning the V4L2 buffer.
