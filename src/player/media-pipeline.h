@@ -21,6 +21,8 @@ int media_pipeline_pop_video(struct media_pipeline *pipeline,
 int64_t media_pipeline_clock_us(struct media_pipeline *pipeline);
 int media_pipeline_pause(struct media_pipeline *pipeline, bool paused,
                          char *error, size_t error_size);
+int media_pipeline_seek(struct media_pipeline *pipeline, int64_t target_us,
+                        bool paused, char *error, size_t error_size);
 void media_pipeline_close(struct media_pipeline **pipeline);
 
 #endif

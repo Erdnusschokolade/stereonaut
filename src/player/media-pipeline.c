@@ -36,6 +36,9 @@ struct media_pipeline {
     char failure[512];
 };
 
+static int start_workers(struct media_pipeline *pipeline,
+                         char *error, size_t error_size);
+
 static void set_error(char *error, size_t size, const char *format, ...)
 {
     if (!error || !size)
@@ -216,21 +219,37 @@ int media_pipeline_open(struct media_pipeline **result, const char *path,
         media_pipeline_close(&pipeline);
         return -1;
     }
+    if (start_workers(pipeline, error, error_size) < 0) {
+        media_pipeline_close(&pipeline);
+        return -1;
+    }
+    *result = pipeline;
+    return 0;
+}
+
+static int start_workers(struct media_pipeline *pipeline,
+                         char *error, size_t error_size)
+{
     if (pthread_create(&pipeline->demux_thread, NULL,
                        demux_worker, pipeline) != 0) {
         set_error(error, error_size, "start demux thread failed");
-        media_pipeline_close(&pipeline);
         return -1;
     }
     pipeline->demux_started = true;
     if (pthread_create(&pipeline->audio_thread, NULL,
                        audio_worker, pipeline) != 0) {
         set_error(error, error_size, "start audio thread failed");
-        media_pipeline_close(&pipeline);
+        pthread_mutex_lock(&pipeline->state_mutex);
+        pipeline->stopping = true;
+        pthread_cond_broadcast(&pipeline->state_changed);
+        pthread_mutex_unlock(&pipeline->state_mutex);
+        packet_queue_abort(&pipeline->video_queue);
+        packet_queue_abort(&pipeline->audio_queue);
+        pthread_join(pipeline->demux_thread, NULL);
+        pipeline->demux_started = false;
         return -1;
     }
     pipeline->audio_started = true;
-    *result = pipeline;
     return 0;
 }
 
@@ -291,6 +310,58 @@ int media_pipeline_pause(struct media_pipeline *pipeline, bool paused,
                                     error, error_size);
     pthread_mutex_unlock(&pipeline->audio_mutex);
     if (result < 0)
+        return -1;
+    return 0;
+}
+
+int media_pipeline_seek(struct media_pipeline *pipeline, int64_t target_us,
+                        bool paused, char *error, size_t error_size)
+{
+    if (!pipeline || target_us < 0) {
+        set_error(error, error_size, "invalid pipeline seek target");
+        return -1;
+    }
+    pthread_mutex_lock(&pipeline->state_mutex);
+    pipeline->stopping = true;
+    pthread_cond_broadcast(&pipeline->state_changed);
+    pthread_mutex_unlock(&pipeline->state_mutex);
+    packet_queue_abort(&pipeline->video_queue);
+    packet_queue_abort(&pipeline->audio_queue);
+    if (pipeline->demux_started) {
+        pthread_join(pipeline->demux_thread, NULL);
+        pipeline->demux_started = false;
+    }
+    if (pipeline->audio_started) {
+        pthread_join(pipeline->audio_thread, NULL);
+        pipeline->audio_started = false;
+    }
+    packet_queue_destroy(&pipeline->video_queue);
+    packet_queue_destroy(&pipeline->audio_queue);
+    if (packet_queue_initialize(&pipeline->video_queue,
+                                VIDEO_QUEUE_CAPACITY) < 0 ||
+        packet_queue_initialize(&pipeline->audio_queue,
+                                AUDIO_QUEUE_CAPACITY) < 0) {
+        set_error(error, error_size, "reinitialize packet queues after seek");
+        return -1;
+    }
+    if (media_demux_seek(pipeline->demux, target_us,
+                         error, error_size) < 0)
+        return -1;
+    pthread_mutex_lock(&pipeline->audio_mutex);
+    int reset_result = audio_output_reset(pipeline->audio, target_us,
+                                          error, error_size);
+    pthread_mutex_unlock(&pipeline->audio_mutex);
+    if (reset_result < 0)
+        return -1;
+
+    pthread_mutex_lock(&pipeline->state_mutex);
+    pipeline->stopping = false;
+    pipeline->paused = paused;
+    pipeline->audio_has_started = false;
+    pipeline->failed = false;
+    pipeline->failure[0] = '\0';
+    pthread_mutex_unlock(&pipeline->state_mutex);
+    if (start_workers(pipeline, error, error_size) < 0)
         return -1;
     return 0;
 }

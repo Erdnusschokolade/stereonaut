@@ -38,3 +38,11 @@ One worker resolves and sorts directories, subdirectories and `.mkv`/`.mp4`
 files while the render thread only polls completed immutable listings. Newer
 requests supersede older results, which keeps slow mounts from replacing a
 more recent navigation result.
+
+`media_pipeline_seek` stops and joins both media workers, aborts and rebuilds
+their bounded queues, seeks libavformat to the preceding video keyframe,
+flushes the audio decoder/output, and then restarts both workers in either the
+playing or paused state requested by the controller. The seek probe verifies
+that a 10-second request resumes at the preceding 9.539-second keyframe in the
+MP4 fixture. V4L2 drain/restart and suppression of decoded frames before the
+target remain the session controller's responsibility.
