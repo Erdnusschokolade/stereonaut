@@ -101,6 +101,9 @@ struct app {
     XrPath hands[2];
     XrSpace aim_spaces[2];
     int ui_hover;
+    bool ui_pointer_visible;
+    int ui_pointer_x;
+    int ui_pointer_y;
     bool ui_dirty;
     uint32_t player_state;
     int64_t position_us;
@@ -1020,6 +1023,16 @@ static void render_ui_pixels(struct app *app)
                      app->ui_hover == buttons[i].action ? hover : button);
         ui_text(app, buttons[i].x + 20, 142, 5, buttons[i].label, text);
     }
+    if (app->ui_pointer_visible) {
+        uint32_t pointer = ui_rgba(app, 255, 244, 96, 255);
+        uint32_t pointer_center = ui_rgba(app, 255, 255, 255, 255);
+        ui_rectangle(app, app->ui_pointer_x - 7, app->ui_pointer_y - 2,
+                     15, 5, pointer);
+        ui_rectangle(app, app->ui_pointer_x - 2, app->ui_pointer_y - 7,
+                     5, 15, pointer);
+        ui_rectangle(app, app->ui_pointer_x - 1, app->ui_pointer_y - 1,
+                     3, 3, pointer_center);
+    }
 }
 
 static void create_ui_swapchain(struct app *app)
@@ -1331,6 +1344,9 @@ static void sync_player_input(struct app *app, XrTime time)
     need_xr("xrSyncActions", xrSyncActions(app->session, &sync));
     int hover = 0;
     bool pressed = false;
+    bool pointer_visible = false;
+    int pointer_x = 0;
+    int pointer_y = 0;
     for (unsigned hand = 0; hand < 2; ++hand) {
         XrActionStateGetInfo pose_info = {
             .type = XR_TYPE_ACTION_STATE_GET_INFO,
@@ -1343,7 +1359,7 @@ static void sync_player_input(struct app *app, XrTime time)
         if (pose.isActive) {
             XrSpaceLocation location = {.type = XR_TYPE_SPACE_LOCATION};
             need_xr("xrLocateSpace(player aim)",
-                    xrLocateSpace(app->aim_spaces[hand], app->view_space,
+                    xrLocateSpace(app->aim_spaces[hand], app->space,
                                   time, &location));
             XrSpaceLocationFlags valid =
                 XR_SPACE_LOCATION_POSITION_VALID_BIT |
@@ -1362,8 +1378,12 @@ static void sync_player_input(struct app *app, XrTime time)
                         float u = x / UI_PANEL_WIDTH_METERS + 0.5f;
                         float v = 0.5f -
                             (y + 0.45f) / UI_PANEL_HEIGHT_METERS;
-                        if (u >= 0 && u < 1 && v >= 0 && v < 1)
+                        if (u >= 0 && u < 1 && v >= 0 && v < 1) {
+                            pointer_visible = true;
+                            pointer_x = (int)(u * UI_WIDTH);
+                            pointer_y = (int)(v * UI_HEIGHT);
                             hover = ui_hit_test(u, v);
+                        }
                     }
                 }
             }
@@ -1385,6 +1405,15 @@ static void sync_player_input(struct app *app, XrTime time)
     }
     if (hover != app->ui_hover) {
         app->ui_hover = hover;
+        app->ui_dirty = true;
+    }
+    if (pointer_visible != app->ui_pointer_visible ||
+        (pointer_visible &&
+         (pointer_x != app->ui_pointer_x ||
+          pointer_y != app->ui_pointer_y))) {
+        app->ui_pointer_visible = pointer_visible;
+        app->ui_pointer_x = pointer_x;
+        app->ui_pointer_y = pointer_y;
         app->ui_dirty = true;
     }
     if (pressed && hover)
@@ -1578,7 +1607,7 @@ static void render_frame(struct app *app)
     XrCompositionLayerQuad ui_layer = {
         .type = XR_TYPE_COMPOSITION_LAYER_QUAD,
         .layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT,
-        .space = app->view_space,
+        .space = app->space,
         .eyeVisibility = XR_EYE_VISIBILITY_BOTH,
         .subImage = {
             .swapchain = app->ui_swapchain,

@@ -37,6 +37,9 @@ struct browser_app {
     struct file_browser_listing listing;
     size_t page;
     int hover;
+    bool pointer_visible;
+    int pointer_x;
+    int pointer_y;
     bool texture_dirty;
     bool exit_requested;
 
@@ -601,6 +604,16 @@ static void render_browser_pixels(struct browser_app *app)
     snprintf(page_text, sizeof(page_text), "SEITE %zu/%zu   BEENDEN",
              app->page + 1U, page_count(app));
     draw_text(app, 624, 678, 4, page_text, text, 28);
+    if (app->pointer_visible) {
+        uint32_t pointer = rgba(app, 255, 244, 96, 255);
+        uint32_t pointer_center = rgba(app, 255, 255, 255, 255);
+        rectangle(app, app->pointer_x - 7, app->pointer_y - 2,
+                  15, 5, pointer);
+        rectangle(app, app->pointer_x - 2, app->pointer_y - 7,
+                  5, 15, pointer);
+        rectangle(app, app->pointer_x - 1, app->pointer_y - 1,
+                  3, 3, pointer_center);
+    }
 }
 
 static void upload_ui(struct browser_app *app)
@@ -791,6 +804,9 @@ static void sync_input(struct browser_app *app, XrTime time)
     need_xr("xrSyncActions", xrSyncActions(app->session, &sync));
     int hover = -1;
     bool pressed = false;
+    bool pointer_visible = false;
+    int pointer_x = 0;
+    int pointer_y = 0;
     for (unsigned hand = 0; hand < 2; ++hand) {
         XrActionStateGetInfo pose_info = {
             .type = XR_TYPE_ACTION_STATE_GET_INFO,
@@ -821,8 +837,12 @@ static void sync_input(struct browser_app *app, XrTime time)
                                   direction.y * distance;
                         float u = x / PANEL_WIDTH_METERS + 0.5f;
                         float v = 0.5f - y / PANEL_HEIGHT_METERS;
-                        if (u >= 0 && u < 1 && v >= 0 && v < 1)
+                        if (u >= 0 && u < 1 && v >= 0 && v < 1) {
+                            pointer_visible = true;
+                            pointer_x = (int)(u * UI_WIDTH);
+                            pointer_y = (int)(v * UI_HEIGHT);
                             hover = hit_test(u, v);
+                        }
                     }
                 }
             }
@@ -844,6 +864,14 @@ static void sync_input(struct browser_app *app, XrTime time)
     }
     if (hover != app->hover) {
         app->hover = hover;
+        app->texture_dirty = true;
+    }
+    if (pointer_visible != app->pointer_visible ||
+        (pointer_visible &&
+         (pointer_x != app->pointer_x || pointer_y != app->pointer_y))) {
+        app->pointer_visible = pointer_visible;
+        app->pointer_x = pointer_x;
+        app->pointer_y = pointer_y;
         app->texture_dirty = true;
     }
     if (pressed)
