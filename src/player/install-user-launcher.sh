@@ -1,0 +1,53 @@
+#!/bin/sh
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+build_dir="$script_dir/build"
+install_dir="$HOME/.local/lib/stereonaut"
+bin_dir="$HOME/.local/bin"
+applications_dir="$HOME/.local/share/applications"
+
+for file in stereonaut-launcher stereonaut-browser stereonaut-session \
+            stereonaut-renderer video-projection.vert.spv \
+            nv12-projection.frag.spv; do
+    if [ ! -f "$build_dir/$file" ]; then
+        echo "missing build artifact: $build_dir/$file" >&2
+        exit 1
+    fi
+done
+
+install -d "$install_dir" "$bin_dir" "$applications_dir"
+install -m 0755 \
+    "$build_dir/stereonaut-launcher" \
+    "$build_dir/stereonaut-browser" \
+    "$build_dir/stereonaut-session" \
+    "$build_dir/stereonaut-renderer" \
+    "$install_dir/"
+install -m 0644 \
+    "$build_dir/video-projection.vert.spv" \
+    "$build_dir/nv12-projection.frag.spv" \
+    "$install_dir/"
+
+cat >"$bin_dir/stereonaut" <<'EOF'
+#!/bin/sh
+set -eu
+cd "$HOME/.local/lib/stereonaut"
+exec ./stereonaut-launcher "${1:-$HOME}"
+EOF
+chmod 0755 "$bin_dir/stereonaut"
+
+cat >"$applications_dir/stereonaut.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Stereonaut
+Comment=Native OpenXR video player
+Exec=$bin_dir/stereonaut
+Terminal=false
+Categories=AudioVideo;Player;
+StartupNotify=false
+EOF
+chmod 0644 "$applications_dir/stereonaut.desktop"
+
+printf 'installed launcher: %s\n' "$bin_dir/stereonaut"
+printf 'installed desktop entry: %s\n' \
+       "$applications_dir/stereonaut.desktop"

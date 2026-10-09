@@ -35,6 +35,7 @@ struct browser_app {
     int ipc_fd;
     struct file_browser *browser;
     struct file_browser_listing listing;
+    char status_message[256];
     size_t page;
     int hover;
     bool pointer_visible;
@@ -577,6 +578,8 @@ static void render_browser_pixels(struct browser_app *app)
               text, 72);
     if (app->listing.error[0])
         draw_text(app, 64, 130, 3, app->listing.error, text, 72);
+    else if (app->status_message[0])
+        draw_text(app, 64, 130, 3, app->status_message, text, 72);
     size_t first = app->page * PAGE_ENTRIES;
     for (size_t row = 0; row < PAGE_ENTRIES; ++row) {
         size_t index = first + row;
@@ -936,8 +939,10 @@ static void update_listing(struct browser_app *app)
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
-    if (argc != 3) {
-        fprintf(stderr, "usage: %s IPC_FD INITIAL_DIRECTORY\n", argv[0]);
+    if (argc != 3 && argc != 4) {
+        fprintf(stderr,
+                "usage: %s IPC_FD INITIAL_DIRECTORY [STATUS_MESSAGE]\n",
+                argv[0]);
         return 2;
     }
     struct browser_app app = {
@@ -945,6 +950,9 @@ int main(int argc, char **argv)
         .hover = -1,
         .texture_dirty = true,
     };
+    if (argc == 4)
+        snprintf(app.status_message, sizeof(app.status_message),
+                 "%s", argv[3]);
     char browser_error[256] = {0};
     if (file_browser_open(&app.browser, argv[2],
                           browser_error, sizeof(browser_error)) < 0) {

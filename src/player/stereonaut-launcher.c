@@ -27,7 +27,8 @@ static int wait_child(pid_t child, const char *name)
     return 0;
 }
 
-static int run_browser(const char *directory, struct player_ui_result *result)
+static int run_browser(const char *directory, const char *message,
+                       struct player_ui_result *result)
 {
     int sockets[2];
     if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets) < 0) {
@@ -54,8 +55,12 @@ static int run_browser(const char *directory, struct player_ui_result *result)
     if (child == 0) {
         close(sockets[0]);
         close(sockets[1]);
-        execl("./stereonaut-browser", "stereonaut-browser",
-              fd_text, directory, (char *)NULL);
+        if (message && message[0])
+            execl("./stereonaut-browser", "stereonaut-browser",
+                  fd_text, directory, message, (char *)NULL);
+        else
+            execl("./stereonaut-browser", "stereonaut-browser",
+                  fd_text, directory, (char *)NULL);
         perror("exec stereonaut-browser");
         _exit(127);
     }
@@ -118,18 +123,20 @@ int main(int argc, char **argv)
     if (!initial || !initial[0])
         initial = "/";
     char directory[PLAYER_UI_PATH_MAX];
+    char browser_message[256] = {0};
     snprintf(directory, sizeof(directory), "%s", initial);
     if (browser_only) {
         struct player_ui_result result = {0};
-        if (run_browser(directory, &result) < 0)
+        if (run_browser(directory, NULL, &result) < 0)
             return 1;
         printf("browser_result type=%u path=%s\n", result.type, result.path);
         return 0;
     }
     for (;;) {
         struct player_ui_result result = {0};
-        if (run_browser(directory, &result) < 0)
+        if (run_browser(directory, browser_message, &result) < 0)
             return 1;
+        browser_message[0] = '\0';
         if (result.type == PLAYER_UI_EXIT_REQUESTED)
             return 0;
         if (result.type != PLAYER_UI_FILE_SELECTED || !result.path[0]) {
@@ -138,7 +145,10 @@ int main(int argc, char **argv)
         }
         selected_parent(result.path, directory, sizeof(directory));
         printf("selected_file=%s\n", result.path);
-        if (run_playback(result.path) < 0)
+        if (run_playback(result.path) < 0) {
             fprintf(stderr, "playback failed; returning to browser\n");
+            snprintf(browser_message, sizeof(browser_message),
+                     "VIDEO- ODER AUDIOFORMAT WIRD DERZEIT NICHT UNTERSTUETZT");
+        }
     }
 }

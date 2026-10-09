@@ -98,12 +98,14 @@ struct app {
     XrActionSet action_set;
     XrAction aim_action;
     XrAction select_action;
+    XrAction menu_action;
     XrPath hands[2];
     XrSpace aim_spaces[2];
     int ui_hover;
     bool ui_pointer_visible;
     int ui_pointer_x;
     int ui_pointer_y;
+    bool ui_visible;
     bool ui_dirty;
     uint32_t player_state;
     int64_t position_us;
@@ -233,9 +235,12 @@ static void initialize_actions(struct app *app)
     create_action(app->action_set, XR_ACTION_TYPE_BOOLEAN_INPUT,
                   "select", "Auswaehlen", app->hands,
                   &app->select_action);
+    create_action(app->action_set, XR_ACTION_TYPE_BOOLEAN_INPUT,
+                  "menu", "Bedienfeld", app->hands,
+                  &app->menu_action);
     XrPath profile = xr_path(app,
         "/interaction_profiles/khr/simple_controller");
-    XrActionSuggestedBinding bindings[4] = {
+    XrActionSuggestedBinding bindings[6] = {
         {app->aim_action,
          xr_path(app, "/user/hand/left/input/aim/pose")},
         {app->aim_action,
@@ -244,6 +249,10 @@ static void initialize_actions(struct app *app)
          xr_path(app, "/user/hand/left/input/select/click")},
         {app->select_action,
          xr_path(app, "/user/hand/right/input/select/click")},
+        {app->menu_action,
+         xr_path(app, "/user/hand/left/input/menu/click")},
+        {app->menu_action,
+         xr_path(app, "/user/hand/right/input/menu/click")},
     };
     XrInteractionProfileSuggestedBinding suggestion = {
         .type = XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING,
@@ -1344,6 +1353,7 @@ static void sync_player_input(struct app *app, XrTime time)
     need_xr("xrSyncActions", xrSyncActions(app->session, &sync));
     int hover = 0;
     bool pressed = false;
+    bool menu_pressed = false;
     bool pointer_visible = false;
     int pointer_x = 0;
     int pointer_y = 0;
@@ -1402,6 +1412,28 @@ static void sync_player_input(struct app *app, XrTime time)
         if (select.isActive && select.changedSinceLastSync &&
             select.currentState)
             pressed = true;
+        XrActionStateGetInfo menu_info = {
+            .type = XR_TYPE_ACTION_STATE_GET_INFO,
+            .action = app->menu_action,
+            .subactionPath = app->hands[hand],
+        };
+        XrActionStateBoolean menu = {
+            .type = XR_TYPE_ACTION_STATE_BOOLEAN,
+        };
+        need_xr("xrGetActionStateBoolean(menu)",
+                xrGetActionStateBoolean(app->session,
+                                        &menu_info, &menu));
+        if (menu.isActive && menu.changedSinceLastSync &&
+            menu.currentState)
+            menu_pressed = true;
+    }
+    if (menu_pressed) {
+        app->ui_visible = !app->ui_visible;
+        printf("player_panel=%s\n", app->ui_visible ? "visible" : "hidden");
+        if (!app->ui_visible) {
+            hover = 0;
+            pointer_visible = false;
+        }
     }
     if (hover != app->ui_hover) {
         app->ui_hover = hover;
@@ -1416,7 +1448,7 @@ static void sync_player_input(struct app *app, XrTime time)
         app->ui_pointer_y = pointer_y;
         app->ui_dirty = true;
     }
-    if (pressed && hover)
+    if (app->ui_visible && pressed && hover)
         send_ipc(app, NV12_IPC_ACTION, (uint32_t)hover);
 }
 
@@ -1622,7 +1654,8 @@ static void render_frame(struct app *app)
     };
     XrFrameEndInfo end = {.type = XR_TYPE_FRAME_END_INFO, .displayTime = frame_state.predictedDisplayTime,
         .environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE,
-        .layerCount = ARRAY_COUNT(layers), .layers = layers};
+        .layerCount = app->ui_visible ? ARRAY_COUNT(layers) : 1U,
+        .layers = layers};
     need_xr("xrEndFrame", xrEndFrame(app->session, &end));
     ++app->rendered_frames;
     if (app->current_video_presented)
@@ -1644,6 +1677,7 @@ int main(int argc, char **argv)
     app.ipc_fd = (int)parse_u64(argv[1], "IPC fd");
     app.current_video_index = -1;
     app.player_state = NV12_PLAYER_PLAYING;
+    app.ui_visible = true;
     app.ui_dirty = true;
     receive_initial_buffers(&app);
     initialize_xr_vulkan(&app);
