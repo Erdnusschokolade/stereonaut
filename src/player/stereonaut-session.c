@@ -1582,7 +1582,10 @@ static void validate_capture_contract(const struct capture_contract *contract,
     layout->uv_offset = (uint64_t)layout->stride * layout->coded_height;
     uint64_t required = layout->uv_offset +
                         (uint64_t)layout->stride * layout->coded_height / 2U;
-    if (required != layout->sizeimage)
+    /* Iris rounds the buffer size up to whole pages (e.g. 2944x1440:
+     * 6359040 bytes of picture in a 6361088 byte buffer). */
+    if (required > layout->sizeimage ||
+        layout->sizeimage - required >= 65536U)
         fail_message("NV12 sizeimage does not match contiguous linear layout");
     printf("nv12_contract modifier=DRM_FORMAT_MOD_LINEAR memory_planes=2"
            " v4l2_memory_planes=1 y_offset=0 uv_offset=%" PRIu64
