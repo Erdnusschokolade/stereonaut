@@ -251,6 +251,9 @@ static void receive_frame_messages(struct app *app)
         } else {
             need(false, "unknown NV12 IPC message");
         }
+        /* The socket is the bounded FIFO. Consume at most one decoded frame
+         * per XR iteration so a decoder burst cannot discard valid frames. */
+        return;
     }
 }
 
