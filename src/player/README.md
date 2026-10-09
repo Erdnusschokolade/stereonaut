@@ -77,3 +77,8 @@ twelve CAPTURE buffers provide the actual decoded-frame bound, while this
 larger compressed lead keeps Iris fed despite roughly 90 ms of measured 8K
 decode latency. Presentation still holds early frames and retains the 100-ms
 late-drop threshold.
+
+The ALSA sample-position clock is capped by monotonic time since the first PCM
+write, with pause intervals removed. This preserves the backend position when
+it is useful while preventing PipeWire's ALSA compatibility layer from making
+queued samples appear to have played hundreds of milliseconds early.

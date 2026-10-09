@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include <libavutil/error.h>
 #include <libavutil/opt.h>
@@ -26,12 +27,22 @@ struct audio_output {
     bool paused;
     int64_t base_pts_us;
     int64_t reset_target_us;
+    int64_t wall_start_us;
+    int64_t pause_started_us;
     bool base_valid;
     bool discard_active;
     uint64_t decoded_frames;
     uint64_t output_samples;
     uint64_t recoveries;
 };
+
+static int64_t monotonic_us(void)
+{
+    struct timespec value;
+    if (clock_gettime(CLOCK_MONOTONIC, &value) < 0)
+        return 0;
+    return (int64_t)value.tv_sec * INT64_C(1000000) + value.tv_nsec / 1000;
+}
 
 static void set_error(char *error, size_t size, const char *format, ...)
 {
@@ -132,6 +143,8 @@ int audio_output_open(struct audio_output **result,
         return -1;
     }
     audio->base_pts_us = AV_NOPTS_VALUE;
+    audio->wall_start_us = AV_NOPTS_VALUE;
+    audio->pause_started_us = AV_NOPTS_VALUE;
     audio->decoder = avcodec_alloc_context3(codec);
     audio->frame = av_frame_alloc();
     if (!audio->decoder || !audio->frame) {
@@ -173,6 +186,8 @@ static int write_samples(struct audio_output *audio, const uint8_t *data,
         audio->output_samples += (uint64_t)samples;
         return 0;
     }
+    if (samples > 0 && audio->wall_start_us == AV_NOPTS_VALUE)
+        audio->wall_start_us = monotonic_us();
     int remaining = samples;
     const int16_t *cursor = (const int16_t *)data;
     while (remaining > 0) {
@@ -334,6 +349,15 @@ int audio_output_pause(struct audio_output *audio, bool paused,
                   snd_strerror(result));
         return -1;
     }
+    int64_t now = monotonic_us();
+    if (paused && !audio->paused)
+        audio->pause_started_us = now;
+    else if (!paused && audio->paused &&
+             audio->pause_started_us != AV_NOPTS_VALUE &&
+             audio->wall_start_us != AV_NOPTS_VALUE)
+        audio->wall_start_us += now - audio->pause_started_us;
+    if (!paused)
+        audio->pause_started_us = AV_NOPTS_VALUE;
     audio->paused = paused;
     return 0;
 }
@@ -369,6 +393,8 @@ int audio_output_reset(struct audio_output *audio, int64_t target_us,
     audio->discard_active = true;
     audio->output_samples = 0;
     audio->paused = false;
+    audio->wall_start_us = AV_NOPTS_VALUE;
+    audio->pause_started_us = AV_NOPTS_VALUE;
     return 0;
 }
 
@@ -382,8 +408,15 @@ int64_t audio_output_clock_us(struct audio_output *audio)
     int64_t played = (int64_t)audio->output_samples - delay;
     if (played < 0)
         played = 0;
-    return audio->base_pts_us +
-           av_rescale(played, AV_TIME_BASE, OUTPUT_RATE);
+    int64_t sample_clock = audio->base_pts_us +
+        av_rescale(played, AV_TIME_BASE, OUTPUT_RATE);
+    if (!audio->device_enabled || audio->wall_start_us == AV_NOPTS_VALUE)
+        return sample_clock;
+    int64_t now = audio->paused &&
+                          audio->pause_started_us != AV_NOPTS_VALUE
+                      ? audio->pause_started_us : monotonic_us();
+    int64_t wall_clock = audio->base_pts_us + now - audio->wall_start_us;
+    return sample_clock < wall_clock ? sample_clock : wall_clock;
 }
 
 void audio_output_get_stats(struct audio_output *audio,
