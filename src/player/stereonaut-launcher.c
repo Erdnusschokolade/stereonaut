@@ -151,10 +151,6 @@ static int run_playback(const char *path, char *const *extra, int *exit_code)
         size_t count = 0;
         argv[count++] = "stereonaut-session";
         argv[count++] = (char *)path;
-        argv[count++] = "--projection";
-        argv[count++] = "180";
-        argv[count++] = "--stereo";
-        argv[count++] = "sbs";
         argv[count++] = "--renderer";
         argv[count++] = renderer_text;
         for (; extra && *extra && count + 1 < sizeof(argv) / sizeof(argv[0]);

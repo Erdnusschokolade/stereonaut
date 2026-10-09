@@ -33,6 +33,9 @@ enum nv12_ipc_type {
      * process survives the session re-exec. */
     NV12_IPC_HOLD = 11,
     NV12_IPC_HELD = 12,
+    /* Renderer -> session: the viewer changed projection, stereo layout or
+     * eye order on the panel (projection_mode, stereo_layout, swap_eyes). */
+    NV12_IPC_VIEW = 13,
 };
 
 enum nv12_player_state {

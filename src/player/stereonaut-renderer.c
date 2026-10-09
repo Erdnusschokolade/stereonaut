@@ -32,10 +32,10 @@
 #define UBO_STRIDE 256U
 #define DRM_FORMAT_MOD_LINEAR UINT64_C(0)
 #define UI_WIDTH 1024U
-#define UI_HEIGHT 320U
+#define UI_HEIGHT 400U
 #define UI_BYTES (UI_WIDTH * UI_HEIGHT * 4U)
 #define UI_PANEL_WIDTH_METERS 1.4f
-#define UI_PANEL_HEIGHT_METERS 0.4375f
+#define UI_PANEL_HEIGHT_METERS 0.546875f
 #define UI_BAR_X 28
 #define UI_BAR_WIDTH 968
 #define UI_BAR_TRACK_Y 84
@@ -44,6 +44,15 @@
 #define UI_BAR_HIT_BOTTOM 128
 #define UI_BUTTON_Y 156
 #define UI_BUTTON_HEIGHT 108
+#define UI_VIEW_Y 280
+#define UI_VIEW_HEIGHT 96
+
+/* Panel-only actions (not forwarded to the session as player actions). */
+enum ui_view_action {
+    UI_ACTION_PROJECTION = 100,
+    UI_ACTION_STEREO = 101,
+    UI_ACTION_SWAP_EYES = 102,
+};
 #define GRAB_RECENTER_COS 0.5f
 /* The select action is analog so the press point can be lower than the
  * trigger's full click travel. */
@@ -447,6 +456,30 @@ static void send_seek_to(struct app *app, int64_t target_us)
         .position_us = target_us,
     };
     send_message(app, &message);
+}
+
+/* Cycles projection / stereo layout or swaps the eyes. Applied at once and
+ * reported to the session, which stores it for this title. */
+static void change_view(struct app *app, int action)
+{
+    if (action == UI_ACTION_PROJECTION)
+        app->projection_mode = (app->projection_mode + 1U) %
+                               (NV12_PROJECTION_EQUIRECT_360 + 1U);
+    else if (action == UI_ACTION_STEREO)
+        app->stereo_layout = (app->stereo_layout + 1U) %
+                             (NV12_STEREO_TB + 1U);
+    else
+        app->swap_eyes = !app->swap_eyes;
+    app->ui_dirty = true;
+    struct nv12_ipc_message message = {
+        .type = NV12_IPC_VIEW,
+        .projection_mode = app->projection_mode,
+        .stereo_layout = app->stereo_layout,
+        .swap_eyes = app->swap_eyes,
+    };
+    send_message(app, &message);
+    printf("player_view projection=%u stereo=%u swap_eyes=%u\n",
+           app->projection_mode, app->stereo_layout, app->swap_eyes);
 }
 
 static void send_panel_state(struct app *app)
@@ -1204,8 +1237,8 @@ static void render_ui_pixels(struct app *app)
     uint32_t grabbed = ui_rgba(app, 255, 244, 96, 255);
     ui_rectangle(app, 0, 0, UI_WIDTH, UI_HEIGHT, transparent);
     if (app->grab_hand >= 0)
-        ui_rectangle(app, 4, 4, 1016, 312, grabbed);
-    ui_rectangle(app, 8, 8, 1008, 304, panel);
+        ui_rectangle(app, 4, 4, 1016, (int)UI_HEIGHT - 8, grabbed);
+    ui_rectangle(app, 8, 8, 1008, (int)UI_HEIGHT - 16, panel);
     char position[32], duration[32], clock_text[80];
     bool scrubbing = app->scrub_hand >= 0 || app->seek_pending;
     format_time(position, scrubbing ? app->scrub_us : app->position_us);
@@ -1241,6 +1274,33 @@ static void render_ui_pixels(struct app *app)
                      app->ui_hover == buttons[i].action ? hover : button);
         ui_text(app, buttons[i].x + 20, UI_BUTTON_Y + 38, 5,
                 buttons[i].label, text);
+    }
+    const char *projection_name =
+        app->projection_mode == NV12_PROJECTION_EQUIRECT_180 ? "180"
+        : app->projection_mode == NV12_PROJECTION_EQUIRECT_360 ? "360"
+                                                                : "FLACH";
+    const char *stereo_name = app->stereo_layout == NV12_STEREO_SBS ? "SBS"
+                              : app->stereo_layout == NV12_STEREO_TB ? "TB"
+                                                                      : "MONO";
+    char projection_label[48], stereo_label[48];
+    snprintf(projection_label, sizeof(projection_label), "FORM: %s",
+             projection_name);
+    snprintf(stereo_label, sizeof(stereo_label), "BILD: %s", stereo_name);
+    struct {
+        int x, width, action;
+        const char *label;
+    } view_buttons[] = {
+        {28, 300, UI_ACTION_PROJECTION, projection_label},
+        {348, 300, UI_ACTION_STEREO, stereo_label},
+        {668, 328, UI_ACTION_SWAP_EYES,
+         app->swap_eyes ? "AUGEN GETAUSCHT" : "AUGEN NORMAL"},
+    };
+    for (size_t i = 0; i < ARRAY_COUNT(view_buttons); ++i) {
+        ui_rectangle(app, view_buttons[i].x, UI_VIEW_Y,
+                     view_buttons[i].width, UI_VIEW_HEIGHT,
+                     app->ui_hover == view_buttons[i].action ? hover : button);
+        ui_text(app, view_buttons[i].x + 20, UI_VIEW_Y + 38, 4,
+                view_buttons[i].label, text);
     }
     if (app->ui_pointer_visible) {
         uint32_t pointer = ui_rgba(app, 255, 244, 96, 255);
@@ -1683,6 +1743,15 @@ static int ui_hit_test(const struct app *app, float u, float v)
     if (app->duration_us > 0 && y >= UI_BAR_HIT_TOP && y < UI_BAR_HIT_BOTTOM &&
         x >= UI_BAR_X - 8 && x < UI_BAR_X + UI_BAR_WIDTH + 8)
         return NV12_ACTION_SEEK_TO;
+    if (y >= UI_VIEW_Y && y < UI_VIEW_Y + UI_VIEW_HEIGHT) {
+        if (x >= 28 && x < 328)
+            return UI_ACTION_PROJECTION;
+        if (x >= 348 && x < 648)
+            return UI_ACTION_STEREO;
+        if (x >= 668 && x < 996)
+            return UI_ACTION_SWAP_EYES;
+        return 0;
+    }
     if (y < UI_BUTTON_Y || y >= UI_BUTTON_Y + UI_BUTTON_HEIGHT)
         return 0;
     if (x >= 28 && x < 218)
@@ -1909,6 +1978,8 @@ static void sync_player_input(struct app *app, XrTime time)
             app->scrub_hand = (int)hand;
             app->scrub_us = scrub_target_us(app, hands[hand].hit.u);
             app->ui_dirty = true;
+        } else if (action >= UI_ACTION_PROJECTION) {
+            change_view(app, action);
         } else if (action) {
             send_ipc(app, NV12_IPC_ACTION, (uint32_t)action);
         }

@@ -19,6 +19,7 @@ cc -std=c11 -O2 -Wall -Wextra -Werror \
   "$script_dir/audio-output.c" \
   "$script_dir/media-demux.c" \
   "$script_dir/jellyfin.c" \
+  "$script_dir/title-settings.c" \
   $(pkg-config --libs libavformat libavcodec libavutil libswresample alsa \
                 libcurl json-c) \
   -lvulkan -pthread

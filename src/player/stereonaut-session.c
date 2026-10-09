@@ -31,6 +31,7 @@
 #include "nv12-playback-ipc.h"
 #include "media-pipeline.h"
 #include "jellyfin.h"
+#include "title-settings.h"
 
 #define MAX_OUTPUT_BUFFERS 16U
 #define MAX_CAPTURE_BUFFERS 32U
@@ -116,6 +117,9 @@ struct playback_options {
     uint32_t projection_mode;
     uint32_t stereo_layout;
     bool swap_eyes;
+    /* Set by explicit command-line flags; those win over the stored title
+     * settings (a seek restart passes the current values explicitly). */
+    bool projection_set, stereo_set, swap_eyes_set;
     uint32_t frame_limit;
     int64_t start_us;
     struct panel_state panel;
@@ -146,6 +150,11 @@ static bool renderer_outstanding[MAX_CAPTURE_BUFFERS];
 static uint32_t renderer_action;
 static int64_t renderer_action_position_us;
 static struct panel_state panel_state;
+/* Per-title viewing settings: the key identifies the title in titles.json;
+ * the renderer reports changes made on the panel. */
+static char title_key[TITLE_KEY_SIZE];
+static struct title_settings view_state;
+static bool view_state_valid;
 static bool renderer_held;
 
 /* Exit codes understood by the launcher. */
@@ -432,6 +441,21 @@ static bool process_renderer_messages(
                 fail_message("invalid renderer player action");
             renderer_action = message.index;
             renderer_action_position_us = message.position_us;
+        } else if (message.type == NV12_IPC_VIEW) {
+            if (message.projection_mode > NV12_PROJECTION_EQUIRECT_360 ||
+                message.stereo_layout > NV12_STEREO_TB)
+                fail_message("invalid renderer view settings");
+            view_state = (struct title_settings){
+                .projection_mode = message.projection_mode,
+                .stereo_layout = message.stereo_layout,
+                .swap_eyes = message.swap_eyes != 0,
+            };
+            view_state_valid = true;
+            if (title_settings_save(title_key, &view_state) < 0)
+                fprintf(stderr, "title settings could not be saved\n");
+            printf("title_view projection=%u stereo=%u swap_eyes=%u key=%s\n",
+                   view_state.projection_mode, view_state.stereo_layout,
+                   view_state.swap_eyes, title_key);
         } else if (message.type == NV12_IPC_HELD) {
             renderer_held = true;
         } else if (message.type == NV12_IPC_PANEL) {
@@ -554,6 +578,10 @@ static struct playback_options parse_playback_options(int argc, char **argv)
     for (int i = 2; i < argc; ++i) {
         if (strcmp(argv[i], "--swap-eyes") == 0) {
             options.swap_eyes = true;
+            options.swap_eyes_set = true;
+        } else if (strcmp(argv[i], "--no-swap-eyes") == 0) {
+            options.swap_eyes = false;
+            options.swap_eyes_set = true;
         } else if (strcmp(argv[i], "--projection") == 0) {
             if (++i >= argc)
                 fail_message("--projection requires flat, 180, or 360");
@@ -565,6 +593,7 @@ static struct playback_options parse_playback_options(int argc, char **argv)
                 options.projection_mode = NV12_PROJECTION_EQUIRECT_360;
             else
                 fail_message("invalid --projection value");
+            options.projection_set = true;
         } else if (strcmp(argv[i], "--stereo") == 0) {
             if (++i >= argc)
                 fail_message("--stereo requires mono, sbs, or tb");
@@ -576,6 +605,7 @@ static struct playback_options parse_playback_options(int argc, char **argv)
                 options.stereo_layout = NV12_STEREO_TB;
             else
                 fail_message("invalid --stereo value");
+            options.stereo_set = true;
         } else if (strcmp(argv[i], "--frames") == 0) {
             if (++i >= argc)
                 fail_message("--frames requires a positive frame count");
@@ -1708,13 +1738,27 @@ int main(int argc, char **argv)
         fprintf(stderr,
                 "usage: %s INPUT.mkv|INPUT.mp4"
                 " [--projection flat|180|360]"
-                " [--stereo mono|sbs|tb] [--swap-eyes] [--frames N]"
+                " [--stereo mono|sbs|tb] [--swap-eyes|--no-swap-eyes]"
+                " [--frames N]"
                 " [--start-us TIMESTAMP]\n",
                 argv[0]);
         return 2;
     }
     struct playback_options options = parse_playback_options(argc, argv);
     panel_state = options.panel;
+    title_settings_key(argv[1], title_key, sizeof(title_key));
+    {
+        struct title_settings stored;
+        title_settings_defaults(&stored);
+        if (title_settings_load(title_key, &stored) < 0)
+            fprintf(stderr, "title settings unreadable; using defaults\n");
+        if (!options.projection_set)
+            options.projection_mode = stored.projection_mode;
+        if (!options.stereo_set)
+            options.stereo_layout = stored.stereo_layout;
+        if (!options.swap_eyes_set)
+            options.swap_eyes = stored.swap_eyes;
+    }
     char pipeline_error[512] = {0};
     struct media_pipeline *pipeline = NULL;
     char input_url[2304];
@@ -2338,6 +2382,11 @@ int main(int argc, char **argv)
         char start_text[32];
         snprintf(start_text, sizeof(start_text), "%" PRId64,
                  requested_start_us);
+        if (view_state_valid) {
+            options.projection_mode = view_state.projection_mode;
+            options.stereo_layout = view_state.stereo_layout;
+            options.swap_eyes = view_state.swap_eyes;
+        }
         const char *projection = options.projection_mode ==
                                          NV12_PROJECTION_EQUIRECT_180
                                      ? "180"
@@ -2374,8 +2423,8 @@ int main(int argc, char **argv)
         restart_argv[restart_argc++] = (char *)projection;
         restart_argv[restart_argc++] = "--stereo";
         restart_argv[restart_argc++] = (char *)stereo;
-        if (options.swap_eyes)
-            restart_argv[restart_argc++] = "--swap-eyes";
+        restart_argv[restart_argc++] =
+            options.swap_eyes ? "--swap-eyes" : "--no-swap-eyes";
         restart_argv[restart_argc++] = "--start-us";
         restart_argv[restart_argc++] = start_text;
         if (panel_state.valid) {
