@@ -10,6 +10,7 @@
 
 #define JF_ID_SIZE 48
 #define JF_AUTH_RETRY (-2) /* token missing, expired or rejected */
+#define JF_BROKEN_ITEM (-3) /* the server's file has no video stream */
 
 struct jf_config {
     char server[256];

@@ -523,6 +523,22 @@ int jf_resolve_playback(const struct jf_config *config, const char *item_id,
         json_object_put(root);
         return -1;
     }
+    json_object *streams = NULL;
+    bool has_video = false;
+    if (json_object_object_get_ex(source, "MediaStreams", &streams) &&
+        json_object_is_type(streams, json_type_array)) {
+        for (size_t i = 0; i < json_object_array_length(streams); ++i) {
+            const char *type = json_string(
+                json_object_array_get_idx(streams, i), "Type");
+            if (type && strcmp(type, "Video") == 0)
+                has_video = true;
+        }
+    }
+    if (!has_video) {
+        set_error(error, error_size, "VIDEODATEI AUF DEM SERVER DEFEKT");
+        json_object_put(root);
+        return JF_BROKEN_ITEM;
+    }
     json_object *flag = NULL;
     bool direct = json_object_object_get_ex(source, "SupportsDirectPlay",
                                             &flag) &&

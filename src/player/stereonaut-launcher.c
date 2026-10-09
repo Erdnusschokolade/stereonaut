@@ -18,6 +18,7 @@
 /* Exit codes of stereonaut-session. */
 #define EXIT_UNSUPPORTED_FORMAT 3
 #define EXIT_SOURCE_FAILED 4
+#define EXIT_BROKEN_SOURCE 5
 
 static int ui_fd = -1;
 static pid_t host_pid = -1;
@@ -264,7 +265,10 @@ int main(int argc, char **argv)
         browser_message[0] = '\0';
         if (run_playback(result.path, NULL, &exit_code) < 0) {
             fprintf(stderr, "playback failed; returning to browser\n");
-            if (exit_code == EXIT_SOURCE_FAILED)
+            if (exit_code == EXIT_BROKEN_SOURCE)
+                snprintf(browser_message, sizeof(browser_message),
+                         "VIDEODATEI AUF DEM SERVER DEFEKT");
+            else if (exit_code == EXIT_SOURCE_FAILED)
                 snprintf(browser_message, sizeof(browser_message),
                          "JELLYFIN ODER NETZWERK NICHT ERREICHBAR");
             else

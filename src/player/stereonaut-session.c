@@ -160,6 +160,7 @@ static bool renderer_held;
 /* Exit codes understood by the launcher. */
 #define EXIT_UNSUPPORTED_FORMAT 3
 #define EXIT_SOURCE_FAILED 4
+#define EXIT_BROKEN_SOURCE 5
 
 static struct jf_config jellyfin_config;
 static struct jf_playback jellyfin_playback;
@@ -192,10 +193,12 @@ static int resolve_jellyfin_input(const char *spec, char *url, size_t size)
         fprintf(stderr, "Jellyfin: not signed in (%s)\n", error);
         return -1;
     }
-    if (jf_resolve_playback(&jellyfin_config, id, &jellyfin_playback, error,
-                            sizeof(error)) < 0) {
+    int resolved = jf_resolve_playback(&jellyfin_config, id,
+                                       &jellyfin_playback, error,
+                                       sizeof(error));
+    if (resolved < 0) {
         fprintf(stderr, "Jellyfin: %s\n", error);
-        return -1;
+        return resolved == JF_BROKEN_ITEM ? JF_BROKEN_ITEM : -1;
     }
     char header[1024];
     jf_authorization_header(&jellyfin_config, header, sizeof(header));
@@ -1764,7 +1767,11 @@ int main(int argc, char **argv)
     char input_url[2304];
     const char *input = argv[1];
     if (strncmp(argv[1], "jf:item:", 8) == 0) {
-        if (resolve_jellyfin_input(argv[1], input_url, sizeof(input_url)) < 0)
+        int resolved = resolve_jellyfin_input(argv[1], input_url,
+                                              sizeof(input_url));
+        if (resolved == JF_BROKEN_ITEM)
+            return EXIT_BROKEN_SOURCE;
+        if (resolved < 0)
             return EXIT_SOURCE_FAILED;
         input = input_url;
     }
