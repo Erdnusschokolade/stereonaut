@@ -32,3 +32,9 @@ but Iris may negotiate a larger allocation from the coded dimensions. The
 session retains the six-OUTPUT-buffer queue validated by the continuous 8K60
 probe. Every access unit is checked against the actual buffer length. A larger
 unit stops with an explicit error instead of overrunning the V4L2 buffer.
+
+`file-browser.c` provides the nonblocking browser data source for the XR UI.
+One worker resolves and sorts directories, subdirectories and `.mkv`/`.mp4`
+files while the render thread only polls completed immutable listings. Newer
+requests supersede older results, which keeps slow mounts from replacing a
+more recent navigation result.
