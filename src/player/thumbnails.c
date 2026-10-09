@@ -172,9 +172,64 @@ static struct ui_image *decode_jpeg(const char *data, size_t size)
     return image;
 }
 
+static bool near(const uint8_t *a, const uint8_t *b)
+{
+    for (int c = 0; c < 3; ++c)
+        if (a[c] > b[c] + 16 || b[c] > a[c] + 16)
+            return false;
+    return true;
+}
+
+static bool uniform_line(const struct ui_image *image, const uint8_t *color,
+                         int x, int y, int dx, int dy, int length)
+{
+    for (int i = 0; i < length; ++i, x += dx, y += dy)
+        if (!near(image->rgba + ((size_t)y * (size_t)image->width +
+                                 (size_t)x) * 4U, color))
+            return false;
+    return true;
+}
+
+/* Some server images are a small picture centred on a plain (white)
+ * square. Cut such uniform borders; if almost nothing is left the image is a
+ * placeholder and the tile keeps its icon instead (NULL). */
+static struct ui_image *trim_border(struct ui_image *image)
+{
+    const uint8_t *corner = image->rgba;
+    int left = 0, right = image->width, top = 0, bottom = image->height;
+    while (top < bottom &&
+           uniform_line(image, corner, 0, top, 1, 0, image->width))
+        ++top;
+    while (bottom > top &&
+           uniform_line(image, corner, 0, bottom - 1, 1, 0, image->width))
+        --bottom;
+    while (left < right &&
+           uniform_line(image, corner, left, top, 0, 1, bottom - top))
+        ++left;
+    while (right > left &&
+           uniform_line(image, corner, right - 1, top, 0, 1, bottom - top))
+        --right;
+    int width = right - left, height = bottom - top;
+    if (width == image->width && height == image->height)
+        return image;
+    struct ui_image *result = NULL;
+    if ((long)width * height * 5 >= (long)image->width * image->height &&
+        (result = ui_image_create(width, height)))
+        for (int y = 0; y < height; ++y)
+            memcpy(result->rgba + (size_t)y * (size_t)width * 4U,
+                   image->rgba + ((size_t)(top + y) * (size_t)image->width +
+                                  (size_t)left) * 4U,
+                   (size_t)width * 4U);
+    ui_image_free(image);
+    return result;
+}
+
 /* Side-by-side frames (about 2:1 and wider) show both eyes; keep the left. */
 static struct ui_image *prepare(struct ui_image *decoded)
 {
+    decoded = trim_border(decoded);
+    if (!decoded)
+        return NULL;
     struct ui_image *source = decoded;
     struct ui_image *eye = NULL;
     if (decoded->width >= decoded->height * 195 / 100) {

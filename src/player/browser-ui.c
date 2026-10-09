@@ -462,16 +462,6 @@ static void draw_detail(struct browser_ui *ui, struct ui_canvas *canvas)
                              "Trigger drücken zum Abspielen");
 }
 
-static void draw_pointer(struct browser_ui *ui, struct ui_canvas *canvas)
-{
-    if (!ui->pointer_visible)
-        return;
-    float x = (float)ui->pointer_x, y = (float)ui->pointer_y;
-    ui_fill_circle(canvas, x, y, 13, UI_RGBA(0, 0, 0, 90));
-    ui_fill_circle(canvas, x, y, 10, UI_RGBA(255, 255, 255, 235));
-    ui_fill_circle(canvas, x, y, 6, color_accent);
-}
-
 void browser_ui_render(struct browser_ui *ui, uint32_t *pixels, bool bgra)
 {
     if (!ui->font)
@@ -517,7 +507,6 @@ void browser_ui_render(struct browser_ui *ui, uint32_t *pixels, bool bgra)
     else if (hover >= ID_PREVIOUS && hover < ID_PAGE + PAGE_BUTTONS)
         draw_pager(ui, &canvas, hover);
     draw_detail(ui, &canvas);
-    draw_pointer(ui, &canvas);
     ui->dirty = false;
 }
 
@@ -589,13 +578,11 @@ void browser_ui_set_pointer(struct browser_ui *ui, bool visible, int x, int y,
             ui->detail = slot_entry(ui, hover);
         ui->dirty = true;
     }
-    if (visible != ui->pointer_visible ||
-        (visible && (x != ui->pointer_x || y != ui->pointer_y))) {
-        ui->pointer_visible = visible;
-        ui->pointer_x = x;
-        ui->pointer_y = y;
-        ui->dirty = true;
-    }
+    /* The host draws the pointer as its own layer; moving it does not
+     * change the panel picture. */
+    ui->pointer_visible = visible;
+    ui->pointer_x = x;
+    ui->pointer_y = y;
 }
 
 static void request(struct browser_ui *ui, const char *location)

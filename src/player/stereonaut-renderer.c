@@ -24,6 +24,7 @@
 #include <openxr/openxr_platform.h>
 
 #include "browser-ui.h"
+#include "ui-draw.h"
 #include "nv12-playback-ipc.h"
 #include "player-ui-ipc.h"
 
@@ -130,8 +131,15 @@ struct app {
     bool browser_image_initialized[MAX_IMAGES];
     VkBuffer browser_staging_buffer;
     VkDeviceMemory browser_staging_memory;
-    uint32_t *browser_pixels;
+    uint32_t *browser_pixels; /* mapped staging memory: write-only */
+    uint32_t *browser_cpu;    /* the browser draws here (cached memory) */
     VkCommandBuffer browser_command;
+    /* Pointer dot as its own small quad layer, so moving the pointer does
+     * not require redrawing and uploading a panel texture. */
+    XrSwapchain pointer_swapchain;
+    bool pointer_layer_visible;
+    XrPosef pointer_pose;
+    float pointer_size;
     VkFence browser_fence;
     int ipc_fd;
     bool eos_received;
@@ -1342,16 +1350,6 @@ static void render_ui_pixels(struct app *app)
         ui_text(app, view_buttons[i].x + 20, UI_VIEW_Y + 38, 4,
                 view_buttons[i].label, text);
     }
-    if (app->ui_pointer_visible) {
-        uint32_t pointer = ui_rgba(app, 255, 244, 96, 255);
-        uint32_t pointer_center = ui_rgba(app, 255, 255, 255, 255);
-        ui_rectangle(app, app->ui_pointer_x - 7, app->ui_pointer_y - 2,
-                     15, 5, pointer);
-        ui_rectangle(app, app->ui_pointer_x - 2, app->ui_pointer_y - 7,
-                     5, 15, pointer);
-        ui_rectangle(app, app->ui_pointer_x - 1, app->ui_pointer_y - 1,
-                     3, 3, pointer_center);
-    }
 }
 
 static void create_ui_swapchain(struct app *app)
@@ -1815,6 +1813,23 @@ static int64_t scrub_target_us(const struct app *app, float u)
     return (int64_t)((double)ratio * (double)app->duration_us);
 }
 
+/* Puts the pointer layer on the panel plane at the hit point, slightly in
+ * front of the panel. */
+static void place_pointer(struct app *app, XrVector3f center, float yaw,
+                          float width_meters, float height_meters,
+                          struct panel_hit hit, float size)
+{
+    XrQuaternionf orientation = yaw_quaternion(yaw);
+    XrVector3f local = {(hit.u - 0.5f) * width_meters,
+                        (0.5f - hit.v) * height_meters, 0.006f};
+    XrVector3f offset = rotate_vector(orientation, local);
+    app->pointer_pose = (XrPosef){
+        orientation,
+        {center.x + offset.x, center.y + offset.y, center.z + offset.z}};
+    app->pointer_size = size;
+    app->pointer_layer_visible = true;
+}
+
 struct hand_input {
     bool aim_valid;
     XrPosef aim;
@@ -2029,6 +2044,7 @@ static void sync_player_input(struct app *app, XrTime time)
     bool pointer_visible = false;
     int pointer_x = 0;
     int pointer_y = 0;
+    app->pointer_layer_visible = false;
     if (app->ui_visible && app->grab_hand < 0) {
         for (unsigned hand = 0; hand < 2; ++hand) {
             if (!hands[hand].aim_valid ||
@@ -2038,6 +2054,11 @@ static void sync_player_input(struct app *app, XrTime time)
             pointer_x = (int)(hands[hand].hit.u * UI_WIDTH);
             pointer_y = (int)(hands[hand].hit.v * UI_HEIGHT);
             hover = ui_hit_test(app, hands[hand].hit.u, hands[hand].hit.v);
+            place_pointer(app,
+                          (XrVector3f){app->panel_x, app->panel_y,
+                                       app->panel_z},
+                          app->panel_yaw, UI_PANEL_WIDTH_METERS,
+                          UI_PANEL_HEIGHT_METERS, hands[hand].hit, 0.03f);
         }
         if (app->scrub_hand >= 0)
             hover = NV12_ACTION_SEEK_TO;
@@ -2053,7 +2074,6 @@ static void sync_player_input(struct app *app, XrTime time)
         app->ui_pointer_visible = pointer_visible;
         app->ui_pointer_x = pointer_x;
         app->ui_pointer_y = pointer_y;
-        app->ui_dirty = true;
     }
 }
 
@@ -2153,12 +2173,188 @@ static void create_browser_texture(struct app *app)
     need_vk("vkMapMemory(browser staging)",
             vkMapMemory(app->device, app->browser_staging_memory, 0, bytes, 0,
                         (void **)&app->browser_pixels));
+    app->browser_cpu = calloc(1, (size_t)bytes);
+    need(app->browser_cpu != NULL, "allocate browser pixels");
     app->browser.dirty = true;
+}
+
+/* Uploads `pixels` (width x height RGBA, canvas layout) into every image of
+ * a swapchain whose content never changes. */
+static void fill_static_swapchain(struct app *app, XrSwapchain swapchain,
+                                  const uint8_t *pixels, uint32_t width,
+                                  uint32_t height)
+{
+    uint32_t count = 0;
+    XrSwapchainImageVulkan2KHR images[MAX_IMAGES];
+    need_xr("xrEnumerateSwapchainImages(static count)",
+            xrEnumerateSwapchainImages(swapchain, 0, &count, NULL));
+    need(count > 0 && count <= MAX_IMAGES, "unexpected static image count");
+    for (uint32_t i = 0; i < count; ++i)
+        images[i] = (XrSwapchainImageVulkan2KHR){
+            .type = XR_TYPE_SWAPCHAIN_IMAGE_VULKAN2_KHR};
+    need_xr("xrEnumerateSwapchainImages(static list)",
+            xrEnumerateSwapchainImages(swapchain, count, &count,
+                                       (XrSwapchainImageBaseHeader *)images));
+    VkDeviceSize bytes = (VkDeviceSize)width * height * 4U;
+    VkBufferCreateInfo buffer_info = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = bytes,
+        .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+    };
+    VkBuffer buffer;
+    need_vk("vkCreateBuffer(static)",
+            vkCreateBuffer(app->device, &buffer_info, NULL, &buffer));
+    VkMemoryRequirements requirements;
+    vkGetBufferMemoryRequirements(app->device, buffer, &requirements);
+    VkMemoryAllocateInfo allocation = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize = requirements.size,
+        .memoryTypeIndex = memory_type(
+            app->physical, requirements.memoryTypeBits,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
+    };
+    VkDeviceMemory memory;
+    need_vk("vkAllocateMemory(static)",
+            vkAllocateMemory(app->device, &allocation, NULL, &memory));
+    need_vk("vkBindBufferMemory(static)",
+            vkBindBufferMemory(app->device, buffer, memory, 0));
+    void *mapping;
+    need_vk("vkMapMemory(static)",
+            vkMapMemory(app->device, memory, 0, bytes, 0, &mapping));
+    memcpy(mapping, pixels, (size_t)bytes);
+    VkCommandBufferAllocateInfo commands = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .commandPool = app->command_pool,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = 1,
+    };
+    VkCommandBuffer command;
+    need_vk("vkAllocateCommandBuffers(static)",
+            vkAllocateCommandBuffers(app->device, &commands, &command));
+    VkFenceCreateInfo fence_info = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    VkFence fence;
+    need_vk("vkCreateFence(static)",
+            vkCreateFence(app->device, &fence_info, NULL, &fence));
+    for (uint32_t n = 0; n < count; ++n) {
+        XrSwapchainImageAcquireInfo acquire = {
+            .type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+        uint32_t index = 0;
+        need_xr("xrAcquireSwapchainImage(static)",
+                xrAcquireSwapchainImage(swapchain, &acquire, &index));
+        XrSwapchainImageWaitInfo wait = {
+            .type = XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO,
+            .timeout = XR_INFINITE_DURATION};
+        need_xr("xrWaitSwapchainImage(static)",
+                xrWaitSwapchainImage(swapchain, &wait));
+        VkCommandBufferBeginInfo begin = {
+            .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+            .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};
+        need_vk("vkBeginCommandBuffer(static)",
+                vkBeginCommandBuffer(command, &begin));
+        VkImageMemoryBarrier transfer = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            .image = images[index].image,
+            .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                 .levelCount = 1, .layerCount = 1},
+        };
+        vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0,
+                             NULL, 1, &transfer);
+        VkBufferImageCopy copy = {
+            .imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                 .layerCount = 1},
+            .imageExtent = {width, height, 1},
+        };
+        vkCmdCopyBufferToImage(command, buffer, images[index].image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+        VkImageMemoryBarrier sample = transfer;
+        sample.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        sample.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        sample.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        sample.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL,
+                             0, NULL, 1, &sample);
+        need_vk("vkEndCommandBuffer(static)", vkEndCommandBuffer(command));
+        VkSubmitInfo submit = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                               .commandBufferCount = 1,
+                               .pCommandBuffers = &command};
+        need_vk("vkQueueSubmit(static)",
+                vkQueueSubmit(app->queue, 1, &submit, fence));
+        need_vk("vkWaitForFences(static)",
+                vkWaitForFences(app->device, 1, &fence, VK_TRUE,
+                                UINT64_C(5000000000)));
+        need_vk("vkResetFences(static)",
+                vkResetFences(app->device, 1, &fence));
+        need_vk("vkResetCommandBuffer(static)",
+                vkResetCommandBuffer(command, 0));
+        XrSwapchainImageReleaseInfo release = {
+            .type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+        need_xr("xrReleaseSwapchainImage(static)",
+                xrReleaseSwapchainImage(swapchain, &release));
+    }
+    vkDestroyFence(app->device, fence, NULL);
+    vkFreeCommandBuffers(app->device, app->command_pool, 1, &command);
+    vkUnmapMemory(app->device, memory);
+    vkDestroyBuffer(app->device, buffer, NULL);
+    vkFreeMemory(app->device, memory, NULL);
+}
+
+#define POINTER_PIXELS 64U
+
+static void create_pointer_texture(struct app *app)
+{
+    XrSwapchainCreateInfo info = {
+        .type = XR_TYPE_SWAPCHAIN_CREATE_INFO,
+        .usageFlags = XR_SWAPCHAIN_USAGE_SAMPLED_BIT |
+                      XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT,
+        .format = app->ui_format,
+        .sampleCount = 1,
+        .width = POINTER_PIXELS,
+        .height = POINTER_PIXELS,
+        .faceCount = 1,
+        .arraySize = 1,
+        .mipCount = 1,
+    };
+    need_xr("xrCreateSwapchain(pointer)",
+            xrCreateSwapchain(app->session, &info, &app->pointer_swapchain));
+    uint8_t pixels[POINTER_PIXELS * POINTER_PIXELS * 4] = {0};
+    struct ui_canvas canvas = {pixels, POINTER_PIXELS, POINTER_PIXELS,
+                               app->ui_bgra};
+    const float c = POINTER_PIXELS / 2.0f;
+    ui_fill_circle(&canvas, c, c, c - 2, UI_RGBA(0, 0, 0, 110));
+    ui_fill_circle(&canvas, c, c, c - 8, UI_RGBA(255, 255, 255, 240));
+    ui_fill_circle(&canvas, c, c, c - 17, UI_RGBA(56, 160, 255, 255));
+    fill_static_swapchain(app, app->pointer_swapchain, pixels,
+                          POINTER_PIXELS, POINTER_PIXELS);
+}
+
+static XrCompositionLayerQuad make_pointer_layer(const struct app *app)
+{
+    return (XrCompositionLayerQuad){
+        .type = XR_TYPE_COMPOSITION_LAYER_QUAD,
+        .layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT,
+        .space = app->space,
+        .eyeVisibility = XR_EYE_VISIBILITY_BOTH,
+        .subImage = {
+            .swapchain = app->pointer_swapchain,
+            .imageRect = {.extent = {POINTER_PIXELS, POINTER_PIXELS}},
+        },
+        .pose = app->pointer_pose,
+        .size = {app->pointer_size, app->pointer_size},
+    };
 }
 
 static void upload_browser(struct app *app)
 {
-    browser_ui_render(&app->browser, app->browser_pixels, app->ui_bgra);
+    /* Draw in cached memory: blending reads pixels back, which is very slow
+     * on the uncached staging mapping. */
+    browser_ui_render(&app->browser, app->browser_cpu, app->ui_bgra);
     XrSwapchainImageAcquireInfo acquire = {
         .type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO,
     };
@@ -2177,6 +2373,8 @@ static void upload_browser(struct app *app)
                             UINT64_C(5000000000)));
     need_vk("vkResetFences(browser)",
             vkResetFences(app->device, 1, &app->browser_fence));
+    memcpy(app->browser_pixels, app->browser_cpu,
+           (size_t)BROWSER_UI_WIDTH * BROWSER_UI_HEIGHT * 4U);
     need_vk("vkResetCommandBuffer(browser)",
             vkResetCommandBuffer(app->browser_command, 0));
     VkCommandBufferBeginInfo begin = {
@@ -2225,11 +2423,11 @@ static void upload_browser(struct app *app)
         .commandBufferCount = 1,
         .pCommandBuffers = &app->browser_command,
     };
+    /* No wait for completion: the runtime synchronises with this queue on
+     * release, and the next upload waits for the fence before it touches the
+     * staging buffer again. */
     need_vk("vkQueueSubmit(browser)",
             vkQueueSubmit(app->queue, 1, &submit, app->browser_fence));
-    need_vk("vkWaitForFences(browser completion)",
-            vkWaitForFences(app->device, 1, &app->browser_fence, VK_TRUE,
-                            UINT64_C(5000000000)));
     app->browser_image_initialized[index] = true;
     XrSwapchainImageReleaseInfo release = {
         .type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO,
@@ -2383,6 +2581,7 @@ static void sync_browser_input(struct app *app, XrTime time)
         XR_SPACE_LOCATION_POSITION_VALID_BIT |
         XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
     bool pointer_visible = false, pressed = false;
+    app->pointer_layer_visible = false;
     int pointer_x = 0, pointer_y = 0, hover = -1;
     for (unsigned hand = 0; hand < 2; ++hand) {
         XrActionStateGetInfo pose_info = {
@@ -2414,6 +2613,9 @@ static void sync_browser_input(struct app *app, XrTime time)
             pointer_x = (int)(hit.u * BROWSER_UI_WIDTH);
             pointer_y = (int)(hit.v * BROWSER_UI_HEIGHT);
             hover = browser_ui_hit_test(hit.u, hit.v);
+            place_pointer(app, (XrVector3f){0, 0, BROWSER_PANEL_Z}, 0.0f,
+                          BROWSER_UI_PANEL_WIDTH_METERS,
+                          BROWSER_UI_PANEL_HEIGHT_METERS, hit, 0.04f);
         }
     }
     browser_ui_set_pointer(&app->browser, pointer_visible, pointer_x,
@@ -2632,14 +2834,19 @@ static void render_frame(struct app *app)
     XrCompositionLayerQuad ui_layer = app->playing
                                           ? make_ui_layer(app)
                                           : make_browser_layer(app);
+    XrCompositionLayerQuad pointer_layer = make_pointer_layer(app);
     const XrCompositionLayerBaseHeader *layers[] = {
         (const XrCompositionLayerBaseHeader *)&layer,
         (const XrCompositionLayerBaseHeader *)&ui_layer,
+        (const XrCompositionLayerBaseHeader *)&pointer_layer,
     };
     bool show_ui = app->playing ? app->ui_visible : true;
+    uint32_t layer_count = 1;
+    if (show_ui)
+        layer_count = app->pointer_layer_visible ? 3U : 2U;
     XrFrameEndInfo end = {.type = XR_TYPE_FRAME_END_INFO, .displayTime = frame_state.predictedDisplayTime,
         .environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE,
-        .layerCount = show_ui ? ARRAY_COUNT(layers) : 1U,
+        .layerCount = layer_count,
         .layers = layers};
     need_xr("xrEndFrame", xrEndFrame(app->session, &end));
     ++app->rendered_frames;
@@ -2711,6 +2918,7 @@ int main(int argc, char **argv)
     create_render_resources(&app);
     create_ui_resources(&app);
     create_browser_texture(&app);
+    create_pointer_texture(&app);
     printf("host_ready\n");
     while (!app.quit) {
         handle_control(&app);
