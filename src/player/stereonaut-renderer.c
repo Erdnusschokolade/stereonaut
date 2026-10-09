@@ -60,6 +60,12 @@ enum ui_view_action {
  * trigger's full click travel. */
 #define SELECT_PRESS_THRESHOLD 0.30f
 #define SELECT_RELEASE_THRESHOLD 0.15f
+/* Thumbstick left/right: same low threshold as the trigger. Held in the
+ * browser it repeats the page flip. */
+#define STICK_PRESS_THRESHOLD 0.30f
+#define STICK_RELEASE_THRESHOLD 0.15f
+#define STICK_REPEAT_DELAY_NS INT64_C(500000000)
+#define STICK_REPEAT_INTERVAL_NS INT64_C(250000000)
 
 struct mat4 { float v[16]; };
 
@@ -154,6 +160,9 @@ struct app {
     XrAction aim_action;
     XrAction select_action;
     XrAction squeeze_action;
+    XrAction stick_action;
+    int stick_direction[2];    /* -1 left, +1 right, 0 centred */
+    XrTime stick_repeat_at[2]; /* next auto repeat while held */
     bool select_down[2];
     bool has_valve_frame_controller;
     bool has_generic_controller;
@@ -309,30 +318,36 @@ static void initialize_actions(struct app *app)
                   &app->select_action);
     create_action(app->action_set, XR_ACTION_TYPE_BOOLEAN_INPUT,
                   "squeeze", "Greifen", app->hands, &app->squeeze_action);
+    create_action(app->action_set, XR_ACTION_TYPE_VECTOR2F_INPUT,
+                  "stick", "Blaettern und Spulen", app->hands,
+                  &app->stick_action);
     struct {
         const char *profile;
         const char *select_component;
         const char *squeeze_component;
+        bool thumbstick;
         bool enabled;
     } profiles[] = {
         {"/interaction_profiles/valve/frame_controller",
-         "trigger/value", "squeeze/click", app->has_valve_frame_controller},
+         "trigger/value", "squeeze/click", true,
+         app->has_valve_frame_controller},
         {"/interaction_profiles/khr/generic_controller",
-         "trigger/value", "squeeze/value", app->has_generic_controller},
+         "trigger/value", "squeeze/value", true, app->has_generic_controller},
         {"/interaction_profiles/valve/index_controller",
-         "trigger/value", "squeeze/value", true},
-        /* No squeeze button: panel grab and show/hide are unavailable. */
+         "trigger/value", "squeeze/value", true, true},
+        /* No squeeze button or stick: panel grab, show/hide, page flips and
+         * stick seeking are unavailable. */
         {"/interaction_profiles/khr/simple_controller",
-         "select/click", NULL, true},
+         "select/click", NULL, false, true},
     };
     static const char *const hand_names[2] = {"left", "right"};
     unsigned accepted = 0;
     for (size_t p = 0; p < ARRAY_COUNT(profiles); ++p) {
         if (!profiles[p].enabled)
             continue;
-        XrActionSuggestedBinding bindings[6];
+        XrActionSuggestedBinding bindings[8];
         uint32_t count = 0;
-        char text[3][2][96];
+        char text[4][2][96];
         for (unsigned hand = 0; hand < 2; ++hand) {
             snprintf(text[0][hand], sizeof(text[0][hand]),
                      "/user/hand/%s/input/aim/pose", hand_names[hand]);
@@ -349,6 +364,12 @@ static void initialize_actions(struct app *app)
                          profiles[p].squeeze_component);
                 bindings[count++] = (XrActionSuggestedBinding){
                     app->squeeze_action, xr_path(app, text[2][hand])};
+            }
+            if (profiles[p].thumbstick) {
+                snprintf(text[3][hand], sizeof(text[3][hand]),
+                         "/user/hand/%s/input/thumbstick", hand_names[hand]);
+                bindings[count++] = (XrActionSuggestedBinding){
+                    app->stick_action, xr_path(app, text[3][hand])};
             }
         }
         XrInteractionProfileSuggestedBinding suggestion = {
@@ -1853,6 +1874,42 @@ static void read_boolean(struct app *app, XrAction action, XrPath hand,
             xrGetActionStateBoolean(app->session, &info, state));
 }
 
+/* Horizontal thumbstick flicks: -1/+1 once per deflection past the
+ * threshold (vertical movement is ignored), 0 otherwise. With `repeat` a
+ * held stick fires again after a delay. */
+static int read_stick(struct app *app, unsigned hand, XrTime time,
+                      bool repeat)
+{
+    XrActionStateGetInfo info = {
+        .type = XR_TYPE_ACTION_STATE_GET_INFO,
+        .action = app->stick_action,
+        .subactionPath = app->hands[hand],
+    };
+    XrActionStateVector2f state = {.type = XR_TYPE_ACTION_STATE_VECTOR2F};
+    need_xr("xrGetActionStateVector2f",
+            xrGetActionStateVector2f(app->session, &info, &state));
+    float x = state.isActive ? state.currentState.x : 0.0f;
+    float y = state.isActive ? state.currentState.y : 0.0f;
+    int direction = app->stick_direction[hand];
+    if (direction && direction * x < STICK_RELEASE_THRESHOLD) {
+        app->stick_direction[hand] = 0;
+        return 0;
+    }
+    if (!direction) {
+        if (fabsf(x) < STICK_PRESS_THRESHOLD || fabsf(y) > fabsf(x))
+            return 0;
+        direction = x > 0.0f ? 1 : -1;
+        app->stick_direction[hand] = direction;
+        app->stick_repeat_at[hand] = time + STICK_REPEAT_DELAY_NS;
+        return direction;
+    }
+    if (repeat && time >= app->stick_repeat_at[hand]) {
+        app->stick_repeat_at[hand] = time + STICK_REPEAT_INTERVAL_NS;
+        return direction;
+    }
+    return 0;
+}
+
 static void read_select(struct app *app, unsigned hand,
                         struct hand_input *input)
 {
@@ -1960,6 +2017,11 @@ static void sync_player_input(struct app *app, XrTime time)
         read_select(app, hand, &hands[hand]);
         read_boolean(app, app->squeeze_action, app->hands[hand],
                      &hands[hand].squeeze);
+        int flick = read_stick(app, hand, time, false);
+        if (flick && app->scrub_hand < 0 && !app->seek_pending)
+            send_ipc(app, NV12_IPC_ACTION,
+                     flick > 0 ? NV12_ACTION_SEEK_FORWARD
+                               : NV12_ACTION_SEEK_BACK);
     }
 
     /* Grip: grab the panel, or show/hide it when pressed on empty space. */
@@ -2603,6 +2665,9 @@ static void sync_browser_input(struct app *app, XrTime time)
         read_select(app, hand, &input);
         if (input.select_edge)
             pressed = true;
+        int flick = read_stick(app, hand, time, true);
+        if (flick)
+            browser_ui_flip(&app->browser, flick);
         if (!pose.isActive)
             continue;
         XrSpaceLocation location = {.type = XR_TYPE_SPACE_LOCATION};

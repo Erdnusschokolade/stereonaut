@@ -93,7 +93,7 @@ int main(void)
     XrActionSet set;
     if (XR_FAILED(xrCreateActionSet(instance, &set_info, &set))) return 2;
 
-    XrAction boolean_action, pose_action;
+    XrAction boolean_action, pose_action, vector_action;
     XrActionCreateInfo action_info = {
         .type = XR_TYPE_ACTION_CREATE_INFO,
         .actionType = XR_ACTION_TYPE_BOOLEAN_INPUT,
@@ -108,6 +108,12 @@ int main(void)
     snprintf(action_info.localizedActionName,
              sizeof(action_info.localizedActionName), "Pose");
     if (XR_FAILED(xrCreateAction(set, &action_info, &pose_action)))
+        return 2;
+    action_info.actionType = XR_ACTION_TYPE_VECTOR2F_INPUT;
+    snprintf(action_info.actionName, sizeof(action_info.actionName), "stick");
+    snprintf(action_info.localizedActionName,
+             sizeof(action_info.localizedActionName), "Stick");
+    if (XR_FAILED(xrCreateAction(set, &action_info, &vector_action)))
         return 2;
 
     const char *profiles[] = {
@@ -134,6 +140,10 @@ int main(void)
                     "/user/hand/right/input/grip/pose");
         for (size_t b = 0; b < ARRAY_COUNT(booleans); ++b)
             try_binding(boolean_action, profiles[p], booleans[b]);
+        try_binding(vector_action, profiles[p],
+                    "/user/hand/right/input/thumbstick");
+        try_binding(vector_action, profiles[p],
+                    "/user/hand/right/input/trackpad");
     }
     xrDestroyInstance(instance);
     free(list);

@@ -648,6 +648,14 @@ static void set_page(struct browser_ui *ui, size_t page)
     ui->dirty = true;
 }
 
+void browser_ui_flip(struct browser_ui *ui, int direction)
+{
+    if (direction < 0 && ui->page > 0)
+        set_page(ui, ui->page - 1);
+    else if (direction > 0)
+        set_page(ui, ui->page + 1);
+}
+
 enum browser_ui_action browser_ui_activate(struct browser_ui *ui, char *path,
                                            size_t path_size)
 {
