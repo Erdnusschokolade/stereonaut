@@ -318,28 +318,8 @@ static void start_renderer(
         printf("renderer_adopted pid=%ld fd=%d\n", (long)renderer_pid,
                renderer_fd);
     } else {
-        int sockets[2];
-        if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets) < 0)
-            fail_errno("socketpair OpenXR renderer");
-        int inherited_fd = fcntl(sockets[1], F_DUPFD, 3);
-        if (inherited_fd < 0)
-            fail_errno("duplicate renderer IPC fd");
-        char fd_text[32];
-        snprintf(fd_text, sizeof(fd_text), "%d", inherited_fd);
-        renderer_pid = fork();
-        if (renderer_pid < 0)
-            fail_errno("fork OpenXR playback renderer");
-        if (renderer_pid == 0) {
-            close(sockets[0]);
-            close(sockets[1]);
-            execl("./stereonaut-renderer", "stereonaut-renderer",
-                  fd_text, (char *)NULL);
-            perror("exec stereonaut-renderer");
-            _exit(127);
-        }
-        close(inherited_fd);
-        close(sockets[1]);
-        renderer_fd = sockets[0];
+        fail_message("no renderer socket: start the session through"
+                     " stereonaut-launcher (--renderer FD,PID)");
     }
 
     struct nv12_ipc_message message = {
@@ -519,13 +499,16 @@ static void wait_renderer(void)
     int flags = fcntl(renderer_fd, F_GETFL);
     if (flags >= 0)
         fcntl(renderer_fd, F_SETFL, flags & ~O_NONBLOCK);
-    int status = 0;
-    while (waitpid(renderer_pid, &status, 0) < 0) {
-        if (errno != EINTR)
-            fail_errno("waitpid OpenXR renderer");
+    if (renderer_pid > 0) {
+        int status = 0;
+        while (waitpid(renderer_pid, &status, 0) < 0) {
+            if (errno != EINTR)
+                fail_errno("waitpid OpenXR renderer");
+        }
+        if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
+            fail_message("OpenXR playback renderer failed");
     }
-    if (!WIFEXITED(status) || WEXITSTATUS(status) != 0)
-        fail_message("OpenXR playback renderer failed");
+    /* A host-owned renderer keeps running; closing the socket detaches it. */
     close(renderer_fd);
     renderer_fd = -1;
     renderer_pid = -1;
@@ -613,7 +596,7 @@ static struct playback_options parse_playback_options(int argc, char **argv)
             int fd = -1;
             long pid = 0;
             if (sscanf(argv[i], "%d,%ld", &fd, &pid) != 2 || fd < 3 ||
-                pid <= 0)
+                pid < 0)
                 fail_message("invalid --renderer value");
             options.adopt_renderer_fd = fd;
             options.adopt_renderer_pid = (pid_t)pid;
@@ -1882,6 +1865,10 @@ int main(int argc, char **argv)
     uint64_t frames = 0;
     uint64_t sequence_drops = 0;
     uint64_t v4l2_errors = 0;
+    /* CAPTURE buffers Iris flags as erroneous right after a seek (leading
+     * pictures that reference frames before the entry point) are dropped. */
+    uint64_t capture_error_drops = 0;
+    uint64_t consecutive_capture_errors = 0;
     uint32_t previous_sequence = 0;
     bool have_sequence = false;
     uint64_t output_returned = 0;
@@ -2135,8 +2122,28 @@ int main(int argc, char **argv)
                 if (dequeued.index >= capture_count)
                     fail_message("CAPTURE returned an invalid index");
                 if (dequeued.flags & V4L2_BUF_FLAG_ERROR) {
-                    v4l2_errors++;
-                    fail_message("Iris marked a CAPTURE buffer erroneous");
+                    capture_error_drops++;
+                    previous_sequence = dequeued.sequence;
+                    have_sequence = true;
+                    if (++consecutive_capture_errors > 90)
+                        fail_message("Iris marked too many consecutive"
+                                     " CAPTURE buffers erroneous");
+                    if (capture_error_drops <= 3 ||
+                        capture_error_drops % 30 == 0)
+                        printf("capture_error_drop count=%" PRIu64
+                               " index=%u sequence=%u timestamp=%ld.%06ld\n",
+                               capture_error_drops, dequeued.index,
+                               dequeued.sequence,
+                               (long)dequeued.timestamp.tv_sec,
+                               (long)dequeued.timestamp.tv_usec);
+                    if (!(dequeued.flags & V4L2_BUF_FLAG_LAST)) {
+                        queue_capture(dequeued.index,
+                                      captures[dequeued.index].length);
+                        continue;
+                    }
+                    plane.bytesused = 0;
+                } else if (plane.bytesused) {
+                    consecutive_capture_errors = 0;
                 }
                 if (plane.bytesused) {
                     uint64_t frame_index = frames;
@@ -2350,7 +2357,7 @@ int main(int argc, char **argv)
                      panel_state.yaw, panel_state.visible ? 1U : 0U);
         jellyfin_cleanup();
         char renderer_text[48] = {0};
-        bool keep_renderer = renderer_fd >= 0 && renderer_pid > 0;
+        bool keep_renderer = renderer_fd >= 0;
         if (keep_renderer) {
             int fd_flags = fcntl(renderer_fd, F_GETFD);
             if (fd_flags < 0 ||
@@ -2388,9 +2395,10 @@ int main(int argc, char **argv)
     double elapsed = playback_end - playback_start;
     double achieved_fps = elapsed > 0.0 ? frames / elapsed : 0.0;
     double source_fps = (double)fps_numerator / fps_denominator;
+    uint64_t accounted = frames + capture_error_drops;
     uint64_t count_difference =
-        frames < queued_access_units ? queued_access_units - frames
-                                     : frames - queued_access_units;
+        accounted < queued_access_units ? queued_access_units - accounted
+                                        : accounted - queued_access_units;
     uint64_t drops = sequence_drops + count_difference + late_video_drops;
     printf("summary access_units=%" PRIu64 " output_returned=%" PRIu64
            " frames=%" PRIu64 " sequence_drops=%" PRIu64
@@ -2432,7 +2440,8 @@ int main(int argc, char **argv)
     }
     media_packet_unref(&next_packet);
     media_pipeline_close(&pipeline);
-    bool success = frames == queued_access_units && sequence_drops == 0 &&
+    bool success = frames + capture_error_drops == queued_access_units &&
+                   sequence_drops == 0 &&
                    v4l2_errors == 0 && last_seen;
     printf("result=%s scheduler_drops=%" PRIu64 "\n",
            success ? "success" : "failure", drops);

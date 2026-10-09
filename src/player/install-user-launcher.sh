@@ -7,7 +7,7 @@ install_dir="$HOME/.local/lib/stereonaut"
 bin_dir="$HOME/.local/bin"
 applications_dir="$HOME/.local/share/applications"
 
-for file in stereonaut-launcher stereonaut-browser stereonaut-session \
+for file in stereonaut-launcher stereonaut-session \
             stereonaut-renderer video-projection.vert.spv \
             nv12-projection.frag.spv; do
     if [ ! -f "$build_dir/$file" ]; then
@@ -19,7 +19,6 @@ done
 install -d "$install_dir" "$bin_dir" "$applications_dir"
 install -m 0755 \
     "$build_dir/stereonaut-launcher" \
-    "$build_dir/stereonaut-browser" \
     "$build_dir/stereonaut-session" \
     "$build_dir/stereonaut-renderer" \
     "$install_dir/"

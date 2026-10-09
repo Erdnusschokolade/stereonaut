@@ -4,7 +4,9 @@
 #include <stdint.h>
 
 #define PLAYER_UI_PATH_MAX 4096U
+#define PLAYER_UI_MESSAGE_MAX 256U
 
+/* Messages from the XR host to the launcher. */
 enum player_ui_result_type {
     PLAYER_UI_FILE_SELECTED = 1,
     PLAYER_UI_EXIT_REQUESTED = 2,
@@ -13,6 +15,20 @@ enum player_ui_result_type {
 struct player_ui_result {
     uint32_t type;
     char path[PLAYER_UI_PATH_MAX];
+};
+
+/* Commands from the launcher to the XR host. */
+enum player_ui_command_type {
+    /* Show the browser at `path` with an optional status `message`. */
+    PLAYER_UI_BROWSE = 1,
+    /* Attach a playback session: the NV12 socket travels as SCM_RIGHTS. */
+    PLAYER_UI_PLAY = 2,
+};
+
+struct player_ui_command {
+    uint32_t type;
+    char path[PLAYER_UI_PATH_MAX];
+    char message[PLAYER_UI_MESSAGE_MAX];
 };
 
 #endif

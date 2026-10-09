@@ -23,18 +23,13 @@ cc -std=c11 -O2 -Wall -Wextra -Werror \
                 libcurl json-c) \
   -lvulkan -pthread
 
-cc -std=c11 -O2 -Wall -Wextra -Werror \
-  -I/usr/include -I"$project_dir/tools/openxr-playback" \
-  -o "$build_dir/stereonaut-renderer" \
-  "$script_dir/stereonaut-renderer.c" \
-  -lvulkan -lm "$openxr_loader"
-
+# XR host: video renderer, media browser and Jellyfin client in one process.
 cc -std=c11 -O2 -Wall -Wextra -Werror \
   $(pkg-config --cflags libcurl json-c) \
-  -I/usr/include -I"$script_dir" \
-  -o "$build_dir/stereonaut-browser" \
-  "$script_dir/stereonaut-browser.c" "$script_dir/file-browser.c" \
-  "$script_dir/jellyfin.c" \
+  -I/usr/include -I"$script_dir" -I"$project_dir/tools/openxr-playback" \
+  -o "$build_dir/stereonaut-renderer" \
+  "$script_dir/stereonaut-renderer.c" "$script_dir/browser-ui.c" \
+  "$script_dir/file-browser.c" "$script_dir/jellyfin.c" \
   $(pkg-config --libs libcurl json-c) \
   -lvulkan -lm -pthread "$openxr_loader"
 

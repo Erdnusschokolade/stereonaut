@@ -113,3 +113,16 @@ renderer retains only the frame on screen and acknowledges with
 inherited socket (`--renderer fd,pid`) and sends a fresh `INIT`. The held frame
 stays visible, with the panel and a LOADING marker, until the first frame of
 the new stream arrives.
+
+The OpenXR host (`stereonaut-renderer`) is a single long-lived process with a
+browser mode and a player mode, so SteamVR never sees the app disappear
+between screens. `stereonaut-launcher` starts it once and talks to it over a
+SEQPACKET socket (`player-ui-ipc.h`): `BROWSE` shows a location, `PLAY` attaches
+a playback session's NV12 socket, and the host answers `FILE_SELECTED` or
+`EXIT_REQUESTED`. The separate browser process was removed; its panel logic
+lives in `browser-ui.c`. `stereonaut-launcher --play PATH --frames N` runs a
+bounded playback without browsing, which is what the hardware tests use.
+
+Jellyfin titles are addressed as `jf:item:<id>:<folder>`; `jellyfin.c` talks to
+the server (Quick Connect, listings, `PlaybackInfo`) and the session plays the
+resulting Direct Play or HLS URL.

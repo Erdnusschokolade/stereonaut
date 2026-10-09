@@ -22,10 +22,13 @@
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 
+#include "browser-ui.h"
 #include "nv12-playback-ipc.h"
+#include "player-ui-ipc.h"
 
 #define ARRAY_COUNT(a) (sizeof(a) / sizeof((a)[0]))
 #define MAX_IMAGES 8U
+#define VIDEO_BUFFER_COUNT 12U
 #define UBO_STRIDE 256U
 #define DRM_FORMAT_MOD_LINEAR UINT64_C(0)
 #define UI_WIDTH 1024U
@@ -105,6 +108,21 @@ struct app {
     uint32_t video_buffer_count;
     int current_video_index;
     bool current_video_presented;
+    int ui_fd;              /* control socket to the launcher */
+    bool playing;           /* a playback session is attached (ipc_fd) */
+    bool quit;
+    bool xr_exit;           /* the runtime ended the session */
+    bool awaiting_command;  /* a selection was sent, wait for PLAY/BROWSE */
+    struct browser_ui browser;
+    XrSwapchain browser_swapchain;
+    uint32_t browser_image_count;
+    XrSwapchainImageVulkan2KHR browser_images[MAX_IMAGES];
+    bool browser_image_initialized[MAX_IMAGES];
+    VkBuffer browser_staging_buffer;
+    VkDeviceMemory browser_staging_memory;
+    uint32_t *browser_pixels;
+    VkCommandBuffer browser_command;
+    VkFence browser_fence;
     int ipc_fd;
     bool eos_received;
     PFN_vkImportSemaphoreFdKHR import_semaphore_fd;
@@ -349,13 +367,13 @@ static void initialize_actions(struct app *app)
 }
 
 static void apply_init(struct app *app, const struct nv12_ipc_message *message,
-                       const struct msghdr *received, bool first)
+                       const struct msghdr *received)
 {
     need(message->buffer_count == 12 &&
              message->buffer_count <= NV12_IPC_MAX_BUFFERS,
          "NV12 IPC buffer count is not twelve");
-    need(first || message->buffer_count == app->video_buffer_count,
-         "NV12 IPC re-init changed the buffer count");
+    need(message->buffer_count == app->video_buffer_count,
+         "NV12 IPC init changed the buffer count");
     struct cmsghdr *header = CMSG_FIRSTHDR(received);
     need(header && header->cmsg_level == SOL_SOCKET &&
              header->cmsg_type == SCM_RIGHTS,
@@ -395,36 +413,10 @@ static void apply_init(struct app *app, const struct nv12_ipc_message *message,
          "invalid projection mode in IPC contract");
     need(app->stereo_layout <= NV12_STEREO_TB,
          "invalid stereo layout in IPC contract");
-    /* After the first INIT the renderer owns the panel placement. */
-    if (first && message->panel_valid) {
-        app->panel_x = message->panel_x;
-        app->panel_y = message->panel_y;
-        app->panel_z = message->panel_z;
-        app->panel_yaw = message->panel_yaw;
-        app->ui_visible = message->panel_visible != 0;
-    }
+    /* The host owns the panel placement for its whole lifetime. */
     printf("render_config projection=%u stereo=%u swap_eyes=%u"
            " view0=left view1=right\n",
            app->projection_mode, app->stereo_layout, app->swap_eyes);
-}
-
-static void receive_initial_buffers(struct app *app)
-{
-    struct nv12_ipc_message message = {0};
-    char control[CMSG_SPACE(sizeof(int) * NV12_IPC_MAX_BUFFERS)] = {0};
-    struct iovec iov = {.iov_base = &message, .iov_len = sizeof(message)};
-    struct msghdr received = {
-        .msg_iov = &iov, .msg_iovlen = 1,
-        .msg_control = control, .msg_controllen = sizeof(control),
-    };
-    ssize_t bytes;
-    do {
-        bytes = recvmsg(app->ipc_fd, &received, 0);
-    } while (bytes < 0 && errno == EINTR);
-    if (bytes < 0) { perror("recvmsg NV12 init"); exit(2); }
-    need((size_t)bytes == sizeof(message) && message.type == NV12_IPC_INIT,
-         "invalid NV12 IPC init message");
-    apply_init(app, &message, &received, true);
 }
 
 static void send_message(struct app *app, const struct nv12_ipc_message *message)
@@ -433,6 +425,11 @@ static void send_message(struct app *app, const struct nv12_ipc_message *message
     do {
         written = send(app->ipc_fd, message, sizeof(*message), MSG_NOSIGNAL);
     } while (written < 0 && errno == EINTR);
+    if (written < 0 && (errno == EPIPE || errno == ECONNRESET ||
+                        errno == ENOTCONN)) {
+        app->eos_received = true; /* the session is gone: end playback */
+        return;
+    }
     if (written < 0) { perror("send NV12 IPC response"); exit(2); }
     need((size_t)written == sizeof(*message), "short NV12 IPC response");
 }
@@ -495,6 +492,10 @@ static void receive_frame_messages(struct app *app)
         if (bytes < 0 && errno == EINTR)
             continue;
         if (bytes == 0) {
+            app->eos_received = true;
+            return;
+        }
+        if (bytes < 0 && errno == ECONNRESET) {
             app->eos_received = true;
             return;
         }
@@ -660,6 +661,8 @@ static void poll_events(struct app *app)
         } else if (app->state == XR_SESSION_STATE_EXITING ||
                    app->state == XR_SESSION_STATE_LOSS_PENDING) {
             app->running = false;
+            app->quit = true;
+            app->xr_exit = true;
             return;
         }
     }
@@ -961,7 +964,8 @@ static void import_video_buffer(struct app *app, uint32_t i)
     printf("nv12_import index=%u memory_type=%u\n", i, type);
 }
 
-static void import_nv12_frames(struct app *app)
+/* Format check and the YCbCr sampler shared by every imported frame. */
+static void create_video_sampler(struct app *app)
 {
     VkDrmFormatModifierPropertiesListEXT list = {
         .sType = VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT,
@@ -1037,15 +1041,9 @@ static void import_nv12_frames(struct app *app)
             vkCreateSampler(app->device, &sampler, NULL,
                             &app->video_sampler));
 
-    for (uint32_t i = 0; i < app->video_buffer_count; ++i)
-        import_video_buffer(app, i);
-    printf("nv12_contract format=%d modifier=0 memory_planes=2"
-           " plane0_offset=0 plane0_pitch=%u plane1_offset=%" PRIu64
-           " plane1_pitch=%u bytes=%" PRIu64
-           " sampled=1 ycbcr_709=1 range=narrow chroma_location=%s\n",
-           VK_FORMAT_G8_B8R8_2PLANE_420_UNORM, app->video_stride,
-           (uint64_t)app->uv_offset, app->video_stride,
-           (uint64_t)app->dma_buf_size,
+    printf("nv12_sampler format=%d ycbcr_709=1 range=narrow"
+           " chroma_location=%s\n",
+           VK_FORMAT_G8_B8R8_2PLANE_420_UNORM,
            chroma_location == VK_CHROMA_LOCATION_MIDPOINT ? "midpoint"
                                                           : "cosited_even");
 }
@@ -1519,10 +1517,8 @@ static void create_render_resources(struct app *app)
     need_vk("vkAllocateDescriptorSets",
             vkAllocateDescriptorSets(app->device, &descriptor_allocate,
                                      sets));
-    for (uint32_t i = 0; i < app->video_buffer_count; ++i) {
+    for (uint32_t i = 0; i < app->video_buffer_count; ++i)
         app->video_buffers[i].descriptor_set = sets[i];
-        write_video_descriptor(app, sets[i], app->video_buffers[i].view);
-    }
     app->spare_set = sets[app->video_buffer_count];
 }
 
@@ -1583,7 +1579,7 @@ static void reinitialize_video(struct app *app,
                                const struct nv12_ipc_message *message,
                                const struct msghdr *received)
 {
-    apply_init(app, message, received, false);
+    apply_init(app, message, received);
     for (uint32_t i = 0; i < app->video_buffer_count; ++i) {
         import_video_buffer(app, i);
         write_video_descriptor(app, app->video_buffers[i].descriptor_set,
@@ -1643,17 +1639,18 @@ static bool panel_hit_inside(const struct panel_hit *hit)
 
 /* Intersect the aim ray with the (unbounded) panel plane. u/v are panel
  * texture coordinates and may lie outside [0,1). */
-static struct panel_hit panel_ray(const struct app *app, XrPosef aim)
+static struct panel_hit panel_ray_at(XrVector3f center, float yaw,
+                                     float width_meters, float height_meters,
+                                     XrPosef aim)
 {
     struct panel_hit hit = {0};
-    XrQuaternionf orientation = yaw_quaternion(app->panel_yaw);
+    XrQuaternionf orientation = yaw_quaternion(yaw);
     XrVector3f normal = rotate_vector(orientation, (XrVector3f){0, 0, 1});
     XrVector3f direction =
         rotate_vector(aim.orientation, (XrVector3f){0, 0, -1});
     float denominator = vector_dot(direction, normal);
     if (denominator > -0.0001f)
         return hit;
-    XrVector3f center = {app->panel_x, app->panel_y, app->panel_z};
     XrVector3f to_center = {center.x - aim.position.x,
                             center.y - aim.position.y,
                             center.z - aim.position.z};
@@ -1665,9 +1662,18 @@ static struct panel_hit panel_ray(const struct app *app, XrPosef aim)
                         aim.position.z + direction.z * distance - center.z};
     XrVector3f local = rotate_vector(quaternion_conjugate(orientation), point);
     hit.plane = true;
-    hit.u = local.x / UI_PANEL_WIDTH_METERS + 0.5f;
-    hit.v = 0.5f - local.y / UI_PANEL_HEIGHT_METERS;
+    hit.u = local.x / width_meters + 0.5f;
+    hit.v = 0.5f - local.y / height_meters;
     return hit;
+}
+
+/* Intersect the aim ray with the (unbounded) player panel plane. u/v are
+ * panel texture coordinates and may lie outside [0,1). */
+static struct panel_hit panel_ray(const struct app *app, XrPosef aim)
+{
+    return panel_ray_at((XrVector3f){app->panel_x, app->panel_y, app->panel_z},
+                        app->panel_yaw, UI_PANEL_WIDTH_METERS,
+                        UI_PANEL_HEIGHT_METERS, aim);
 }
 
 static int ui_hit_test(const struct app *app, float u, float v)
@@ -1957,6 +1963,368 @@ static XrCompositionLayerQuad make_ui_layer(const struct app *app)
     };
 }
 
+
+/* ---- browser mode ---------------------------------------------------- */
+
+#define BROWSER_PANEL_Z (-2.0f)
+
+static void create_browser_texture(struct app *app)
+{
+    XrSwapchainCreateInfo info = {
+        .type = XR_TYPE_SWAPCHAIN_CREATE_INFO,
+        .usageFlags = XR_SWAPCHAIN_USAGE_SAMPLED_BIT |
+                      XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT,
+        .format = app->ui_format,
+        .sampleCount = 1,
+        .width = BROWSER_UI_WIDTH,
+        .height = BROWSER_UI_HEIGHT,
+        .faceCount = 1,
+        .arraySize = 1,
+        .mipCount = 1,
+    };
+    need_xr("xrCreateSwapchain(browser)",
+            xrCreateSwapchain(app->session, &info, &app->browser_swapchain));
+    need_xr("xrEnumerateSwapchainImages(browser count)",
+            xrEnumerateSwapchainImages(app->browser_swapchain, 0,
+                                       &app->browser_image_count, NULL));
+    need(app->browser_image_count > 0 && app->browser_image_count <= MAX_IMAGES,
+         "unexpected browser swapchain image count");
+    for (uint32_t i = 0; i < app->browser_image_count; ++i)
+        app->browser_images[i].type = XR_TYPE_SWAPCHAIN_IMAGE_VULKAN2_KHR;
+    need_xr("xrEnumerateSwapchainImages(browser list)",
+            xrEnumerateSwapchainImages(
+                app->browser_swapchain, app->browser_image_count,
+                &app->browser_image_count,
+                (XrSwapchainImageBaseHeader *)app->browser_images));
+    VkCommandBufferAllocateInfo commands = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .commandPool = app->command_pool,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = 1,
+    };
+    need_vk("vkAllocateCommandBuffers(browser)",
+            vkAllocateCommandBuffers(app->device, &commands,
+                                     &app->browser_command));
+    VkFenceCreateInfo fence = {
+        .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+        .flags = VK_FENCE_CREATE_SIGNALED_BIT,
+    };
+    need_vk("vkCreateFence(browser)",
+            vkCreateFence(app->device, &fence, NULL, &app->browser_fence));
+    const VkDeviceSize bytes = (VkDeviceSize)BROWSER_UI_WIDTH *
+                               BROWSER_UI_HEIGHT * 4U;
+    VkBufferCreateInfo buffer = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = bytes,
+        .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+    };
+    need_vk("vkCreateBuffer(browser staging)",
+            vkCreateBuffer(app->device, &buffer, NULL,
+                           &app->browser_staging_buffer));
+    VkMemoryRequirements memory;
+    vkGetBufferMemoryRequirements(app->device, app->browser_staging_buffer,
+                                  &memory);
+    VkMemoryAllocateInfo allocation = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize = memory.size,
+        .memoryTypeIndex = memory_type(
+            app->physical, memory.memoryTypeBits,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
+    };
+    need_vk("vkAllocateMemory(browser staging)",
+            vkAllocateMemory(app->device, &allocation, NULL,
+                             &app->browser_staging_memory));
+    need_vk("vkBindBufferMemory(browser staging)",
+            vkBindBufferMemory(app->device, app->browser_staging_buffer,
+                               app->browser_staging_memory, 0));
+    need_vk("vkMapMemory(browser staging)",
+            vkMapMemory(app->device, app->browser_staging_memory, 0, bytes, 0,
+                        (void **)&app->browser_pixels));
+    app->browser.dirty = true;
+}
+
+static void upload_browser(struct app *app)
+{
+    browser_ui_render(&app->browser, app->browser_pixels, app->ui_bgra);
+    XrSwapchainImageAcquireInfo acquire = {
+        .type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO,
+    };
+    uint32_t index = 0;
+    need_xr("xrAcquireSwapchainImage(browser)",
+            xrAcquireSwapchainImage(app->browser_swapchain, &acquire, &index));
+    XrSwapchainImageWaitInfo wait = {
+        .type = XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO,
+        .timeout = XR_INFINITE_DURATION,
+    };
+    need_xr("xrWaitSwapchainImage(browser)",
+            xrWaitSwapchainImage(app->browser_swapchain, &wait));
+    need(index < app->browser_image_count, "invalid browser swapchain index");
+    need_vk("vkWaitForFences(browser)",
+            vkWaitForFences(app->device, 1, &app->browser_fence, VK_TRUE,
+                            UINT64_C(5000000000)));
+    need_vk("vkResetFences(browser)",
+            vkResetFences(app->device, 1, &app->browser_fence));
+    need_vk("vkResetCommandBuffer(browser)",
+            vkResetCommandBuffer(app->browser_command, 0));
+    VkCommandBufferBeginInfo begin = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+    };
+    need_vk("vkBeginCommandBuffer(browser)",
+            vkBeginCommandBuffer(app->browser_command, &begin));
+    bool initialized = app->browser_image_initialized[index];
+    VkImageMemoryBarrier transfer = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask = initialized ? VK_ACCESS_SHADER_READ_BIT : 0,
+        .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+        .oldLayout = initialized ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+                                 : VK_IMAGE_LAYOUT_UNDEFINED,
+        .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+        .image = app->browser_images[index].image,
+        .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                             .levelCount = 1, .layerCount = 1},
+    };
+    vkCmdPipelineBarrier(app->browser_command,
+                         initialized ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
+                                     : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL,
+                         1, &transfer);
+    VkBufferImageCopy copy = {
+        .imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                             .layerCount = 1},
+        .imageExtent = {BROWSER_UI_WIDTH, BROWSER_UI_HEIGHT, 1},
+    };
+    vkCmdCopyBufferToImage(app->browser_command, app->browser_staging_buffer,
+                           app->browser_images[index].image,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+    VkImageMemoryBarrier sample = transfer;
+    sample.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    sample.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    sample.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    sample.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    vkCmdPipelineBarrier(app->browser_command, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL, 0,
+                         NULL, 1, &sample);
+    need_vk("vkEndCommandBuffer(browser)",
+            vkEndCommandBuffer(app->browser_command));
+    VkSubmitInfo submit = {
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .commandBufferCount = 1,
+        .pCommandBuffers = &app->browser_command,
+    };
+    need_vk("vkQueueSubmit(browser)",
+            vkQueueSubmit(app->queue, 1, &submit, app->browser_fence));
+    need_vk("vkWaitForFences(browser completion)",
+            vkWaitForFences(app->device, 1, &app->browser_fence, VK_TRUE,
+                            UINT64_C(5000000000)));
+    app->browser_image_initialized[index] = true;
+    XrSwapchainImageReleaseInfo release = {
+        .type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO,
+    };
+    need_xr("xrReleaseSwapchainImage(browser)",
+            xrReleaseSwapchainImage(app->browser_swapchain, &release));
+}
+
+static XrCompositionLayerQuad make_browser_layer(const struct app *app)
+{
+    return (XrCompositionLayerQuad){
+        .type = XR_TYPE_COMPOSITION_LAYER_QUAD,
+        .layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT,
+        .space = app->space,
+        .eyeVisibility = XR_EYE_VISIBILITY_BOTH,
+        .subImage = {
+            .swapchain = app->browser_swapchain,
+            .imageRect = {.extent = {BROWSER_UI_WIDTH, BROWSER_UI_HEIGHT}},
+        },
+        .pose = {{0, 0, 0, 1}, {0, 0, BROWSER_PANEL_Z}},
+        .size = {BROWSER_UI_PANEL_WIDTH_METERS,
+                 BROWSER_UI_PANEL_HEIGHT_METERS},
+    };
+}
+
+/* ---- launcher control socket ---------------------------------------- */
+
+static void send_control(struct app *app, uint32_t type, const char *path)
+{
+    struct player_ui_result result = {.type = type};
+    if (path)
+        snprintf(result.path, sizeof(result.path), "%s", path);
+    ssize_t written;
+    do {
+        written = send(app->ui_fd, &result, sizeof(result), MSG_NOSIGNAL);
+    } while (written < 0 && errno == EINTR);
+    if (written != (ssize_t)sizeof(result))
+        app->quit = true; /* the launcher is gone */
+}
+
+/* Back to the browser: drop every video import and reset player state. */
+static void end_playback(struct app *app)
+{
+    need_vk("vkDeviceWaitIdle(end playback)", vkDeviceWaitIdle(app->device));
+    discard_held_frame(app);
+    for (uint32_t i = 0; i < app->video_buffer_count; ++i)
+        destroy_video_buffer(app, &app->video_buffers[i]);
+    if (app->ipc_fd >= 0)
+        close(app->ipc_fd);
+    app->ipc_fd = -1;
+    app->playing = false;
+    app->eos_received = false;
+    app->current_video_index = -1;
+    app->current_video_presented = false;
+    app->awaiting_frame = true;
+    app->seek_pending = false;
+    app->grab_hand = -1;
+    app->scrub_hand = -1;
+    app->ui_hover = 0;
+    app->ui_pointer_visible = false;
+    app->player_state = NV12_PLAYER_PLAYING;
+    printf("openxr_summary xr_frames=%" PRIu64
+           " rendered_frames=%" PRIu64 " received_frames=%" PRIu64
+           " unique_video_frames=%" PRIu64
+           " repeated_video_frames=%" PRIu64
+           " hidden_video_frames=%" PRIu64
+           " pipeline_skipped_frames=%" PRIu64
+           " released_frames=%" PRIu64
+           " session_changes=%" PRIu64 "\n",
+           app->xr_frames, app->rendered_frames, app->received_frames,
+           app->unique_video_frames, app->repeated_video_frames,
+           app->hidden_video_frames, app->pipeline_skipped_frames,
+           app->released_frames, app->session_changes);
+    app->xr_frames = app->rendered_frames = app->received_frames = 0;
+    app->unique_video_frames = app->repeated_video_frames = 0;
+    app->hidden_video_frames = app->pipeline_skipped_frames = 0;
+    app->released_frames = 0;
+    app->position_us = 0;
+    app->duration_us = 0;
+    app->video_width = app->video_height = 0;
+    app->select_down[0] = app->select_down[1] = false;
+    app->ui_dirty = true;
+    app->browser.dirty = true;
+    printf("playback_ended\n");
+}
+
+static void begin_playback(struct app *app, int fd)
+{
+    if (app->playing)
+        end_playback(app);
+    app->ipc_fd = fd;
+    app->playing = true;
+    app->awaiting_command = false;
+    app->eos_received = false;
+    app->ui_dirty = true;
+    app->select_down[0] = app->select_down[1] = false;
+    printf("playback_attached\n");
+}
+
+static void handle_control(struct app *app)
+{
+    for (;;) {
+        struct player_ui_command command = {0};
+        char control[CMSG_SPACE(sizeof(int))] = {0};
+        struct iovec iov = {.iov_base = &command, .iov_len = sizeof(command)};
+        struct msghdr received = {
+            .msg_iov = &iov, .msg_iovlen = 1,
+            .msg_control = control, .msg_controllen = sizeof(control),
+        };
+        ssize_t bytes = recvmsg(app->ui_fd, &received, MSG_DONTWAIT);
+        if (bytes < 0 && errno == EINTR)
+            continue;
+        if (bytes < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+            return;
+        if (bytes <= 0) {
+            app->quit = true; /* the launcher closed the socket */
+            return;
+        }
+        if ((size_t)bytes != sizeof(command))
+            continue;
+        if (command.type == PLAYER_UI_PLAY) {
+            struct cmsghdr *header = CMSG_FIRSTHDR(&received);
+            if (header && header->cmsg_level == SOL_SOCKET &&
+                header->cmsg_type == SCM_RIGHTS &&
+                header->cmsg_len == CMSG_LEN(sizeof(int))) {
+                int fd;
+                memcpy(&fd, CMSG_DATA(header), sizeof(fd));
+                begin_playback(app, fd);
+            }
+        } else if (command.type == PLAYER_UI_BROWSE) {
+            if (app->playing)
+                end_playback(app);
+            command.path[sizeof(command.path) - 1] = '\0';
+            command.message[sizeof(command.message) - 1] = '\0';
+            browser_ui_navigate(&app->browser, command.path, command.message);
+            app->awaiting_command = false;
+        }
+    }
+}
+
+static void sync_browser_input(struct app *app, XrTime time)
+{
+    XrActiveActionSet active = {.actionSet = app->action_set};
+    XrActionsSyncInfo sync = {
+        .type = XR_TYPE_ACTIONS_SYNC_INFO,
+        .countActiveActionSets = 1,
+        .activeActionSets = &active,
+    };
+    need_xr("xrSyncActions(browser)", xrSyncActions(app->session, &sync));
+    const XrSpaceLocationFlags valid =
+        XR_SPACE_LOCATION_POSITION_VALID_BIT |
+        XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+    bool pointer_visible = false, pressed = false;
+    int pointer_x = 0, pointer_y = 0, hover = -1;
+    for (unsigned hand = 0; hand < 2; ++hand) {
+        XrActionStateGetInfo pose_info = {
+            .type = XR_TYPE_ACTION_STATE_GET_INFO,
+            .action = app->aim_action,
+            .subactionPath = app->hands[hand],
+        };
+        XrActionStatePose pose = {.type = XR_TYPE_ACTION_STATE_POSE};
+        need_xr("xrGetActionStatePose(browser)",
+                xrGetActionStatePose(app->session, &pose_info, &pose));
+        struct hand_input input = {0};
+        read_select(app, hand, &input);
+        if (input.select_edge)
+            pressed = true;
+        if (!pose.isActive)
+            continue;
+        XrSpaceLocation location = {.type = XR_TYPE_SPACE_LOCATION};
+        need_xr("xrLocateSpace(browser aim)",
+                xrLocateSpace(app->aim_spaces[hand], app->space, time,
+                              &location));
+        if ((location.locationFlags & valid) != valid)
+            continue;
+        struct panel_hit hit = panel_ray_at(
+            (XrVector3f){0, 0, BROWSER_PANEL_Z}, 0.0f,
+            BROWSER_UI_PANEL_WIDTH_METERS, BROWSER_UI_PANEL_HEIGHT_METERS,
+            location.pose);
+        if (panel_hit_inside(&hit)) {
+            pointer_visible = true;
+            pointer_x = (int)(hit.u * BROWSER_UI_WIDTH);
+            pointer_y = (int)(hit.v * BROWSER_UI_HEIGHT);
+            hover = browser_ui_hit_test(hit.u, hit.v);
+        }
+    }
+    browser_ui_set_pointer(&app->browser, pointer_visible, pointer_x,
+                           pointer_y, hover);
+    if (!pressed || app->awaiting_command)
+        return;
+    char path[PLAYER_UI_PATH_MAX];
+    switch (browser_ui_activate(&app->browser, path, sizeof(path))) {
+    case BROWSER_UI_FILE_SELECTED:
+        app->awaiting_command = true;
+        send_control(app, PLAYER_UI_FILE_SELECTED, path);
+        break;
+    case BROWSER_UI_EXIT_REQUESTED:
+        app->awaiting_command = true;
+        send_control(app, PLAYER_UI_EXIT_REQUESTED, NULL);
+        app->quit = true;
+        break;
+    case BROWSER_UI_NONE:
+        break;
+    }
+}
+
 static void render_frame(struct app *app)
 {
     XrFrameState frame_state = {.type = XR_TYPE_FRAME_STATE};
@@ -1966,35 +2334,29 @@ static void render_frame(struct app *app)
     need_xr("xrBeginFrame", xrBeginFrame(app->session, &begin));
     ++app->xr_frames;
     app->xr_should_render = frame_state.shouldRender;
-    sync_player_input(app, frame_state.predictedDisplayTime);
-    if (app->ui_dirty)
-        upload_ui(app);
+    if (app->playing) {
+        sync_player_input(app, frame_state.predictedDisplayTime);
+        if (app->ui_dirty)
+            upload_ui(app);
+    } else {
+        sync_browser_input(app, frame_state.predictedDisplayTime);
+        if (app->browser.dirty)
+            upload_browser(app);
+    }
     if (!frame_state.shouldRender) {
         XrFrameEndInfo end = {.type = XR_TYPE_FRAME_END_INFO, .displayTime = frame_state.predictedDisplayTime,
             .environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE};
         need_xr("xrEndFrame(empty)", xrEndFrame(app->session, &end));
         return;
     }
+    /* Without a decoded frame (browser, start, seek preroll) only the clear
+     * colour and the panel are shown, so the headset never falls back to the
+     * Steam environment. */
     struct video_buffer *video = NULL;
-    if (app->current_video_index >= 0)
+    if (app->playing && app->current_video_index >= 0)
         video = &app->video_buffers[app->current_video_index];
-    else if (app->has_held)
+    else if (app->playing && app->has_held)
         video = &app->held;
-    if (!video) {
-        /* No decoded frame yet (start or seek preroll): keep the panel
-         * visible so the interface does not vanish while loading. */
-        XrCompositionLayerQuad ui_only = make_ui_layer(app);
-        const XrCompositionLayerBaseHeader *ui_layers[] = {
-            (const XrCompositionLayerBaseHeader *)&ui_only,
-        };
-        XrFrameEndInfo end = {.type = XR_TYPE_FRAME_END_INFO,
-            .displayTime = frame_state.predictedDisplayTime,
-            .environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE,
-            .layerCount = app->ui_visible ? 1U : 0U,
-            .layers = ui_layers};
-        need_xr("xrEndFrame(no video)", xrEndFrame(app->session, &end));
-        return;
-    }
     XrView views[2] = {{.type = XR_TYPE_VIEW}, {.type = XR_TYPE_VIEW}};
     XrViewState view_state = {.type = XR_TYPE_VIEW_STATE};
     uint32_t count = 0;
@@ -2061,8 +2423,8 @@ static void render_frame(struct app *app)
             .source_info = {
                 (float)app->video_width,
                 (float)app->video_height,
-                1.0f / (float)app->video_width,
-                1.0f / (float)app->video_height,
+                app->video_width ? 1.0f / (float)app->video_width : 0.0f,
+                app->video_height ? 1.0f / (float)app->video_height : 0.0f,
             },
         };
         memcpy((uint8_t *)app->uniform_mapping + eye * UBO_STRIDE,
@@ -2086,25 +2448,28 @@ static void render_frame(struct app *app)
         .newLayout = VK_IMAGE_LAYOUT_GENERAL,
         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT,
         .dstQueueFamilyIndex = app->queue_family,
-        .image = video->image,
+        .image = video ? video->image : VK_NULL_HANDLE,
         .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                              .levelCount = 1, .layerCount = 1},
     };
-    vkCmdPipelineBarrier(app->command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL,
-                         0, NULL, 1, &video_acquire);
+    if (video)
+        vkCmdPipelineBarrier(app->command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL,
+                             0, NULL, 1, &video_acquire);
     for (uint32_t eye = 0; eye < 2; ++eye) {
         VkClearValue clear = {.color = {{0.005f, 0.005f, 0.008f, 1.0f}}};
         VkRenderPassBeginInfo pass = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
             .renderPass = app->render_pass, .framebuffer = app->framebuffers[image_index][eye],
             .renderArea = {.extent = {app->width, app->height}}, .clearValueCount = 1, .pClearValues = &clear};
         vkCmdBeginRenderPass(app->command, &pass, VK_SUBPASS_CONTENTS_INLINE);
-        vkCmdBindPipeline(app->command, VK_PIPELINE_BIND_POINT_GRAPHICS, app->pipeline);
-        uint32_t offset = eye * UBO_STRIDE;
-        vkCmdBindDescriptorSets(app->command, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                app->pipeline_layout, 0, 1,
-                                &video->descriptor_set, 1, &offset);
-        vkCmdDraw(app->command, 4, 1, 0, 0);
+        if (video) {
+            vkCmdBindPipeline(app->command, VK_PIPELINE_BIND_POINT_GRAPHICS, app->pipeline);
+            uint32_t offset = eye * UBO_STRIDE;
+            vkCmdBindDescriptorSets(app->command, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    app->pipeline_layout, 0, 1,
+                                    &video->descriptor_set, 1, &offset);
+            vkCmdDraw(app->command, 4, 1, 0, 0);
+        }
         vkCmdEndRenderPass(app->command);
     }
     VkImageMemoryBarrier video_release = video_acquire;
@@ -2112,14 +2477,15 @@ static void render_frame(struct app *app)
     video_release.dstAccessMask = 0;
     video_release.srcQueueFamilyIndex = app->queue_family;
     video_release.dstQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
-    vkCmdPipelineBarrier(app->command, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                         VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, NULL,
-                         0, NULL, 1, &video_release);
+    if (video)
+        vkCmdPipelineBarrier(app->command, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                             VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, NULL,
+                             0, NULL, 1, &video_release);
     need_vk("vkEndCommandBuffer(render)", vkEndCommandBuffer(app->command));
     VkPipelineStageFlags producer_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
     VkSubmitInfo submit = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
         .commandBufferCount = 1, .pCommandBuffers = &app->command};
-    if (video->producer_wait_pending) {
+    if (video && video->producer_wait_pending) {
         struct dma_buf_export_sync_file sync_export = {
             .flags = DMA_BUF_SYNC_READ, .fd = -1,
         };
@@ -2152,17 +2518,22 @@ static void render_frame(struct app *app)
         projection_views[eye].subImage = (XrSwapchainSubImage){.swapchain = app->swapchain, .imageRect = {.extent = {(int32_t)app->width, (int32_t)app->height}}, .imageArrayIndex = eye};
     }
     XrCompositionLayerProjection layer = {.type = XR_TYPE_COMPOSITION_LAYER_PROJECTION, .space = app->space, .viewCount = 2, .views = projection_views};
-    XrCompositionLayerQuad ui_layer = make_ui_layer(app);
+    XrCompositionLayerQuad ui_layer = app->playing
+                                          ? make_ui_layer(app)
+                                          : make_browser_layer(app);
     const XrCompositionLayerBaseHeader *layers[] = {
         (const XrCompositionLayerBaseHeader *)&layer,
         (const XrCompositionLayerBaseHeader *)&ui_layer,
     };
+    bool show_ui = app->playing ? app->ui_visible : true;
     XrFrameEndInfo end = {.type = XR_TYPE_FRAME_END_INFO, .displayTime = frame_state.predictedDisplayTime,
         .environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE,
-        .layerCount = app->ui_visible ? ARRAY_COUNT(layers) : 1U,
+        .layerCount = show_ui ? ARRAY_COUNT(layers) : 1U,
         .layers = layers};
     need_xr("xrEndFrame", xrEndFrame(app->session, &end));
     ++app->rendered_frames;
+    if (!video)
+        return;
     if (app->current_video_presented)
         ++app->repeated_video_frames;
     else {
@@ -2175,11 +2546,16 @@ int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
     if (argc != 2) {
-        fprintf(stderr, "usage: %s IPC_FD\n", argv[0]);
+        fprintf(stderr, "usage: %s UI_FD\n", argv[0]);
         return 2;
     }
     struct app app = {0};
-    app.ipc_fd = (int)parse_u64(argv[1], "IPC fd");
+    app.ui_fd = (int)parse_u64(argv[1], "UI fd");
+    app.ipc_fd = -1;
+    app.video_buffer_count = VIDEO_BUFFER_COUNT;
+    for (uint32_t i = 0; i < NV12_IPC_MAX_BUFFERS; ++i)
+        app.video_buffers[i].dma_buf_fd = -1;
+    app.held.dma_buf_fd = -1;
     app.current_video_index = -1;
     app.player_state = NV12_PLAYER_PLAYING;
     app.ui_visible = true;
@@ -2189,7 +2565,12 @@ int main(int argc, char **argv)
     app.grab_hand = -1;
     app.scrub_hand = -1;
     app.awaiting_frame = true;
-    receive_initial_buffers(&app);
+    char browser_error[256] = {0};
+    if (browser_ui_open(&app.browser, "root:", NULL, browser_error,
+                        sizeof(browser_error)) < 0) {
+        fprintf(stderr, "browser_error=%s\n", browser_error);
+        return 2;
+    }
     initialize_xr_vulkan(&app);
     XrGraphicsBindingVulkan2KHR binding = {.type = XR_TYPE_GRAPHICS_BINDING_VULKAN2_KHR,
         .instance = app.instance, .physicalDevice = app.physical, .device = app.device, .queueFamilyIndex = app.queue_family, .queueIndex = 0};
@@ -2215,31 +2596,27 @@ int main(int argc, char **argv)
             xrCreateReferenceSpace(app.session, &space_info, &app.view_space));
     initialize_swapchain(&app);
     create_ui_swapchain(&app);
-    import_nv12_frames(&app);
+    create_video_sampler(&app);
     create_render_resources(&app);
     create_ui_resources(&app);
-    send_ipc(&app, NV12_IPC_READY, 0);
-    for (;;) {
-        receive_frame_messages(&app);
+    create_browser_texture(&app);
+    printf("host_ready\n");
+    while (!app.quit) {
+        handle_control(&app);
+        if (app.playing)
+            receive_frame_messages(&app);
+        browser_ui_update(&app.browser);
         poll_events(&app);
-        if (app.running) render_frame(&app); else nanosleep(&pause, NULL);
-        if (app.eos_received) {
-            release_current_video(&app);
+        if (app.quit)
             break;
-        }
+        if (app.running) render_frame(&app); else nanosleep(&pause, NULL);
+        if (app.playing && app.eos_received)
+            end_playback(&app);
     }
-    printf("openxr_summary xr_frames=%" PRIu64
-           " rendered_frames=%" PRIu64 " received_frames=%" PRIu64
-           " unique_video_frames=%" PRIu64
-           " repeated_video_frames=%" PRIu64
-           " hidden_video_frames=%" PRIu64
-           " pipeline_skipped_frames=%" PRIu64
-           " released_frames=%" PRIu64
-           " session_changes=%" PRIu64 "\n",
-           app.xr_frames, app.rendered_frames, app.received_frames,
-           app.unique_video_frames, app.repeated_video_frames,
-           app.hidden_video_frames, app.pipeline_skipped_frames,
-           app.released_frames,
-           app.session_changes);
+    if (app.xr_exit)
+        send_control(&app, PLAYER_UI_EXIT_REQUESTED, NULL);
+    if (app.playing)
+        end_playback(&app);
+    browser_ui_close(&app.browser);
     return 0;
 }
