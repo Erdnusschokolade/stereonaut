@@ -14,11 +14,13 @@
 int main(int argc, char **argv)
 {
     if (argc < 2 || argc > 3) {
-        fprintf(stderr, "usage: %s CONTAINER [--decode-only]\n", argv[0]);
+        fprintf(stderr,
+                "usage: %s CONTAINER [--decode-only|--seek-test]\n", argv[0]);
         return 2;
     }
     bool device = argc == 2;
-    if (argc == 3 && strcmp(argv[2], "--decode-only") != 0) {
+    bool seek_test = argc == 3 && strcmp(argv[2], "--seek-test") == 0;
+    if (argc == 3 && strcmp(argv[2], "--decode-only") != 0 && !seek_test) {
         fprintf(stderr, "unknown option: %s\n", argv[2]);
         return 2;
     }
@@ -51,6 +53,17 @@ int main(int argc, char **argv)
         return 1;
     }
     avcodec_parameters_free(&parameters);
+    int64_t seek_target_us = INT64_C(10000000);
+    if (seek_test &&
+        (media_demux_seek(demux, seek_target_us,
+                          error, sizeof(error)) < 0 ||
+         audio_output_reset(audio, seek_target_us,
+                            error, sizeof(error)) < 0)) {
+        fprintf(stderr, "seek_error=%s\n", error);
+        audio_output_close(&audio);
+        media_demux_close(&demux);
+        return 1;
+    }
 
     bool paused_once = false;
     while (true) {
@@ -92,7 +105,10 @@ int main(int argc, char **argv)
             }
             paused_once = true;
         }
-        if (clock >= 3000000)
+        int64_t stop_clock = seek_test
+                                 ? seek_target_us + INT64_C(1000000)
+                                 : INT64_C(3000000);
+        if (clock >= stop_clock)
             break;
     }
     struct audio_output_stats stats;
@@ -100,13 +116,17 @@ int main(int argc, char **argv)
     printf("audio codec=%s output=%s decoded_frames=%" PRIu64
            " samples=%" PRIu64 " clock_us=%" PRId64
            " delay_samples=%" PRId64 " recoveries=%" PRIu64
-           " hardware_pause=%u pause_cycle=%u\n",
+           " hardware_pause=%u pause_cycle=%u seek_target_us=%" PRId64 "\n",
            avcodec_get_name(info->audio_codec),
            device ? "alsa-default" : "decode-only",
            stats.decoded_frames, stats.output_samples, stats.clock_us,
            stats.device_delay_samples, stats.recoveries,
-           stats.hardware_pause, paused_once);
+           stats.hardware_pause, paused_once,
+           seek_test ? seek_target_us : INT64_C(0));
+    bool success = !seek_test ||
+                   (stats.clock_us >= seek_target_us &&
+                    stats.clock_us < seek_target_us + INT64_C(2000000));
     audio_output_close(&audio);
     media_demux_close(&demux);
-    return 0;
+    return success ? 0 : 1;
 }

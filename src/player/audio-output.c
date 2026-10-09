@@ -27,6 +27,7 @@ struct audio_output {
     int64_t base_pts_us;
     int64_t reset_target_us;
     bool base_valid;
+    bool discard_active;
     uint64_t decoded_frames;
     uint64_t output_samples;
     uint64_t recoveries;
@@ -207,14 +208,12 @@ static int consume_frames(struct audio_output *audio,
             set_av_error(error, error_size, "avcodec_receive_frame", result);
             return -1;
         }
-        if (!audio->base_valid) {
-            int64_t timestamp = audio->frame->best_effort_timestamp;
-            audio->base_pts_us = timestamp == AV_NOPTS_VALUE
-                ? audio->reset_target_us
-                : av_rescale_q(timestamp, audio->decoder->pkt_timebase,
-                               AV_TIME_BASE_Q);
-            audio->base_valid = true;
-        }
+        int64_t timestamp = audio->frame->best_effort_timestamp;
+        int64_t frame_pts_us = timestamp == AV_NOPTS_VALUE
+                                   ? AV_NOPTS_VALUE
+                                   : av_rescale_q(timestamp,
+                                                  audio->decoder->pkt_timebase,
+                                                  AV_TIME_BASE_Q);
         int output_capacity = (int)av_rescale_rnd(
             swr_get_delay(audio->resampler, audio->decoder->sample_rate) +
                 audio->frame->nb_samples,
@@ -239,7 +238,37 @@ static int consume_frames(struct audio_output *audio,
             return -1;
         }
         ++audio->decoded_frames;
-        int write_result = write_samples(audio, output, result,
+        int skipped_samples = 0;
+        if (audio->discard_active) {
+            if (frame_pts_us == AV_NOPTS_VALUE) {
+                audio->discard_active = false;
+            } else {
+                int64_t frame_end_us = frame_pts_us +
+                    av_rescale(result, AV_TIME_BASE, OUTPUT_RATE);
+                if (frame_end_us <= audio->reset_target_us) {
+                    av_freep(&output);
+                    continue;
+                }
+                if (frame_pts_us < audio->reset_target_us) {
+                    skipped_samples = (int)av_rescale_rnd(
+                        audio->reset_target_us - frame_pts_us,
+                        OUTPUT_RATE, AV_TIME_BASE, AV_ROUND_UP);
+                    if (skipped_samples > result)
+                        skipped_samples = result;
+                }
+                audio->discard_active = false;
+            }
+        }
+        if (!audio->base_valid) {
+            audio->base_pts_us = frame_pts_us == AV_NOPTS_VALUE
+                ? audio->reset_target_us
+                : frame_pts_us +
+                    av_rescale(skipped_samples, AV_TIME_BASE, OUTPUT_RATE);
+            audio->base_valid = true;
+        }
+        int write_result = write_samples(
+            audio, output + skipped_samples * OUTPUT_CHANNELS * sizeof(int16_t),
+            result - skipped_samples,
                                          error, error_size);
         av_freep(&output);
         if (write_result < 0)
@@ -337,6 +366,7 @@ int audio_output_reset(struct audio_output *audio, int64_t target_us,
     audio->base_valid = false;
     audio->base_pts_us = AV_NOPTS_VALUE;
     audio->reset_target_us = target_us;
+    audio->discard_active = true;
     audio->output_samples = 0;
     audio->paused = false;
     return 0;

@@ -46,3 +46,9 @@ playing or paused state requested by the controller. The seek probe verifies
 that a 10-second request resumes at the preceding 9.539-second keyframe in the
 MP4 fixture. V4L2 drain/restart and suppression of decoded frames before the
 target remain the session controller's responsibility.
+
+After a seek, the audio path decodes packets from that same preceding
+keyframe but discards complete PCM frames before the target and trims the
+crossing frame at 48-kHz sample precision. The ALSA clock is rebased to the
+first retained sample. The decode-only seek check reaches 11.008167 seconds
+after a 10-second request without exposing the pre-target samples.
