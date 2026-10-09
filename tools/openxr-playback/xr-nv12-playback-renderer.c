@@ -48,6 +48,7 @@ struct app {
     XrSpace space;
     XrSessionState state;
     bool running;
+    bool xr_should_render;
     VkInstance instance;
     VkPhysicalDevice physical;
     VkDevice device;
@@ -86,7 +87,8 @@ struct app {
     VkFramebuffer framebuffers[MAX_IMAGES][2];
     uint64_t xr_frames, rendered_frames, session_changes;
     uint64_t received_frames, released_frames;
-    uint64_t unique_video_frames, repeated_video_frames, skipped_video_frames;
+    uint64_t unique_video_frames, repeated_video_frames;
+    uint64_t hidden_video_frames, pipeline_skipped_frames;
 };
 
 static void need_vk(const char *what, VkResult result);
@@ -212,8 +214,12 @@ static void release_current_video(struct app *app)
 {
     if (app->current_video_index < 0)
         return;
-    if (!app->current_video_presented)
-        app->skipped_video_frames++;
+    if (!app->current_video_presented) {
+        if (app->xr_should_render)
+            app->pipeline_skipped_frames++;
+        else
+            app->hidden_video_frames++;
+    }
     send_ipc(app, NV12_IPC_RELEASE, (uint32_t)app->current_video_index);
     app->released_frames++;
     app->current_video_index = -1;
@@ -818,6 +824,7 @@ static void render_frame(struct app *app)
     XrFrameBeginInfo begin = {.type = XR_TYPE_FRAME_BEGIN_INFO};
     need_xr("xrBeginFrame", xrBeginFrame(app->session, &begin));
     ++app->xr_frames;
+    app->xr_should_render = frame_state.shouldRender;
     if (!frame_state.shouldRender) {
         XrFrameEndInfo end = {.type = XR_TYPE_FRAME_END_INFO, .displayTime = frame_state.predictedDisplayTime,
             .environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE};
@@ -997,12 +1004,14 @@ int main(int argc, char **argv)
            " rendered_frames=%" PRIu64 " received_frames=%" PRIu64
            " unique_video_frames=%" PRIu64
            " repeated_video_frames=%" PRIu64
-           " skipped_video_frames=%" PRIu64
+           " hidden_video_frames=%" PRIu64
+           " pipeline_skipped_frames=%" PRIu64
            " released_frames=%" PRIu64
            " session_changes=%" PRIu64 "\n",
            app.xr_frames, app.rendered_frames, app.received_frames,
            app.unique_video_frames, app.repeated_video_frames,
-           app.skipped_video_frames, app.released_frames,
+           app.hidden_video_frames, app.pipeline_skipped_frames,
+           app.released_frames,
            app.session_changes);
     return 0;
 }
