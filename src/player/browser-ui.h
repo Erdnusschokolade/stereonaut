@@ -38,6 +38,7 @@ struct browser_ui {
     struct thumbnail_loader *loader;
     size_t page;
     size_t selected_page; /* page of the last started title */
+    char selected_title[256]; /* name of the last started title */
     size_t restore_page;  /* page to show for the next listing */
     int hover;
     int detail;           /* listing index shown in the detail card or -1 */

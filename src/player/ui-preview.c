@@ -7,6 +7,7 @@
  * (binary P6). Without them synthetic gradients are used. */
 #define _POSIX_C_SOURCE 200809L
 #include "browser-ui.h"
+#include "player-ui.h"
 #include "ui-draw.h"
 
 #include <math.h>
@@ -97,10 +98,70 @@ static void add(struct file_browser_listing *listing,
         kind == FILE_BROWSER_MEDIA ? 2023 : 0};
 }
 
+/* Writes RGBA canvas pixels composited over a backdrop as binary PPM. */
+static int write_ppm(const char *path, const uint8_t *bytes, unsigned width,
+                     unsigned height, bool video_backdrop)
+{
+    FILE *out = fopen(path, "wb");
+    if (!out)
+        return 1;
+    fprintf(out, "P6 %u %u 255\n", width, height);
+    for (unsigned y = 0; y < height; ++y)
+        for (unsigned x = 0; x < width; ++x) {
+            const uint8_t *p = bytes + ((size_t)y * width + x) * 4;
+            float t = (float)y / height, s = (float)x / width;
+            float back[3];
+            if (video_backdrop) { /* bright, busy scene behind the panel */
+                back[0] = 90 + 80 * sinf(s * 7.0f) * (1 - t);
+                back[1] = 140 + 60 * t + 30 * sinf(t * 9.0f + s * 3.0f);
+                back[2] = 170 - 90 * t;
+            } else {
+                back[0] = 28 + 30 * t;
+                back[1] = 30 + 26 * t;
+                back[2] = 40 + 30 * t;
+            }
+            float keep = 1.0f - p[3] / 255.0f;
+            unsigned char rgb[3];
+            for (int c = 0; c < 3; ++c)
+                rgb[c] = (unsigned char)fminf(255.0f, p[c] + back[c] * keep);
+            fwrite(rgb, 1, 3, out);
+        }
+    fclose(out);
+    return 0;
+}
+
+static int preview_player(const char *path, int hover, bool popup)
+{
+    struct player_ui ui = {0};
+    struct player_ui_state state = {
+        .title = "Über den Wolken – Alpenflug 8K",
+        .position_us = INT64_C(754000000),
+        .duration_us = INT64_C(3165000000),
+        .paused = hover == 99,
+        .popup_open = popup,
+        .projection_mode = 1,
+        .stereo_layout = 1,
+        .hover = hover == 99 ? 0 : hover,
+    };
+    uint32_t *pixels = malloc((size_t)PLAYER_UI_WIDTH * PLAYER_UI_HEIGHT * 4);
+    player_ui_render(&ui, &state, pixels, false);
+    int result = write_ppm(path, (const uint8_t *)pixels, PLAYER_UI_WIDTH,
+                           PLAYER_UI_HEIGHT, true);
+    player_ui_close(&ui);
+    free(pixels);
+    return result;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc >= 3 && strcmp(argv[1], "--player") == 0)
+        return preview_player(argv[2], argc > 3 ? atoi(argv[3]) : 0,
+                              argc > 4 && atoi(argv[4]) != 0);
     if (argc < 2) {
-        fprintf(stderr, "usage: %s OUTPUT.ppm [HOVER_ID]\n", argv[0]);
+        fprintf(stderr,
+                "usage: %s OUTPUT.ppm [HOVER_ID]\n"
+                "       %s --player OUTPUT.ppm [HOVER_ID] [POPUP]\n",
+                argv[0], argv[0]);
         return 2;
     }
     struct browser_ui ui;
@@ -155,23 +216,6 @@ int main(int argc, char **argv)
     uint32_t *pixels = malloc((size_t)BROWSER_UI_WIDTH * BROWSER_UI_HEIGHT * 4);
     browser_ui_render(&ui, pixels, false);
 
-    FILE *out = fopen(argv[1], "wb");
-    if (!out)
-        return 1;
-    fprintf(out, "P6 %u %u 255\n", BROWSER_UI_WIDTH, BROWSER_UI_HEIGHT);
-    const uint8_t *bytes = (const uint8_t *)pixels;
-    for (unsigned y = 0; y < BROWSER_UI_HEIGHT; ++y)
-        for (unsigned x = 0; x < BROWSER_UI_WIDTH; ++x) {
-            const uint8_t *p = bytes + ((size_t)y * BROWSER_UI_WIDTH + x) * 4;
-            /* Backdrop similar to a dark VR environment. */
-            float t = (float)y / BROWSER_UI_HEIGHT;
-            float back[3] = {28 + 30 * t, 30 + 26 * t, 40 + 30 * t};
-            float keep = 1.0f - p[3] / 255.0f;
-            unsigned char rgb[3];
-            for (int c = 0; c < 3; ++c)
-                rgb[c] = (unsigned char)fminf(255.0f, p[c] + back[c] * keep);
-            fwrite(rgb, 1, 3, out);
-        }
-    fclose(out);
-    return 0;
+    return write_ppm(argv[1], (const uint8_t *)pixels, BROWSER_UI_WIDTH,
+                     BROWSER_UI_HEIGHT, false);
 }

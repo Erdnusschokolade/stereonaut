@@ -667,6 +667,8 @@ enum browser_ui_action browser_ui_activate(struct browser_ui *ui, char *path,
         const struct file_browser_entry *entry = &ui->listing.entries[index];
         if (entry->kind == FILE_BROWSER_MEDIA) {
             ui->selected_page = ui->page;
+            snprintf(ui->selected_title, sizeof(ui->selected_title), "%s",
+                     entry->name);
             snprintf(path, path_size, "%s", entry->path);
             return BROWSER_UI_FILE_SELECTED;
         }

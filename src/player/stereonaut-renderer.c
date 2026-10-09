@@ -24,6 +24,7 @@
 #include <openxr/openxr_platform.h>
 
 #include "browser-ui.h"
+#include "player-ui.h"
 #include "ui-draw.h"
 #include "nv12-playback-ipc.h"
 #include "player-ui-ipc.h"
@@ -33,28 +34,11 @@
 #define VIDEO_BUFFER_COUNT 12U
 #define UBO_STRIDE 256U
 #define DRM_FORMAT_MOD_LINEAR UINT64_C(0)
-#define UI_WIDTH 1024U
-#define UI_HEIGHT 400U
+#define UI_WIDTH PLAYER_UI_WIDTH
+#define UI_HEIGHT PLAYER_UI_HEIGHT
 #define UI_BYTES (UI_WIDTH * UI_HEIGHT * 4U)
-#define UI_PANEL_WIDTH_METERS 1.4f
-#define UI_PANEL_HEIGHT_METERS 0.546875f
-#define UI_BAR_X 28
-#define UI_BAR_WIDTH 968
-#define UI_BAR_TRACK_Y 84
-#define UI_BAR_TRACK_HEIGHT 32
-#define UI_BAR_HIT_TOP 64
-#define UI_BAR_HIT_BOTTOM 128
-#define UI_BUTTON_Y 156
-#define UI_BUTTON_HEIGHT 108
-#define UI_VIEW_Y 280
-#define UI_VIEW_HEIGHT 96
-
-/* Panel-only actions (not forwarded to the session as player actions). */
-enum ui_view_action {
-    UI_ACTION_PROJECTION = 100,
-    UI_ACTION_STEREO = 101,
-    UI_ACTION_SWAP_EYES = 102,
-};
+#define UI_PANEL_WIDTH_METERS PLAYER_UI_PANEL_WIDTH_METERS
+#define UI_PANEL_HEIGHT_METERS PLAYER_UI_PANEL_HEIGHT_METERS
 #define GRAB_RECENTER_COS 0.5f
 /* The select action is analog so the press point can be lower than the
  * trigger's full click travel. */
@@ -200,7 +184,11 @@ struct app {
     bool ui_bgra;
     VkBuffer ui_staging_buffer;
     VkDeviceMemory ui_staging_memory;
-    uint32_t *ui_pixels;
+    uint32_t *ui_pixels; /* mapped staging memory: write-only */
+    uint32_t *ui_cpu;    /* the panel draws here */
+    struct player_ui player_ui;
+    bool popup_open;
+    char title[256];
     VkCommandBuffer ui_command;
     VkFence ui_fence;
     uint64_t xr_frames, rendered_frames, session_changes;
@@ -486,18 +474,20 @@ static void send_seek_to(struct app *app, int64_t target_us)
     send_message(app, &message);
 }
 
-/* Cycles projection / stereo layout or swaps the eyes. Applied at once and
- * reported to the session, which stores it for this title. */
-static void change_view(struct app *app, int action)
+/* Applies a choice from the view popup at once and reports it to the
+ * session, which stores it for this title. */
+static void change_view(struct app *app, int control)
 {
-    if (action == UI_ACTION_PROJECTION)
-        app->projection_mode = (app->projection_mode + 1U) %
-                               (NV12_PROJECTION_EQUIRECT_360 + 1U);
-    else if (action == UI_ACTION_STEREO)
-        app->stereo_layout = (app->stereo_layout + 1U) %
-                             (NV12_STEREO_TB + 1U);
-    else
+    if (control >= PLAYER_UI_PROJECTION &&
+        control <= PLAYER_UI_PROJECTION + NV12_PROJECTION_EQUIRECT_360)
+        app->projection_mode = (uint32_t)(control - PLAYER_UI_PROJECTION);
+    else if (control >= PLAYER_UI_STEREO &&
+             control <= PLAYER_UI_STEREO + NV12_STEREO_TB)
+        app->stereo_layout = (uint32_t)(control - PLAYER_UI_STEREO);
+    else if (control == PLAYER_UI_SWAP_EYES)
         app->swap_eyes = !app->swap_eyes;
+    else
+        return;
     app->ui_dirty = true;
     struct nv12_ipc_message message = {
         .type = NV12_IPC_VIEW,
@@ -588,11 +578,22 @@ static void receive_frame_messages(struct app *app)
         } else if (message.type == NV12_IPC_EOS) {
             app->eos_received = true;
         } else if (message.type == NV12_IPC_STATUS) {
+            /* Redraw only for a visible change: the shown second, the
+             * seek bar knob (whole pixels) or the play state. */
+            int64_t old_second = app->position_us / 1000000;
+            int old_knob = app->duration_us > 0
+                ? (int)(1000.0 * app->position_us / app->duration_us) : -1;
+            bool changed = app->player_state != message.player_state ||
+                           app->duration_us != message.duration_us;
             app->player_state = message.player_state;
             if (!app->seek_pending)
                 app->position_us = message.position_us;
             app->duration_us = message.duration_us;
-            app->ui_dirty = true;
+            int knob = app->duration_us > 0
+                ? (int)(1000.0 * app->position_us / app->duration_us) : -1;
+            if (changed || old_second != app->position_us / 1000000 ||
+                old_knob != knob)
+                app->ui_dirty = true;
         } else {
             need(false, "unknown NV12 IPC message");
         }
@@ -1197,178 +1198,23 @@ static void create_pipeline(struct app *app)
     vkDestroyShaderModule(app->device, vert, NULL); vkDestroyShaderModule(app->device, frag, NULL);
 }
 
-static uint32_t ui_rgba(struct app *app, uint8_t r, uint8_t g,
-                        uint8_t b, uint8_t a)
+static struct player_ui_state player_state(const struct app *app)
 {
-    if (app->ui_bgra) {
-        uint8_t temporary = r;
-        r = b;
-        b = temporary;
-    }
-    return (uint32_t)r | ((uint32_t)g << 8U) |
-           ((uint32_t)b << 16U) | ((uint32_t)a << 24U);
-}
-
-static void ui_rectangle(struct app *app, int x, int y, int width,
-                         int height, uint32_t color)
-{
-    int left = x < 0 ? 0 : x;
-    int top = y < 0 ? 0 : y;
-    int right = x + width > (int)UI_WIDTH ? (int)UI_WIDTH : x + width;
-    int bottom = y + height > (int)UI_HEIGHT ? (int)UI_HEIGHT : y + height;
-    for (int row = top; row < bottom; ++row)
-        for (int column = left; column < right; ++column)
-            app->ui_pixels[(size_t)row * UI_WIDTH + (size_t)column] = color;
-}
-
-static const uint8_t ui_letter_rows[36][5] = {
-    {2,5,7,5,5},{6,5,6,5,6},{3,4,4,4,3},{6,5,5,5,6},
-    {7,4,6,4,7},{7,4,6,4,4},{3,4,5,5,3},{5,5,7,5,5},
-    {7,2,2,2,7},{1,1,1,5,2},{5,5,6,5,5},{4,4,4,4,7},
-    {5,7,7,5,5},{5,7,7,7,5},{2,5,5,5,2},{6,5,6,4,4},
-    {2,5,5,3,1},{6,5,6,5,5},{3,4,2,1,6},{7,2,2,2,2},
-    {5,5,5,5,7},{5,5,5,5,2},{5,5,7,7,5},{5,5,2,5,5},
-    {5,5,2,2,2},{7,1,2,4,7},
-    {2,5,5,5,2},{2,6,2,2,7},{6,1,2,4,7},{6,1,2,1,6},
-    {5,5,7,1,1},{7,4,6,1,6},{3,4,6,5,2},{7,1,2,2,2},
-    {2,5,2,5,2},{2,5,3,1,6},
-};
-
-static uint8_t ui_glyph_row(unsigned char character, unsigned row)
-{
-    if (character >= 'a' && character <= 'z')
-        character = (unsigned char)(character - 'a' + 'A');
-    if (character >= 'A' && character <= 'Z')
-        return ui_letter_rows[character - 'A'][row];
-    if (character >= '0' && character <= '9')
-        return ui_letter_rows[26U + character - '0'][row];
-    if (character == ':')
-        return row == 1 || row == 3 ? 2 : 0;
-    if (character == '-')
-        return row == 2 ? 7 : 0;
-    if (character == '+')
-        return row == 2 ? 7 : (row == 1 || row == 3 ? 2 : 0);
-    if (character == '<')
-        return (uint8_t[]){1, 2, 4, 2, 1}[row];
-    if (character == '>')
-        return (uint8_t[]){4, 2, 1, 2, 4}[row];
-    if (character == ' ')
-        return 0;
-    return (uint8_t[]){7, 5, 5, 5, 7}[row];
-}
-
-static void ui_text(struct app *app, int x, int y, int scale,
-                    const char *text, uint32_t color)
-{
-    for (const unsigned char *cursor = (const unsigned char *)text;
-         *cursor; ++cursor) {
-        for (unsigned row = 0; row < 5; ++row) {
-            uint8_t bits = ui_glyph_row(*cursor, row);
-            for (unsigned column = 0; column < 3; ++column)
-                if (bits & (1U << (2U - column)))
-                    ui_rectangle(app, x + (int)column * scale,
-                                 y + (int)row * scale,
-                                 scale, scale, color);
-        }
-        x += 4 * scale;
-    }
-}
-
-static void format_time(char text[32], int64_t microseconds)
-{
-    if (microseconds < 0)
-        microseconds = 0;
-    int64_t seconds = microseconds / INT64_C(1000000);
-    snprintf(text, 32, "%02" PRId64 ":%02" PRId64,
-             seconds / 60, seconds % 60);
-}
-
-static float seek_ratio(const struct app *app)
-{
-    int64_t position = (app->scrub_hand >= 0 || app->seek_pending)
-                           ? app->scrub_us : app->position_us;
-    if (app->duration_us <= 0 || position <= 0)
-        return 0.0f;
-    if (position >= app->duration_us)
-        return 1.0f;
-    return (float)((double)position / (double)app->duration_us);
-}
-
-static void render_ui_pixels(struct app *app)
-{
-    uint32_t transparent = ui_rgba(app, 0, 0, 0, 0);
-    uint32_t panel = ui_rgba(app, 12, 22, 38, 235);
-    uint32_t button = ui_rgba(app, 37, 56, 84, 245);
-    uint32_t hover = ui_rgba(app, 22, 139, 202, 255);
-    uint32_t text = ui_rgba(app, 242, 248, 255, 255);
-    uint32_t grabbed = ui_rgba(app, 255, 244, 96, 255);
-    ui_rectangle(app, 0, 0, UI_WIDTH, UI_HEIGHT, transparent);
-    if (app->grab_hand >= 0)
-        ui_rectangle(app, 4, 4, 1016, (int)UI_HEIGHT - 8, grabbed);
-    ui_rectangle(app, 8, 8, 1008, (int)UI_HEIGHT - 16, panel);
-    char position[32], duration[32], clock_text[80];
-    bool scrubbing = app->scrub_hand >= 0 || app->seek_pending;
-    format_time(position, scrubbing ? app->scrub_us : app->position_us);
-    format_time(duration, app->duration_us);
-    snprintf(clock_text, sizeof(clock_text), "%s / %s", position, duration);
-    ui_text(app, 382, 24, 5, clock_text, text);
-    if (app->awaiting_frame)
-        ui_text(app, 28, 24, 5, "LADEN", grabbed);
-
-    float ratio = seek_ratio(app);
-    int fill = (int)(ratio * UI_BAR_WIDTH);
-    bool bar_hot = scrubbing || app->ui_hover == NV12_ACTION_SEEK_TO;
-    ui_rectangle(app, UI_BAR_X, UI_BAR_TRACK_Y, UI_BAR_WIDTH,
-                 UI_BAR_TRACK_HEIGHT, button);
-    ui_rectangle(app, UI_BAR_X, UI_BAR_TRACK_Y, fill, UI_BAR_TRACK_HEIGHT,
-                 hover);
-    ui_rectangle(app, UI_BAR_X + fill - 8, UI_BAR_TRACK_Y - 8, 16,
-                 UI_BAR_TRACK_HEIGHT + 16, bar_hot ? grabbed : text);
-
-    struct {
-        int x, width, action;
-        const char *label;
-    } buttons[] = {
-        {28, 190, NV12_ACTION_BACK, "< ZURUECK"},
-        {238, 150, NV12_ACTION_SEEK_BACK, "-10 S"},
-        {408, 230, NV12_ACTION_TOGGLE_PAUSE,
-         app->player_state == NV12_PLAYER_PAUSED ? "WEITER" : "PAUSE"},
-        {658, 150, NV12_ACTION_SEEK_FORWARD, "+10 S"},
+    return (struct player_ui_state){
+        .title = app->title,
+        .position_us = app->position_us,
+        .duration_us = app->duration_us,
+        .scrub_us = app->scrub_us,
+        .scrubbing = app->scrub_hand >= 0 || app->seek_pending,
+        .loading = app->awaiting_frame,
+        .paused = app->player_state == NV12_PLAYER_PAUSED,
+        .grabbed = app->grab_hand >= 0,
+        .popup_open = app->popup_open,
+        .projection_mode = app->projection_mode,
+        .stereo_layout = app->stereo_layout,
+        .swap_eyes = app->swap_eyes,
+        .hover = app->ui_hover,
     };
-    for (size_t i = 0; i < ARRAY_COUNT(buttons); ++i) {
-        ui_rectangle(app, buttons[i].x, UI_BUTTON_Y, buttons[i].width,
-                     UI_BUTTON_HEIGHT,
-                     app->ui_hover == buttons[i].action ? hover : button);
-        ui_text(app, buttons[i].x + 20, UI_BUTTON_Y + 38, 5,
-                buttons[i].label, text);
-    }
-    const char *projection_name =
-        app->projection_mode == NV12_PROJECTION_EQUIRECT_180 ? "180"
-        : app->projection_mode == NV12_PROJECTION_EQUIRECT_360 ? "360"
-                                                                : "FLACH";
-    const char *stereo_name = app->stereo_layout == NV12_STEREO_SBS ? "SBS"
-                              : app->stereo_layout == NV12_STEREO_TB ? "TB"
-                                                                      : "MONO";
-    char projection_label[48], stereo_label[48];
-    snprintf(projection_label, sizeof(projection_label), "FORM: %s",
-             projection_name);
-    snprintf(stereo_label, sizeof(stereo_label), "BILD: %s", stereo_name);
-    struct {
-        int x, width, action;
-        const char *label;
-    } view_buttons[] = {
-        {28, 300, UI_ACTION_PROJECTION, projection_label},
-        {348, 300, UI_ACTION_STEREO, stereo_label},
-        {668, 328, UI_ACTION_SWAP_EYES,
-         app->swap_eyes ? "AUGEN GETAUSCHT" : "AUGEN NORMAL"},
-    };
-    for (size_t i = 0; i < ARRAY_COUNT(view_buttons); ++i) {
-        ui_rectangle(app, view_buttons[i].x, UI_VIEW_Y,
-                     view_buttons[i].width, UI_VIEW_HEIGHT,
-                     app->ui_hover == view_buttons[i].action ? hover : button);
-        ui_text(app, view_buttons[i].x + 20, UI_VIEW_Y + 38, 4,
-                view_buttons[i].label, text);
-    }
 }
 
 static void create_ui_swapchain(struct app *app)
@@ -1469,12 +1315,15 @@ static void create_ui_resources(struct app *app)
     need_vk("vkMapMemory(UI staging)",
             vkMapMemory(app->device, app->ui_staging_memory, 0,
                         UI_BYTES, 0, (void **)&app->ui_pixels));
+    app->ui_cpu = calloc(1, UI_BYTES);
+    need(app->ui_cpu != NULL, "allocate panel pixels");
     app->ui_dirty = true;
 }
 
 static void upload_ui(struct app *app)
 {
-    render_ui_pixels(app);
+    struct player_ui_state state = player_state(app);
+    player_ui_render(&app->player_ui, &state, app->ui_cpu, app->ui_bgra);
     XrSwapchainImageAcquireInfo acquire = {
         .type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO,
     };
@@ -1493,6 +1342,7 @@ static void upload_ui(struct app *app)
                             VK_TRUE, UINT64_C(5000000000)));
     need_vk("vkResetFences(UI)",
             vkResetFences(app->device, 1, &app->ui_fence));
+    memcpy(app->ui_pixels, app->ui_cpu, UI_BYTES);
     need_vk("vkResetCommandBuffer(UI)",
             vkResetCommandBuffer(app->ui_command, 0));
     VkCommandBufferBeginInfo begin = {
@@ -1793,43 +1643,19 @@ static struct panel_hit panel_ray(const struct app *app, XrPosef aim)
                         UI_PANEL_HEIGHT_METERS, aim);
 }
 
-static int ui_hit_test(const struct app *app, float u, float v)
-{
-    int x = (int)(u * UI_WIDTH);
-    int y = (int)(v * UI_HEIGHT);
-    if (app->duration_us > 0 && y >= UI_BAR_HIT_TOP && y < UI_BAR_HIT_BOTTOM &&
-        x >= UI_BAR_X - 8 && x < UI_BAR_X + UI_BAR_WIDTH + 8)
-        return NV12_ACTION_SEEK_TO;
-    if (y >= UI_VIEW_Y && y < UI_VIEW_Y + UI_VIEW_HEIGHT) {
-        if (x >= 28 && x < 328)
-            return UI_ACTION_PROJECTION;
-        if (x >= 348 && x < 648)
-            return UI_ACTION_STEREO;
-        if (x >= 668 && x < 996)
-            return UI_ACTION_SWAP_EYES;
-        return 0;
-    }
-    if (y < UI_BUTTON_Y || y >= UI_BUTTON_Y + UI_BUTTON_HEIGHT)
-        return 0;
-    if (x >= 28 && x < 218)
-        return NV12_ACTION_BACK;
-    if (x >= 238 && x < 388)
-        return NV12_ACTION_SEEK_BACK;
-    if (x >= 408 && x < 638)
-        return NV12_ACTION_TOGGLE_PAUSE;
-    if (x >= 658 && x < 808)
-        return NV12_ACTION_SEEK_FORWARD;
-    return 0;
-}
-
 static int64_t scrub_target_us(const struct app *app, float u)
 {
-    float ratio = (u * UI_WIDTH - UI_BAR_X) / UI_BAR_WIDTH;
-    if (ratio < 0.0f)
-        ratio = 0.0f;
-    if (ratio > 1.0f)
-        ratio = 1.0f;
-    return (int64_t)((double)ratio * (double)app->duration_us);
+    return (int64_t)((double)player_ui_seek_ratio(u) *
+                     (double)app->duration_us);
+}
+
+/* Hit on a visible part of the player panel (not its transparent area). */
+static bool on_player_panel(const struct app *app,
+                            const struct panel_hit *hit)
+{
+    struct player_ui_state state = player_state(app);
+    return panel_hit_inside(hit) &&
+           player_ui_on_panel(&state, hit->u, hit->v);
 }
 
 /* Puts the pointer layer on the panel plane at the hit point, slightly in
@@ -1954,7 +1780,7 @@ static void show_panel(struct app *app, const XrSpaceLocation *head,
                 gaze.x /= flat;
                 gaze.z /= flat;
                 app->panel_x = head->pose.position.x + gaze.x * 1.3f;
-                app->panel_y = head->pose.position.y - 0.45f;
+                app->panel_y = head->pose.position.y - 0.35f;
                 app->panel_z = head->pose.position.z + gaze.z * 1.3f;
                 app->panel_yaw = atan2f(-gaze.x, -gaze.z);
             }
@@ -2028,7 +1854,7 @@ static void sync_player_input(struct app *app, XrTime time)
             app->scrub_hand >= 0)
             continue;
         if (app->ui_visible && hands[hand].aim_valid &&
-            panel_hit_inside(&hands[hand].hit)) {
+            on_player_panel(app, &hands[hand].hit)) {
             XrPosef aim = hands[hand].aim;
             XrVector3f center = {app->panel_x - aim.position.x,
                                  app->panel_y - aim.position.y,
@@ -2079,14 +1905,19 @@ static void sync_player_input(struct app *app, XrTime time)
         if (!app->ui_visible || app->grab_hand >= 0 ||
             app->scrub_hand >= 0 || app->seek_pending ||
             !hands[hand].select_edge || !hands[hand].aim_valid ||
-            !panel_hit_inside(&hands[hand].hit))
+            !on_player_panel(app, &hands[hand].hit))
             continue;
-        int action = ui_hit_test(app, hands[hand].hit.u, hands[hand].hit.v);
-        if (action == NV12_ACTION_SEEK_TO) {
+        struct player_ui_state state = player_state(app);
+        int action = player_ui_hit_test(&state, hands[hand].hit.u,
+                                        hands[hand].hit.v);
+        if (action == PLAYER_UI_SEEK_BAR) {
             app->scrub_hand = (int)hand;
             app->scrub_us = scrub_target_us(app, hands[hand].hit.u);
             app->ui_dirty = true;
-        } else if (action >= UI_ACTION_PROJECTION) {
+        } else if (action == PLAYER_UI_VIEW_POPUP) {
+            app->popup_open = !app->popup_open;
+            app->ui_dirty = true;
+        } else if (action >= PLAYER_UI_PROJECTION) {
             change_view(app, action);
         } else if (action) {
             send_ipc(app, NV12_IPC_ACTION, (uint32_t)action);
@@ -2105,12 +1936,14 @@ static void sync_player_input(struct app *app, XrTime time)
     if (app->ui_visible && app->grab_hand < 0) {
         for (unsigned hand = 0; hand < 2; ++hand) {
             if (!hands[hand].aim_valid ||
-                !panel_hit_inside(&hands[hand].hit))
+                !on_player_panel(app, &hands[hand].hit))
                 continue;
             pointer_visible = true;
             pointer_x = (int)(hands[hand].hit.u * UI_WIDTH);
             pointer_y = (int)(hands[hand].hit.v * UI_HEIGHT);
-            hover = ui_hit_test(app, hands[hand].hit.u, hands[hand].hit.v);
+            struct player_ui_state state = player_state(app);
+            hover = player_ui_hit_test(&state, hands[hand].hit.u,
+                                       hands[hand].hit.v);
             place_pointer(app,
                           (XrVector3f){app->panel_x, app->panel_y,
                                        app->panel_z},
@@ -2118,7 +1951,7 @@ static void sync_player_input(struct app *app, XrTime time)
                           UI_PANEL_HEIGHT_METERS, hands[hand].hit, 0.03f);
         }
         if (app->scrub_hand >= 0)
-            hover = NV12_ACTION_SEEK_TO;
+            hover = PLAYER_UI_SEEK_BAR;
     }
     if (hover != app->ui_hover) {
         app->ui_hover = hover;
@@ -2530,6 +2363,7 @@ static void send_control(struct app *app, uint32_t type, const char *path)
 /* Back to the browser: drop every video import and reset player state. */
 static void end_playback(struct app *app)
 {
+    app->popup_open = false;
     need_vk("vkDeviceWaitIdle(end playback)", vkDeviceWaitIdle(app->device));
     discard_held_frame(app);
     for (uint32_t i = 0; i < app->video_buffer_count; ++i)
@@ -2688,6 +2522,8 @@ static void sync_browser_input(struct app *app, XrTime time)
     switch (browser_ui_activate(&app->browser, path, sizeof(path))) {
     case BROWSER_UI_FILE_SELECTED:
         app->awaiting_command = true;
+        snprintf(app->title, sizeof(app->title), "%s",
+                 app->browser.selected_title);
         send_control(app, PLAYER_UI_FILE_SELECTED, path);
         break;
     case BROWSER_UI_EXIT_REQUESTED:
@@ -2940,7 +2776,7 @@ int main(int argc, char **argv)
     app.player_state = NV12_PLAYER_PLAYING;
     app.ui_visible = true;
     app.ui_dirty = true;
-    app.panel_y = -0.45f;
+    app.panel_y = -0.35f;
     app.panel_z = -1.3f;
     app.grab_hand = -1;
     app.scrub_hand = -1;
@@ -3000,5 +2836,6 @@ int main(int argc, char **argv)
     if (app.playing)
         end_playback(&app);
     browser_ui_close(&app.browser);
+    player_ui_close(&app.player_ui);
     return 0;
 }
