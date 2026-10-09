@@ -429,11 +429,11 @@ static void apply_init(struct app *app, const struct nv12_ipc_message *message,
     need(app->video_width > 0 && app->video_height > 0 &&
              !(app->video_width & 1U) && !(app->video_height & 1U) &&
              app->video_stride >= app->video_width &&
-             app->uv_offset ==
+             app->uv_offset >=
                  (uint64_t)app->video_stride * app->video_height &&
-             app->dma_buf_size == app->uv_offset +
+             app->dma_buf_size >= app->uv_offset +
                  (uint64_t)app->video_stride * app->video_height / 2U,
-         "NV12 IPC layout is not contiguous linear 4:2:0");
+         "NV12 IPC layout is not linear 4:2:0");
     need(app->projection_mode <= NV12_PROJECTION_EQUIRECT_360,
          "invalid projection mode in IPC contract");
     need(app->stereo_layout <= NV12_STEREO_TB,

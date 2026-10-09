@@ -353,8 +353,8 @@ static void start_renderer(
     struct nv12_ipc_message message = {
         .type = NV12_IPC_INIT,
         .buffer_count = count,
-        .width = layout->width,
-        .height = layout->coded_height,
+        .width = layout->visible_width,
+        .height = layout->visible_height,
         .stride = layout->stride,
         .size = layout->sizeimage,
         .uv_offset = layout->uv_offset,
@@ -1573,7 +1573,10 @@ static void validate_capture_contract(const struct capture_contract *contract,
     layout->visible_height = contract->compose.height;
     layout->stride = contract->bytes_per_line;
     layout->sizeimage = contract->sizeimage;
-    if (layout->width != expected_width || (layout->width & 1U) ||
+    /* Iris pads the coded width to its alignment (e.g. 2880 -> 2944); the
+     * renderer samples only the visible rectangle. */
+    if (layout->width < layout->visible_width || (layout->width & 1U) ||
+        layout->coded_height < layout->visible_height ||
         (layout->coded_height & 1U) || layout->stride < layout->width)
         fail_message("unsupported NV12 dimensions or stride");
     layout->uv_offset = (uint64_t)layout->stride * layout->coded_height;

@@ -56,6 +56,8 @@ struct nv12_ipc_message {
     uint32_t type;
     uint32_t index;
     uint32_t buffer_count;
+    /* INIT: visible picture size; stride and uv_offset describe the decoder
+     * buffer, which may be padded beyond it (coded width/height). */
     uint32_t width;
     uint32_t height;
     uint32_t stride;
