@@ -12,6 +12,8 @@
 #include <libavutil/error.h>
 #include <libavutil/pixdesc.h>
 
+#define HLS_SEEK_BIAS_US INT64_C(3100000)
+
 struct media_demux {
     AVFormatContext *format;
     AVBSFContext *video_bsf;
@@ -20,6 +22,9 @@ struct media_demux {
     struct media_stream_info info;
     bool input_eof;
     bool bsf_eof_sent;
+    /* HLS timelines (Jellyfin) start at 10 s; all packet times are shifted
+     * so playback positions and seek targets start at zero. */
+    int64_t time_offset_us;
 };
 
 static void set_error(char *error, size_t size, const char *format, ...)
@@ -122,7 +127,32 @@ int media_demux_open(struct media_demux **result, const char *path,
     }
     demux->info.video_stream_index = -1;
     demux->info.audio_stream_index = -1;
-    int av_result = avformat_open_input(&demux->format, path, NULL, NULL);
+    AVDictionary *options = NULL;
+    if (strncmp(path, "http://", 7) == 0 || strncmp(path, "https://", 8) == 0) {
+        /* Credentials come from the environment, never from argv, so they
+         * stay out of process listings and logs. */
+        const char *headers = getenv("STEREONAUT_HTTP_HEADERS");
+        if (headers && headers[0]) {
+            /* libavformat requires CRLF-terminated header lines. */
+            size_t length = strlen(headers);
+            char *terminated = malloc(length + 3);
+            if (terminated) {
+                memcpy(terminated, headers, length);
+                while (length && (terminated[length - 1] == '\n' ||
+                                  terminated[length - 1] == '\r'))
+                    --length;
+                memcpy(terminated + length, "\r\n", 3);
+                av_dict_set(&options, "headers", terminated, 0);
+                free(terminated);
+            }
+        }
+        av_dict_set(&options, "user_agent", "Stereonaut", 0);
+        av_dict_set(&options, "rw_timeout", "20000000", 0);
+        av_dict_set(&options, "reconnect", "1", 0);
+        av_dict_set(&options, "reconnect_delay_max", "2", 0);
+    }
+    int av_result = avformat_open_input(&demux->format, path, NULL, &options);
+    av_dict_free(&options);
     if (av_result < 0) {
         set_av_error(error, error_size, "avformat_open_input", av_result);
         media_demux_close(&demux);
@@ -180,6 +210,9 @@ int media_demux_open(struct media_demux **result, const char *path,
     }
     demux->info.start_us = demux->format->start_time == AV_NOPTS_VALUE
                                 ? 0 : demux->format->start_time;
+    if (demux->format->iformat && demux->format->iformat->name &&
+        strstr(demux->format->iformat->name, "hls"))
+        demux->time_offset_us = demux->info.start_us;
     demux->info.duration_us = demux->format->duration;
     if (initialize_video_filter(demux, error, error_size) < 0) {
         media_demux_close(&demux);
@@ -213,8 +246,17 @@ int media_demux_copy_audio_parameters(const struct media_demux *demux,
 
 static int return_packet(struct media_packet *output, AVPacket *packet,
                          enum media_packet_kind kind, AVRational time_base,
+                         int64_t time_offset_us,
                          char *error, size_t error_size)
 {
+    if (time_offset_us) {
+        int64_t ticks = av_rescale_q(time_offset_us, AV_TIME_BASE_Q,
+                                     time_base);
+        if (packet->pts != AV_NOPTS_VALUE)
+            packet->pts -= ticks;
+        if (packet->dts != AV_NOPTS_VALUE)
+            packet->dts -= ticks;
+    }
     output->packet = av_packet_alloc();
     if (!output->packet) {
         set_error(error, error_size, "allocate output packet failed");
@@ -247,7 +289,7 @@ int media_demux_read(struct media_demux *demux, struct media_packet *packet,
             return return_packet(packet, demux->filtered,
                                  MEDIA_PACKET_VIDEO,
                                  demux->video_bsf->time_base_out,
-                                 error, error_size);
+                                 demux->time_offset_us, error, error_size);
         if (result != AVERROR(EAGAIN) && result != AVERROR_EOF) {
             set_av_error(error, error_size, "av_bsf_receive_packet", result);
             return -1;
@@ -291,7 +333,7 @@ int media_demux_read(struct media_demux *demux, struct media_packet *packet,
             return return_packet(packet, demux->input,
                                  MEDIA_PACKET_AUDIO,
                                  audio_stream->time_base,
-                                 error, error_size);
+                                 demux->time_offset_us, error, error_size);
         }
     }
 }
@@ -305,8 +347,18 @@ int media_demux_seek(struct media_demux *demux, int64_t target_us,
     }
     AVStream *stream =
         demux->format->streams[demux->info.video_stream_index];
-    int64_t target = av_rescale_q(target_us, AV_TIME_BASE_Q,
-                                  stream->time_base);
+    if (demux->time_offset_us) {
+        /* libavformat's HLS demuxer starts at the first keyframe at or after
+         * the requested time, i.e. after the target. Segments are about 3 s
+         * long and begin with a keyframe, so asking one segment early yields
+         * the latest segment start at or before the target, which the
+         * session then prerolls like a keyframe in a regular file. */
+        target_us -= HLS_SEEK_BIAS_US;
+        if (target_us < 0)
+            target_us = 0;
+    }
+    int64_t target = av_rescale_q(target_us + demux->time_offset_us,
+                                  AV_TIME_BASE_Q, stream->time_base);
     int result = avformat_seek_file(demux->format,
                                     demux->info.video_stream_index,
                                     INT64_MIN, target, target,
