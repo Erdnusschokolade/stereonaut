@@ -170,6 +170,7 @@ int media_demux_open(struct media_demux **result, const char *path,
         demux->info.audio_stream_index = audio;
         demux->info.audio_codec = audio_parameters->codec_id;
         demux->info.sample_rate = audio_parameters->sample_rate;
+        demux->info.audio_time_base = demux->format->streams[audio]->time_base;
         if (av_channel_layout_copy(&demux->info.channel_layout,
                                    &audio_parameters->ch_layout) < 0) {
             set_error(error, error_size, "copy audio channel layout failed");
@@ -198,6 +199,16 @@ int media_demux_open(struct media_demux **result, const char *path,
 const struct media_stream_info *media_demux_info(const struct media_demux *demux)
 {
     return demux ? &demux->info : NULL;
+}
+
+int media_demux_copy_audio_parameters(const struct media_demux *demux,
+                                      AVCodecParameters *parameters)
+{
+    if (!demux || !parameters || demux->info.audio_stream_index < 0)
+        return AVERROR(EINVAL);
+    return avcodec_parameters_copy(
+        parameters,
+        demux->format->streams[demux->info.audio_stream_index]->codecpar);
 }
 
 static int return_packet(struct media_packet *output, AVPacket *packet,
