@@ -160,10 +160,12 @@ static struct mat4 view_from_pose(XrPosef pose)
 {
     float x = pose.orientation.x, y = pose.orientation.y;
     float z = pose.orientation.z, w = pose.orientation.w;
+    /* Invert the rigid OpenXR view pose.  The rotational part of the view
+     * matrix is the transpose of the pose's quaternion rotation. */
     struct mat4 result = {{
-        1 - 2*y*y - 2*z*z, 2*x*y + 2*z*w,     2*x*z - 2*y*w,     0,
-        2*x*y - 2*z*w,     1 - 2*x*x - 2*z*z, 2*y*z + 2*x*w,     0,
-        2*x*z + 2*y*w,     2*y*z - 2*x*w,     1 - 2*x*x - 2*y*y, 0,
+        1 - 2*y*y - 2*z*z, 2*x*y - 2*z*w,     2*x*z + 2*y*w,     0,
+        2*x*y + 2*z*w,     1 - 2*x*x - 2*z*z, 2*y*z - 2*x*w,     0,
+        2*x*z - 2*y*w,     2*y*z + 2*x*w,     1 - 2*x*x - 2*y*y, 0,
         0,                 0,                 0,                 1,
     }};
     result.v[12] = -(result.v[0] * pose.position.x + result.v[4] * pose.position.y + result.v[8] * pose.position.z);
@@ -179,9 +181,11 @@ static struct mat4 projection_from_fov(XrFovf fov)
     float down = tanf(fov.angleDown), up = tanf(fov.angleUp);
     struct mat4 result = {{0}};
     result.v[0] = 2.0f / (right - left);
-    result.v[5] = 2.0f / (up - down);
+    /* Vulkan's framebuffer Y direction is opposite to OpenXR's view-space
+     * Y direction when a positive viewport height is used. */
+    result.v[5] = 2.0f / (down - up);
     result.v[8] = (right + left) / (right - left);
-    result.v[9] = (up + down) / (up - down);
+    result.v[9] = (up + down) / (down - up);
     result.v[10] = far_z / (near_z - far_z);
     result.v[11] = -1.0f;
     result.v[14] = -(far_z * near_z) / (far_z - near_z);
