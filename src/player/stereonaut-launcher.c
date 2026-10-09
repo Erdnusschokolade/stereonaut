@@ -103,15 +103,29 @@ static void selected_parent(const char *path, char *directory, size_t size)
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
-    if (argc > 2) {
-        fprintf(stderr, "usage: %s [INITIAL_DIRECTORY]\n", argv[0]);
+    bool browser_only = argc >= 2 &&
+                        strcmp(argv[1], "--browser-only") == 0;
+    if ((!browser_only && argc > 2) || (browser_only && argc > 3)) {
+        fprintf(stderr,
+                "usage: %s [INITIAL_DIRECTORY]\n"
+                "       %s --browser-only [INITIAL_DIRECTORY]\n",
+                argv[0], argv[0]);
         return 2;
     }
-    const char *initial = argc == 2 ? argv[1] : getenv("HOME");
+    const char *initial = browser_only
+                              ? (argc == 3 ? argv[2] : getenv("HOME"))
+                              : (argc == 2 ? argv[1] : getenv("HOME"));
     if (!initial || !initial[0])
         initial = "/";
     char directory[PLAYER_UI_PATH_MAX];
     snprintf(directory, sizeof(directory), "%s", initial);
+    if (browser_only) {
+        struct player_ui_result result = {0};
+        if (run_browser(directory, &result) < 0)
+            return 1;
+        printf("browser_result type=%u path=%s\n", result.type, result.path);
+        return 0;
+    }
     for (;;) {
         struct player_ui_result result = {0};
         if (run_browser(directory, &result) < 0)
