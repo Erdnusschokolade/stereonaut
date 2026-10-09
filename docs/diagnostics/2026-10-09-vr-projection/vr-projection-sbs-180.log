@@ -1,0 +1,97 @@
+input_bytes=755880785 access_units=7191 largest_access_unit=1058608
+source width=8192 visible_height=4096 fps=60000/1001 duration_s=15.015000
+playback_config projection=1 stereo=1 swap_eyes=0 frame_limit=900
+v4l2_device=/dev/video-dec0 driver=iris_driver card=iris_decoder bus=platform:iris_bus
+output_format fourcc=HEVC width=8192 height=4096 sizeimage=16588800
+output_buffers=6
+capture_format fourcc=NV12 width=8192 height=4096 planes=1 stride=8192 sizeimage=50331648 colorspace=3 xfer=1 ycbcr=2 quant=2
+visible_rect left=0 top=0 width=8192 height=4096
+nv12_contract modifier=DRM_FORMAT_MOD_LINEAR memory_planes=2 v4l2_memory_planes=1 y_offset=0 uv_offset=33554432 row_pitch=8192 required_bytes=50331648
+min_buffers_control=unavailable errno=22
+capture_allocation index=0 length=50331648
+dmabuf_export index=0 fd=4 size=50331648
+capture_allocation index=1 length=50331648
+dmabuf_export index=1 fd=5 size=50331648
+capture_allocation index=2 length=50331648
+dmabuf_export index=2 fd=6 size=50331648
+capture_allocation index=3 length=50331648
+dmabuf_export index=3 fd=7 size=50331648
+capture_allocation index=4 length=50331648
+dmabuf_export index=4 fd=8 size=50331648
+capture_allocation index=5 length=50331648
+dmabuf_export index=5 fd=9 size=50331648
+capture_allocation index=6 length=50331648
+dmabuf_export index=6 fd=10 size=50331648
+capture_allocation index=7 length=50331648
+dmabuf_export index=7 fd=11 size=50331648
+capture_allocation index=8 length=50331648
+dmabuf_export index=8 fd=12 size=50331648
+capture_allocation index=9 length=50331648
+dmabuf_export index=9 fd=13 size=50331648
+capture_allocation index=10 length=50331648
+dmabuf_export index=10 fd=14 size=50331648
+capture_allocation index=11 length=50331648
+dmabuf_export index=11 fd=15 size=50331648
+capture_buffers=12 exported_dmabufs=12 cpu_mapped=0
+renderer_started pid=4231 buffers=12 ipc=seqpacket state=initializing
+render_config projection=1 stereo=1 swap_eyes=0 view0=left view1=right
+fdm_injection: XR layer loaded
+openxr_vulkan_requirements min=281474976710656 max=281483566645248
+openxr_vulkan_device=Turnip Adreno (TM) 750 queue_family=0
+openxr_session_state=1 time=281315337809
+openxr_session_state=2 time=281315344111
+fdm_injection: added swapchain size 1728 (1 total sizes)
+openxr_swapchain format=50 dimensions=1728x1728 images=3
+nv12_import index=0 memory_type=0
+nv12_import index=1 memory_type=0
+nv12_import index=2 memory_type=0
+nv12_import index=3 memory_type=0
+nv12_import index=4 memory_type=0
+nv12_import index=5 memory_type=0
+nv12_import index=6 memory_type=0
+nv12_import index=7 memory_type=0
+nv12_import index=8 memory_type=0
+nv12_import index=9 memory_type=0
+nv12_import index=10 memory_type=0
+nv12_import index=11 memory_type=0
+nv12_contract format=1000156003 modifier=0 memory_planes=2 plane0_offset=0 plane0_pitch=8192 plane1_offset=33554432 plane1_pitch=8192 bytes=50331648 sampled=1 ycbcr_709=1 range=narrow chroma_location=midpoint
+renderer_ready pid=4231 buffers=12 projection=1 stereo=1 swap_eyes=0
+source_change event=1 phase=initial changes=0x1
+playback_started paced=1 maximum_runtime_factor=3 deadline_margin_s=30 stall_timeout_s=10
+openxr_session_state=3 time=281381332028
+openxr_session_state=4 time=281381344371
+openxr_session_state=5 time=281381363903
+frame=0 capture_index=0 sequence=0 bytesused=50331648 timestamp=0.000000 handoff=renderer
+frame=299 capture_index=1 sequence=0 bytesused=50331648 timestamp=4.988316 handoff=renderer
+source_change event=2 phase=dynamic changes=0x1 frames=300 action=drain-old-capture
+capture_flag=LAST frames=300 reason=source-change bytesused=0
+capture_format fourcc=NV12 width=8192 height=4096 planes=1 stride=8192 sizeimage=50331648 colorspace=3 xfer=1 ycbcr=2 quant=2
+visible_rect left=0 top=0 width=8192 height=4096
+capture_reuse_check memory_compatible=1 compose_unchanged=1 existing_buffers=12
+nv12_contract modifier=DRM_FORMAT_MOD_LINEAR memory_planes=2 v4l2_memory_planes=1 y_offset=0 uv_offset=33554432 row_pitch=8192 required_bytes=50331648
+min_buffers_control=unavailable errno=22
+capture_reuse_allocation index=0 length=50331648
+capture_reuse_allocation index=1 length=50331648
+capture_reuse_allocation index=2 length=50331648
+capture_reuse_allocation index=3 length=50331648
+capture_reuse_allocation index=4 length=50331648
+capture_reuse_allocation index=5 length=50331648
+capture_reuse_allocation index=6 length=50331648
+capture_reuse_allocation index=7 length=50331648
+capture_reuse_allocation index=8 length=50331648
+capture_reuse_allocation index=9 length=50331648
+capture_reuse_allocation index=10 length=50331648
+capture_reuse_allocation index=11 length=50331648
+capture_reused generation=2 frames=300 output_stream_kept=1 capture_stream_kept=1 vulkan_imports_kept=1 last_index=2
+frame=599 capture_index=1 sequence=0 bytesused=50331648 timestamp=9.993316 handoff=renderer
+openxr_session_state=4 time=293007934575
+openxr_session_state=3 time=293007956034
+decoder_drain_sent queued_access_units=900
+frame=899 capture_index=0 sequence=0 bytesused=50331648 timestamp=14.998316 handoff=renderer
+capture_flag=LAST frames=900 reason=end-of-stream bytesused=0
+summary access_units=900 output_returned=900 frames=900 sequence_drops=0 count_difference=0 errors=0 source_changes=2 capture_reconfigurations=1 eos_event=0 last_buffer=1
+timing source_fps=59.940060 achieved_fps=59.943992 elapsed_s=15.014015 source_duration_s=15.015000 realtime_ratio=1.000066 maximum_feed_lateness_ms=0.668172
+decode_timing samples=900 mean_ms=14.499217 max_ms=167.346039
+openxr_summary xr_frames=1085 rendered_frames=834 received_frames=900 unique_video_frames=696 repeated_video_frames=138 hidden_video_frames=204 pipeline_skipped_frames=0 released_frames=900 session_changes=7
+renderer_exit=success
+result=success realtime_target_met=1

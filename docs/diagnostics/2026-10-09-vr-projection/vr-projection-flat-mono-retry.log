@@ -1,0 +1,6 @@
+input_bytes=755880785 access_units=7191 largest_access_unit=1058608
+source width=8192 visible_height=4096 fps=60000/1001 duration_s=15.015000
+playback_config projection=0 stereo=0 swap_eyes=0 frame_limit=900
+v4l2_device=/dev/video-dec0 driver=iris_driver card=iris_decoder bus=platform:iris_bus
+output_format fourcc=HEVC width=8192 height=4096 sizeimage=16588800
+VIDIOC_REQBUFS OUTPUT: errno=12 (Cannot allocate memory)
