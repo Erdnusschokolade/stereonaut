@@ -22,6 +22,11 @@ Stand: 2026-10-09, Branch `player/mvp`
 - Die decoderfreie native OpenXR-Dateiauswahl besitzt ein Vulkan-Quadpanel,
   Controller-Aim-Ray, Trigger-Auswahl und Seitenwechsel. Der Launcher wechselt
   zwischen Browser- und Playback-Prozess.
+- Der Video-Renderer besitzt ein zweites, transparentes OpenXR-Quadpanel mit
+  Zeit/Duration, Zurück, -10 s, Play/Pause und +10 s. Pause hält Audio und
+  Decoderfeed an, lässt Headtracking und den letzten Frame aber aktiv. Seek
+  beendet die dateigebundenen Ressourcen kontrolliert und startet dieselbe
+  Datei am vorherigen Keyframe neu; Vorlaufvideo und -PCM werden verworfen.
 
 ## Lokale Nachweise
 
@@ -35,7 +40,7 @@ Stand: 2026-10-09, Branch `player/mvp`
 - Der Browser-Test listet nur Verzeichnisse sowie MKV/MP4 und sortiert
   unabhängig von Groß-/Kleinschreibung.
 
-## Aktueller Zielhardwarezustand
+## Zielhardwarebefunde
 
 Der erste Container-Integrationslauf stoppte vor Decoderstream, DMA-BUF und
 OpenXR bei `VIDIOC_REQBUFS OUTPUT` mit `ENOMEM`. Ein Kontrolllauf mit dem
@@ -45,19 +50,27 @@ Fehler an derselben Stelle mit demselben Iris-Layout
 und `/dev/video-dec0` war von keinem Prozess geöffnet. Das Frame meldete rund
 9,8 GiB verfügbaren RAM und freie hohe Buddy-Orders.
 
-Damit ist dieser konkrete Fehler nicht durch Containerdemux, Audio oder den
-neuen Scheduler verursacht. Er wird als aktueller Geräte-/Treiber-
-Allokationszustand behandelt. Es erfolgte weder ein Neustart noch ein
-Treiber-/Dienst-Recoveryversuch. Decoderaktive Tests bleiben bis zu einem
-später autorisierten Systemzustandswechsel ausgesetzt; decoderfreie OpenXR-
-UI-Tests können unabhängig davon laufen.
+Der Nutzer stellte anschließend fest, dass Playa parallel einen Stream offen
+hielt. Nach dessen Beendigung funktionierten Iris-OUTPUT- und alle zwölf
+50.331.648-Byte-CAPTURE-Allokationen sofort wieder. Der Befund ist damit als
+Ressourcenkonflikt mit dem parallelen Player eingegrenzt; ein Neustart oder
+Treiber-/Dienst-Recovery war nicht nötig.
+
+Der danach ausgeführte 300-Frame-Containerlauf bestätigte 300/300 dekodierte
+8K-Frames, keine Drops, keine V4L2-Fehler und 59,60 fps einschließlich Start-
+und Drain-Overhead. Alle NV12-DMA-BUFs wurden importiert und alle 300 Übergaben
+vom Renderer freigegeben. Die veröffentlichte Audio-Clock lag am letzten Frame
+etwa 10 ms hinter dessen PTS. Das Headset war während dieses Messlaufs nicht
+sichtbar, daher wurden die Frames vom XR-Renderer als `hidden` gezählt.
+
+Der decoderfreie Browser lief auf dem Frame. Das Panel war sichtbar, und der
+Nutzer bestätigte, dass sich das Highlight mit der Controller-Aim-Pose bewegt.
+Eine sichtbare Laserlinie ist noch nicht implementiert.
 
 ## Noch offen
 
-- Playback-Panel sichtbar in den Video-Renderer integrieren.
-- Play/Pause und ±10-s-Aktionen aus dem Renderer an die Session anbinden.
-- V4L2 kontrolliert drainen/neu starten und vor dem Seek-Ziel dekodierte
-  Videoframes verwerfen.
-- Zurück-Aktion aus laufender Wiedergabe und Fehlertext-Rückgabe zum Browser.
+- Playback-Panel und seine vier Controlleraktionen praktisch im Headset
+  validieren, einschließlich wiederholtem Seek und Browser-Rückkehr.
+- Fehlertext-Rückgabe zum Browser ergänzen.
 - Zielhardwaretests für Browser, Controller, A/V-Sync, wiederholtes Seeking,
   mehrere Dateien und einen längeren Lauf.

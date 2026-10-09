@@ -234,6 +234,16 @@ int media_pipeline_open(struct media_pipeline **result, const char *path,
         media_pipeline_close(&pipeline);
         return -1;
     }
+    if (start_us > 0) {
+        pthread_mutex_lock(&pipeline->audio_mutex);
+        int reset_result = audio_output_reset(pipeline->audio, start_us,
+                                              error, error_size);
+        pthread_mutex_unlock(&pipeline->audio_mutex);
+        if (reset_result < 0) {
+            media_pipeline_close(&pipeline);
+            return -1;
+        }
+    }
     if (start_workers(pipeline, error, error_size) < 0) {
         media_pipeline_close(&pipeline);
         return -1;

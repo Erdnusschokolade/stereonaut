@@ -23,7 +23,7 @@ cc -std=c11 -O2 -Wall -Wextra -Werror \
 cc -std=c11 -O2 -Wall -Wextra -Werror \
   -I/usr/include -I"$project_dir/tools/openxr-playback" \
   -o "$build_dir/stereonaut-renderer" \
-  "$project_dir/tools/openxr-playback/xr-nv12-playback-renderer.c" \
+  "$script_dir/stereonaut-renderer.c" \
   -lvulkan -lm "$openxr_loader"
 
 cc -std=c11 -O2 -Wall -Wextra -Werror \

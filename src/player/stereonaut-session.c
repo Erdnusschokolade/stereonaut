@@ -110,6 +110,7 @@ struct playback_options {
     uint32_t stereo_layout;
     bool swap_eyes;
     uint32_t frame_limit;
+    int64_t start_us;
 };
 
 struct capture_contract {
@@ -131,6 +132,7 @@ static int video_fd = -1;
 static int renderer_fd = -1;
 static pid_t renderer_pid = -1;
 static bool renderer_outstanding[MAX_CAPTURE_BUFFERS];
+static uint32_t renderer_action;
 
 static void queue_capture(unsigned index, size_t length);
 
@@ -198,6 +200,25 @@ static void send_renderer_message(uint32_t type, uint32_t index,
         fail_errno("send renderer message");
     if ((size_t)written != sizeof(message))
         fail_message("short renderer message");
+}
+
+static void send_renderer_status(bool paused, int64_t position_us,
+                                 int64_t duration_us)
+{
+    struct nv12_ipc_message message = {
+        .type = NV12_IPC_STATUS,
+        .player_state = paused ? NV12_PLAYER_PAUSED : NV12_PLAYER_PLAYING,
+        .position_us = position_us,
+        .duration_us = duration_us,
+    };
+    ssize_t written;
+    do {
+        written = send(renderer_fd, &message, sizeof(message), MSG_NOSIGNAL);
+    } while (written < 0 && errno == EINTR);
+    if (written < 0)
+        fail_errno("send renderer status");
+    if ((size_t)written != sizeof(message))
+        fail_message("short renderer status");
 }
 
 static void start_renderer(
@@ -322,6 +343,11 @@ static bool process_renderer_messages(
             renderer_outstanding[message.index] = false;
         } else if (message.type == NV12_IPC_FLUSHED) {
             flushed = true;
+        } else if (message.type == NV12_IPC_ACTION) {
+            if (message.index < NV12_ACTION_TOGGLE_PAUSE ||
+                message.index > NV12_ACTION_BACK)
+                fail_message("invalid renderer player action");
+            renderer_action = message.index;
         } else {
             fail_message("unknown renderer response");
         }
@@ -390,6 +416,18 @@ static uint32_t parse_u32(const char *text, const char *name)
     return (uint32_t)value;
 }
 
+static int64_t parse_i64_nonnegative(const char *text, const char *name)
+{
+    char *end = NULL;
+    errno = 0;
+    long long value = strtoll(text, &end, 10);
+    if (errno || !end || *end || value < 0) {
+        fprintf(stderr, "invalid %s: %s\n", name, text);
+        exit(2);
+    }
+    return (int64_t)value;
+}
+
 static struct playback_options parse_playback_options(int argc, char **argv)
 {
     struct playback_options options = {0};
@@ -422,6 +460,11 @@ static struct playback_options parse_playback_options(int argc, char **argv)
             if (++i >= argc)
                 fail_message("--frames requires a positive frame count");
             options.frame_limit = parse_u32(argv[i], "frame limit");
+        } else if (strcmp(argv[i], "--start-us") == 0) {
+            if (++i >= argc)
+                fail_message("--start-us requires a nonnegative timestamp");
+            options.start_us =
+                parse_i64_nonnegative(argv[i], "start timestamp");
         } else {
             fail_message("unknown playback option");
         }
@@ -1525,14 +1568,15 @@ int main(int argc, char **argv)
         fprintf(stderr,
                 "usage: %s INPUT.mkv|INPUT.mp4"
                 " [--projection flat|180|360]"
-                " [--stereo mono|sbs|tb] [--swap-eyes] [--frames N]\n",
+                " [--stereo mono|sbs|tb] [--swap-eyes] [--frames N]"
+                " [--start-us TIMESTAMP]\n",
                 argv[0]);
         return 2;
     }
     struct playback_options options = parse_playback_options(argc, argv);
     char pipeline_error[512] = {0};
     struct media_pipeline *pipeline = NULL;
-    if (media_pipeline_open(&pipeline, argv[1], 0, true, true,
+    if (media_pipeline_open(&pipeline, argv[1], options.start_us, true, true,
                             pipeline_error, sizeof(pipeline_error)) < 0) {
         fprintf(stderr, "open media pipeline: %s\n", pipeline_error);
         return 2;
@@ -1565,6 +1609,8 @@ int main(int argc, char **argv)
            " frame_limit=%u\n",
            options.projection_mode, options.stereo_layout,
            options.swap_eyes, options.frame_limit);
+    if (options.start_us)
+        printf("playback_start_target_us=%" PRId64 "\n", options.start_us);
 
     /* Keep the validated transfer implementation available as diagnostic
      * source, while Vulkan and OpenXR live entirely in the renderer process.
@@ -1658,6 +1704,11 @@ int main(int argc, char **argv)
     bool last_seen = false;
     bool eos_seen = false;
     bool audio_started = false;
+    bool playback_paused = false;
+    double pause_started = 0.0;
+    double last_status_sent = 0.0;
+    uint32_t requested_control = 0;
+    int64_t requested_start_us = 0;
     double playback_start = 0.0;
     double deadline = initial_start + 10.0;
     double last_progress = initial_start;
@@ -1670,6 +1721,7 @@ int main(int argc, char **argv)
     uint64_t source_change_events = 0;
     uint64_t capture_reconfigurations = 0;
     uint64_t late_video_drops = 0;
+    uint64_t seek_preroll_drops = 0;
     struct timing_stats decode_stats = {0};
     double maximum_feed_lateness_ms = 0.0;
 
@@ -1678,9 +1730,65 @@ int main(int argc, char **argv)
             process_renderer_messages(captures, capture_count))
             fail_message("unexpected renderer FLUSHED response");
         double now = monotonic_seconds();
-        if (now > deadline)
+        if (renderer_action == NV12_ACTION_TOGGLE_PAUSE) {
+            playback_paused = !playback_paused;
+            if (media_pipeline_pause(pipeline, playback_paused,
+                                     pipeline_error,
+                                     sizeof(pipeline_error)) < 0) {
+                fprintf(stderr, "change playback pause state: %s\n",
+                        pipeline_error);
+                return 2;
+            }
+            if (playback_paused) {
+                pause_started = now;
+            } else if (pause_started > 0.0) {
+                deadline += now - pause_started;
+                pause_started = 0.0;
+            }
+            last_progress = now;
+            printf("player_state=%s position_us=%" PRId64 "\n",
+                   playback_paused ? "PAUSED" : "PLAYING",
+                   media_pipeline_clock_us(pipeline));
+            send_renderer_status(playback_paused,
+                                 media_pipeline_clock_us(pipeline),
+                                 info->duration_us);
+            last_status_sent = now;
+        } else if (renderer_action == NV12_ACTION_SEEK_BACK ||
+                   renderer_action == NV12_ACTION_SEEK_FORWARD) {
+            int64_t position = media_pipeline_clock_us(pipeline);
+            if (position == AV_NOPTS_VALUE)
+                position = options.start_us;
+            int64_t delta = renderer_action == NV12_ACTION_SEEK_BACK
+                                ? -INT64_C(10000000) : INT64_C(10000000);
+            requested_start_us = position + delta;
+            if (requested_start_us < 0)
+                requested_start_us = 0;
+            if (info->duration_us > 0 &&
+                requested_start_us >= info->duration_us)
+                requested_start_us = info->duration_us - 1;
+            requested_control = renderer_action;
+            printf("player_action=%u position_us=%" PRId64
+                   " target_us=%" PRId64 "\n",
+                   renderer_action, position, requested_start_us);
+        } else if (renderer_action == NV12_ACTION_BACK) {
+            requested_control = renderer_action;
+            printf("player_action=back\n");
+        }
+        renderer_action = 0;
+        if (requested_control)
+            break;
+        if (playback_paused)
+            last_progress = now;
+        if (renderer_fd >= 0 && now - last_status_sent >= 0.25) {
+            send_renderer_status(playback_paused,
+                                 media_pipeline_clock_us(pipeline),
+                                 info->duration_us);
+            last_status_sent = now;
+        }
+        if (!playback_paused && now > deadline)
             fail_message("probe deadline exceeded");
-        if (capture_started && now - last_progress > 10.0)
+        if (capture_started && !playback_paused &&
+            now - last_progress > 10.0)
             fail_message("no decoder/GPU progress for 10 seconds");
         int timeout_ms = 20;
         struct pollfd descriptor = {
@@ -1768,7 +1876,7 @@ int main(int argc, char **argv)
             }
         }
 
-        if (capture_started) {
+        if (capture_started && !playback_paused) {
             while (!video_eof) {
                 if (!have_next_packet) {
                     pipeline_error[0] = '\0';
@@ -1833,7 +1941,7 @@ int main(int argc, char **argv)
             }
         }
 
-        if (capture_started) {
+        if (capture_started && !playback_paused) {
             bool capture_generation_last = false;
             bool last_capture_had_payload = false;
             unsigned last_capture_index = capture_count;
@@ -1876,6 +1984,13 @@ int main(int argc, char **argv)
                             break;
                         }
                     }
+                    bool seek_preroll = options.start_us > 0 &&
+                                        frame_pts_us < options.start_us;
+                    if (seek_preroll) {
+                        seek_preroll_drops++;
+                        queue_capture(dequeued.index,
+                                      captures[dequeued.index].length);
+                    } else {
                     if (!audio_started) {
                         if (media_pipeline_pause(
                                 pipeline, false, pipeline_error,
@@ -1916,8 +2031,6 @@ int main(int argc, char **argv)
                                               frame_index);
                         renderer_outstanding[dequeued.index] = true;
                     }
-                    frames++;
-                    last_progress = monotonic_seconds();
                     if (frame_index == 0 || frames % 300U == 0 ||
                         (options.frame_limit &&
                          frame_index + 1U == options.frame_limit)) {
@@ -1930,6 +2043,16 @@ int main(int argc, char **argv)
                                (long)dequeued.timestamp.tv_usec, audio_clock,
                                late ? "drop-late" : "handoff-renderer");
                     }
+                    }
+                    if (seek_preroll &&
+                        (seek_preroll_drops == 1 ||
+                         seek_preroll_drops % 60U == 0))
+                        printf("frame=%" PRIu64 " timestamp_us=%" PRId64
+                               " action=drop-seek-preroll target_us=%" PRId64
+                               "\n", frame_index, frame_pts_us,
+                               options.start_us);
+                    frames++;
+                    last_progress = monotonic_seconds();
                 }
                 if (dequeued.flags & V4L2_BUF_FLAG_LAST) {
                     capture_generation_last = true;
@@ -1998,6 +2121,62 @@ int main(int argc, char **argv)
         }
     }
 
+    if (requested_control) {
+        if (media_pipeline_pause(pipeline, true, pipeline_error,
+                                 sizeof(pipeline_error)) < 0) {
+            fprintf(stderr, "pause before player control: %s\n",
+                    pipeline_error);
+            return 2;
+        }
+        wait_renderer();
+        if (capture_started) {
+            type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+            must_ioctl(VIDIOC_STREAMOFF, &type,
+                       "VIDIOC_STREAMOFF CAPTURE control");
+        }
+        type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
+        must_ioctl(VIDIOC_STREAMOFF, &type,
+                   "VIDIOC_STREAMOFF OUTPUT control");
+        for (unsigned i = 0; i < output_count; ++i)
+            if (munmap(outputs[i].mapping, outputs[i].length) < 0)
+                fail_errno("munmap OUTPUT control");
+        if (close(video_fd) < 0)
+            fail_errno("close /dev/video-dec0 control");
+        video_fd = -1;
+        for (unsigned i = 0; i < capture_count; ++i)
+            if (captures[i].dma_buf_fd >= 0 &&
+                close(captures[i].dma_buf_fd) < 0)
+                fail_errno("close CAPTURE DMA-BUF control");
+        media_packet_unref(&next_packet);
+        media_pipeline_close(&pipeline);
+        if (requested_control == NV12_ACTION_BACK)
+            return 0;
+        char start_text[32];
+        snprintf(start_text, sizeof(start_text), "%" PRId64,
+                 requested_start_us);
+        const char *projection = options.projection_mode ==
+                                         NV12_PROJECTION_EQUIRECT_180
+                                     ? "180"
+                                 : options.projection_mode ==
+                                           NV12_PROJECTION_EQUIRECT_360
+                                     ? "360" : "flat";
+        const char *stereo = options.stereo_layout == NV12_STEREO_SBS
+                                 ? "sbs"
+                             : options.stereo_layout == NV12_STEREO_TB
+                                 ? "tb" : "mono";
+        printf("player_restart target_us=%s projection=%s stereo=%s\n",
+               start_text, projection, stereo);
+        if (options.swap_eyes)
+            execl(argv[0], argv[0], argv[1], "--projection", projection,
+                  "--stereo", stereo, "--swap-eyes", "--start-us",
+                  start_text, (char *)NULL);
+        else
+            execl(argv[0], argv[0], argv[1], "--projection", projection,
+                  "--stereo", stereo, "--start-us", start_text,
+                  (char *)NULL);
+        fail_errno("restart stereonaut-session after seek");
+    }
+
     double playback_end = monotonic_seconds();
     double elapsed = playback_end - playback_start;
     double achieved_fps = elapsed > 0.0 ? frames / elapsed : 0.0;
@@ -2009,11 +2188,13 @@ int main(int argc, char **argv)
     printf("summary access_units=%" PRIu64 " output_returned=%" PRIu64
            " frames=%" PRIu64 " sequence_drops=%" PRIu64
            " late_video_drops=%" PRIu64
+           " seek_preroll_drops=%" PRIu64
            " count_difference=%" PRIu64 " errors=%" PRIu64
            " source_changes=%" PRIu64 " capture_reconfigurations=%" PRIu64
            " eos_event=%u last_buffer=%u\n",
            queued_access_units, output_returned, frames, sequence_drops,
-           late_video_drops, count_difference, v4l2_errors, source_change_events,
+           late_video_drops, seek_preroll_drops, count_difference, v4l2_errors,
+           source_change_events,
            capture_reconfigurations, eos_seen, last_seen);
     printf("timing source_fps=%.6f achieved_fps=%.6f elapsed_s=%.6f"
            " source_duration_s=%.6f realtime_ratio=%.6f"

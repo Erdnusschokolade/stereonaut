@@ -25,6 +25,20 @@ enum nv12_ipc_type {
     NV12_IPC_FLUSHED = 5,
     NV12_IPC_EOS = 6,
     NV12_IPC_READY = 7,
+    NV12_IPC_STATUS = 8,
+    NV12_IPC_ACTION = 9,
+};
+
+enum nv12_player_state {
+    NV12_PLAYER_PLAYING = 1,
+    NV12_PLAYER_PAUSED = 2,
+};
+
+enum nv12_player_action {
+    NV12_ACTION_TOGGLE_PAUSE = 1,
+    NV12_ACTION_SEEK_BACK = 2,
+    NV12_ACTION_SEEK_FORWARD = 3,
+    NV12_ACTION_BACK = 4,
 };
 
 struct nv12_ipc_message {
@@ -40,7 +54,9 @@ struct nv12_ipc_message {
     uint32_t projection_mode;
     uint32_t stereo_layout;
     uint32_t swap_eyes;
-    uint32_t reserved;
+    uint32_t player_state;
+    int64_t position_us;
+    int64_t duration_us;
 };
 
 #endif

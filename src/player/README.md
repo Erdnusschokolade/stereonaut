@@ -88,3 +88,13 @@ The video scheduler never calls ALSA while the audio worker may be blocked in
 audio packet; readers extrapolate that snapshot with monotonic time between
 updates. This keeps audio as master without serializing V4L2 progress on audio
 device I/O.
+
+The playback renderer adds a head-relative native OpenXR quad panel over the
+video layer. The same two-hand aim/select actions used by the browser drive
+Back, -10 s, Play/Pause and +10 s. Position, duration and state arrive over
+the frame IPC socket. Pause leaves the OpenXR loop and current DMA-BUF frame
+alive while stopping audio and bounded decoder feed. A seek closes the active
+media/V4L2/XR children cleanly and re-executes the same session at the
+preceding container keyframe; decoded video and PCM before the requested
+timestamp are discarded. Re-exec keeps repeated seeks simple and avoids
+reusing a stateful HEVC decoder across a GOP discontinuity.
