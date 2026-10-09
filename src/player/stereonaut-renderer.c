@@ -42,6 +42,10 @@
 #define UI_BUTTON_Y 156
 #define UI_BUTTON_HEIGHT 108
 #define GRAB_RECENTER_COS 0.5f
+/* The select action is analog so the press point can be lower than the
+ * trigger's full click travel. */
+#define SELECT_PRESS_THRESHOLD 0.30f
+#define SELECT_RELEASE_THRESHOLD 0.15f
 
 struct mat4 { float v[16]; };
 
@@ -108,6 +112,7 @@ struct app {
     XrAction aim_action;
     XrAction select_action;
     XrAction squeeze_action;
+    bool select_down[2];
     bool has_valve_frame_controller;
     bool has_generic_controller;
     XrPath hands[2];
@@ -251,7 +256,7 @@ static void initialize_actions(struct app *app)
             xrCreateActionSet(app->xr, &set, &app->action_set));
     create_action(app->action_set, XR_ACTION_TYPE_POSE_INPUT,
                   "aim", "Zeigen", app->hands, &app->aim_action);
-    create_action(app->action_set, XR_ACTION_TYPE_BOOLEAN_INPUT,
+    create_action(app->action_set, XR_ACTION_TYPE_FLOAT_INPUT,
                   "select", "Auswaehlen", app->hands,
                   &app->select_action);
     create_action(app->action_set, XR_ACTION_TYPE_BOOLEAN_INPUT,
@@ -263,11 +268,11 @@ static void initialize_actions(struct app *app)
         bool enabled;
     } profiles[] = {
         {"/interaction_profiles/valve/frame_controller",
-         "trigger/click", "squeeze/click", app->has_valve_frame_controller},
+         "trigger/value", "squeeze/click", app->has_valve_frame_controller},
         {"/interaction_profiles/khr/generic_controller",
          "trigger/value", "squeeze/value", app->has_generic_controller},
         {"/interaction_profiles/valve/index_controller",
-         "trigger/click", "squeeze/value", true},
+         "trigger/value", "squeeze/value", true},
         /* No squeeze button: panel grab and show/hide are unavailable. */
         {"/interaction_profiles/khr/simple_controller",
          "select/click", NULL, true},
@@ -477,6 +482,8 @@ static void receive_frame_messages(struct app *app)
             app->current_video_index = (int)message.index;
             app->current_video_presented = false;
             app->video_buffers[message.index].producer_wait_pending = true;
+            if (app->received_frames == 0)
+                app->ui_dirty = true;
             app->received_frames++;
         } else if (message.type == NV12_IPC_FLUSH) {
             release_current_video(app);
@@ -1164,6 +1171,8 @@ static void render_ui_pixels(struct app *app)
     format_time(duration, app->duration_us);
     snprintf(clock_text, sizeof(clock_text), "%s / %s", position, duration);
     ui_text(app, 382, 24, 5, clock_text, text);
+    if (app->received_frames == 0)
+        ui_text(app, 28, 24, 5, "LADEN", grabbed);
 
     float ratio = seek_ratio(app);
     int fill = (int)(ratio * UI_BAR_WIDTH);
@@ -1574,7 +1583,8 @@ struct hand_input {
     bool aim_valid;
     XrPosef aim;
     struct panel_hit hit;
-    XrActionStateBoolean select;
+    bool select_edge;
+    bool select_held;
     XrActionStateBoolean squeeze;
 };
 
@@ -1589,6 +1599,29 @@ static void read_boolean(struct app *app, XrAction action, XrPath hand,
     *state = (XrActionStateBoolean){.type = XR_TYPE_ACTION_STATE_BOOLEAN};
     need_xr("xrGetActionStateBoolean",
             xrGetActionStateBoolean(app->session, &info, state));
+}
+
+static void read_select(struct app *app, unsigned hand,
+                        struct hand_input *input)
+{
+    XrActionStateGetInfo info = {
+        .type = XR_TYPE_ACTION_STATE_GET_INFO,
+        .action = app->select_action,
+        .subactionPath = app->hands[hand],
+    };
+    XrActionStateFloat state = {.type = XR_TYPE_ACTION_STATE_FLOAT};
+    need_xr("xrGetActionStateFloat",
+            xrGetActionStateFloat(app->session, &info, &state));
+    bool down = app->select_down[hand];
+    if (!state.isActive)
+        down = false;
+    else if (!down && state.currentState >= SELECT_PRESS_THRESHOLD)
+        down = true;
+    else if (down && state.currentState < SELECT_RELEASE_THRESHOLD)
+        down = false;
+    input->select_edge = down && !app->select_down[hand];
+    input->select_held = down;
+    app->select_down[hand] = down;
 }
 
 static bool pressed_edge(const XrActionStateBoolean *state)
@@ -1672,8 +1705,7 @@ static void sync_player_input(struct app *app, XrTime time)
                 hands[hand].hit = panel_ray(app, location.pose);
             }
         }
-        read_boolean(app, app->select_action, app->hands[hand],
-                     &hands[hand].select);
+        read_select(app, hand, &hands[hand]);
         read_boolean(app, app->squeeze_action, app->hands[hand],
                      &hands[hand].squeeze);
     }
@@ -1731,7 +1763,7 @@ static void sync_player_input(struct app *app, XrTime time)
                 app->ui_dirty = true;
             }
         }
-        if (!held(&input->select)) {
+        if (!input->select_held) {
             printf("player_seek_bar target_us=%" PRId64 "\n", app->scrub_us);
             app->scrub_hand = -1;
             app->seek_pending = true;
@@ -1742,7 +1774,7 @@ static void sync_player_input(struct app *app, XrTime time)
     for (unsigned hand = 0; hand < 2; ++hand) {
         if (!app->ui_visible || app->grab_hand >= 0 ||
             app->scrub_hand >= 0 || app->seek_pending ||
-            !pressed_edge(&hands[hand].select) || !hands[hand].aim_valid ||
+            !hands[hand].select_edge || !hands[hand].aim_valid ||
             !panel_hit_inside(&hands[hand].hit))
             continue;
         int action = ui_hit_test(app, hands[hand].hit.u, hands[hand].hit.v);
@@ -1787,6 +1819,23 @@ static void sync_player_input(struct app *app, XrTime time)
     }
 }
 
+static XrCompositionLayerQuad make_ui_layer(const struct app *app)
+{
+    return (XrCompositionLayerQuad){
+        .type = XR_TYPE_COMPOSITION_LAYER_QUAD,
+        .layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT,
+        .space = app->space,
+        .eyeVisibility = XR_EYE_VISIBILITY_BOTH,
+        .subImage = {
+            .swapchain = app->ui_swapchain,
+            .imageRect = {.extent = {UI_WIDTH, UI_HEIGHT}},
+        },
+        .pose = {yaw_quaternion(app->panel_yaw),
+                 {app->panel_x, app->panel_y, app->panel_z}},
+        .size = {UI_PANEL_WIDTH_METERS, UI_PANEL_HEIGHT_METERS},
+    };
+}
+
 static void render_frame(struct app *app)
 {
     XrFrameState frame_state = {.type = XR_TYPE_FRAME_STATE};
@@ -1806,9 +1855,17 @@ static void render_frame(struct app *app)
         return;
     }
     if (app->current_video_index < 0) {
+        /* No decoded frame yet (start or seek preroll): keep the panel
+         * visible so the interface does not vanish while loading. */
+        XrCompositionLayerQuad ui_only = make_ui_layer(app);
+        const XrCompositionLayerBaseHeader *ui_layers[] = {
+            (const XrCompositionLayerBaseHeader *)&ui_only,
+        };
         XrFrameEndInfo end = {.type = XR_TYPE_FRAME_END_INFO,
             .displayTime = frame_state.predictedDisplayTime,
-            .environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE};
+            .environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE,
+            .layerCount = app->ui_visible ? 1U : 0U,
+            .layers = ui_layers};
         need_xr("xrEndFrame(no video)", xrEndFrame(app->session, &end));
         return;
     }
@@ -1971,19 +2028,7 @@ static void render_frame(struct app *app)
         projection_views[eye].subImage = (XrSwapchainSubImage){.swapchain = app->swapchain, .imageRect = {.extent = {(int32_t)app->width, (int32_t)app->height}}, .imageArrayIndex = eye};
     }
     XrCompositionLayerProjection layer = {.type = XR_TYPE_COMPOSITION_LAYER_PROJECTION, .space = app->space, .viewCount = 2, .views = projection_views};
-    XrCompositionLayerQuad ui_layer = {
-        .type = XR_TYPE_COMPOSITION_LAYER_QUAD,
-        .layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT,
-        .space = app->space,
-        .eyeVisibility = XR_EYE_VISIBILITY_BOTH,
-        .subImage = {
-            .swapchain = app->ui_swapchain,
-            .imageRect = {.extent = {UI_WIDTH, UI_HEIGHT}},
-        },
-        .pose = {yaw_quaternion(app->panel_yaw),
-                 {app->panel_x, app->panel_y, app->panel_z}},
-        .size = {UI_PANEL_WIDTH_METERS, UI_PANEL_HEIGHT_METERS},
-    };
+    XrCompositionLayerQuad ui_layer = make_ui_layer(app);
     const XrCompositionLayerBaseHeader *layers[] = {
         (const XrCompositionLayerBaseHeader *)&layer,
         (const XrCompositionLayerBaseHeader *)&ui_layer,

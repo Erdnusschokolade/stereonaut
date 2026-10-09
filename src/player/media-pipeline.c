@@ -14,6 +14,11 @@
 
 #define VIDEO_QUEUE_CAPACITY 24
 #define AUDIO_QUEUE_CAPACITY 256
+/* After a seek the demuxer starts at the preceding video keyframe, which can
+ * be many seconds before the target. Audio packets more than this far before
+ * the target are dropped at the demuxer; otherwise the paused audio worker
+ * leaves the bounded audio queue full and starves the video preroll. */
+#define AUDIO_SEEK_MARGIN_US INT64_C(1000000)
 
 struct media_pipeline {
     struct media_demux *demux;
@@ -37,6 +42,7 @@ struct media_pipeline {
     int64_t cached_audio_clock_at_us;
     bool failed;
     char failure[512];
+    int64_t audio_skip_before_us;
 };
 
 static int start_workers(struct media_pipeline *pipeline,
@@ -92,6 +98,13 @@ static void *demux_worker(void *argument)
         }
         if (result == 0)
             break;
+        if (packet.kind == MEDIA_PACKET_AUDIO &&
+            pipeline->audio_skip_before_us > 0 &&
+            packet.pts_us != AV_NOPTS_VALUE &&
+            packet.pts_us < pipeline->audio_skip_before_us) {
+            media_packet_unref(&packet);
+            continue;
+        }
         struct packet_queue *queue = packet.kind == MEDIA_PACKET_VIDEO
                                          ? &pipeline->video_queue
                                          : &pipeline->audio_queue;
@@ -235,6 +248,7 @@ int media_pipeline_open(struct media_pipeline **result, const char *path,
         return -1;
     }
     if (start_us > 0) {
+        pipeline->audio_skip_before_us = start_us - AUDIO_SEEK_MARGIN_US;
         pthread_mutex_lock(&pipeline->audio_mutex);
         int reset_result = audio_output_reset(pipeline->audio, start_us,
                                               error, error_size);
@@ -379,6 +393,7 @@ int media_pipeline_seek(struct media_pipeline *pipeline, int64_t target_us,
     if (media_demux_seek(pipeline->demux, target_us,
                          error, error_size) < 0)
         return -1;
+    pipeline->audio_skip_before_us = target_us - AUDIO_SEEK_MARGIN_US;
     pthread_mutex_lock(&pipeline->audio_mutex);
     int reset_result = audio_output_reset(pipeline->audio, target_us,
                                           error, error_size);

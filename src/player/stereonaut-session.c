@@ -230,6 +230,15 @@ static void send_renderer_status(bool paused, int64_t position_us,
         fail_message("short renderer status");
 }
 
+/* Before the audio clock runs (decoder start, seek preroll) report the
+ * requested start so the panel shows the seek target instead of 00:00. */
+static int64_t status_position_us(struct media_pipeline *pipeline,
+                                  int64_t start_us)
+{
+    int64_t clock = media_pipeline_clock_us(pipeline);
+    return clock == AV_NOPTS_VALUE ? start_us : clock;
+}
+
 static void start_renderer(
     struct capture_buffer buffers[MAX_CAPTURE_BUFFERS], unsigned count,
     const struct video_layout *layout, const struct playback_options *options)
@@ -1784,7 +1793,8 @@ int main(int argc, char **argv)
                    playback_paused ? "PAUSED" : "PLAYING",
                    media_pipeline_clock_us(pipeline));
             send_renderer_status(playback_paused,
-                                 media_pipeline_clock_us(pipeline),
+                                 status_position_us(pipeline,
+                                                    options.start_us),
                                  info->duration_us);
             last_status_sent = now;
         } else if (renderer_action == NV12_ACTION_SEEK_BACK ||
@@ -1820,7 +1830,8 @@ int main(int argc, char **argv)
             last_progress = now;
         if (renderer_fd >= 0 && now - last_status_sent >= 0.25) {
             send_renderer_status(playback_paused,
-                                 media_pipeline_clock_us(pipeline),
+                                 status_position_us(pipeline,
+                                                    options.start_us),
                                  info->duration_us);
             last_status_sent = now;
         }

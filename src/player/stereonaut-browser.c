@@ -30,6 +30,9 @@
 #define PAGE_ENTRIES 9U
 #define PANEL_WIDTH_METERS 1.6f
 #define PANEL_HEIGHT_METERS 1.2f
+/* Analog select with hysteresis; see the matching values in the renderer. */
+#define SELECT_PRESS_THRESHOLD 0.30f
+#define SELECT_RELEASE_THRESHOLD 0.15f
 
 struct browser_app {
     int ipc_fd;
@@ -53,6 +56,9 @@ struct browser_app {
     XrActionSet action_set;
     XrAction aim_action;
     XrAction select_action;
+    bool has_valve_frame_controller;
+    bool has_generic_controller;
+    bool select_down[2];
     XrPath hands[2];
     XrSpace aim_spaces[2];
 
@@ -137,7 +143,36 @@ static XrPath xr_path(struct browser_app *app, const char *text)
 
 static void initialize_xr_vulkan(struct browser_app *app)
 {
-    const char *extensions[] = {XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME};
+    /* Optional controller profiles allow binding the analog trigger value, so
+     * a press registers well before the trigger's full click travel. */
+    const char *valve_extension = "XR_VALVE_frame_controller_interaction";
+    const char *generic_extension = "XR_KHR_generic_controller";
+    uint32_t available_count = 0;
+    need_xr("xrEnumerateInstanceExtensionProperties(count)",
+            xrEnumerateInstanceExtensionProperties(NULL, 0, &available_count,
+                                                   NULL));
+    XrExtensionProperties *available =
+        calloc(available_count ? available_count : 1U, sizeof(*available));
+    need(available != NULL, "allocate OpenXR extension list");
+    for (uint32_t i = 0; i < available_count; ++i)
+        available[i].type = XR_TYPE_EXTENSION_PROPERTIES;
+    need_xr("xrEnumerateInstanceExtensionProperties(list)",
+            xrEnumerateInstanceExtensionProperties(NULL, available_count,
+                                                   &available_count,
+                                                   available));
+    for (uint32_t i = 0; i < available_count; ++i) {
+        if (strcmp(available[i].extensionName, valve_extension) == 0)
+            app->has_valve_frame_controller = true;
+        if (strcmp(available[i].extensionName, generic_extension) == 0)
+            app->has_generic_controller = true;
+    }
+    free(available);
+    const char *extensions[3] = {XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME};
+    uint32_t extension_count = 1;
+    if (app->has_valve_frame_controller)
+        extensions[extension_count++] = valve_extension;
+    if (app->has_generic_controller)
+        extensions[extension_count++] = generic_extension;
     XrInstanceCreateInfo create = {
         .type = XR_TYPE_INSTANCE_CREATE_INFO,
         .applicationInfo = {
@@ -145,7 +180,7 @@ static void initialize_xr_vulkan(struct browser_app *app)
             .engineVersion = 1,
             .apiVersion = XR_MAKE_VERSION(1, 0, 0),
         },
-        .enabledExtensionCount = ARRAY_COUNT(extensions),
+        .enabledExtensionCount = extension_count,
         .enabledExtensionNames = extensions,
     };
     snprintf(create.applicationInfo.applicationName,
@@ -290,28 +325,51 @@ static void initialize_actions(struct browser_app *app)
             xrCreateActionSet(app->xr, &set, &app->action_set));
     create_action(app->action_set, XR_ACTION_TYPE_POSE_INPUT,
                   "aim", "Zeigen", app->hands, &app->aim_action);
-    create_action(app->action_set, XR_ACTION_TYPE_BOOLEAN_INPUT,
+    create_action(app->action_set, XR_ACTION_TYPE_FLOAT_INPUT,
                   "select", "Auswaehlen", app->hands,
                   &app->select_action);
-    XrPath profile = xr_path(app, "/interaction_profiles/khr/simple_controller");
-    XrActionSuggestedBinding bindings[4] = {
-        {app->aim_action,
-         xr_path(app, "/user/hand/left/input/aim/pose")},
-        {app->aim_action,
-         xr_path(app, "/user/hand/right/input/aim/pose")},
-        {app->select_action,
-         xr_path(app, "/user/hand/left/input/select/click")},
-        {app->select_action,
-         xr_path(app, "/user/hand/right/input/select/click")},
+    struct {
+        const char *profile;
+        const char *select_component;
+        bool enabled;
+    } profiles[] = {
+        {"/interaction_profiles/valve/frame_controller", "trigger/value",
+         app->has_valve_frame_controller},
+        {"/interaction_profiles/khr/generic_controller", "trigger/value",
+         app->has_generic_controller},
+        {"/interaction_profiles/valve/index_controller", "trigger/value",
+         true},
+        {"/interaction_profiles/khr/simple_controller", "select/click", true},
     };
-    XrInteractionProfileSuggestedBinding suggestion = {
-        .type = XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING,
-        .interactionProfile = profile,
-        .countSuggestedBindings = ARRAY_COUNT(bindings),
-        .suggestedBindings = bindings,
-    };
-    need_xr("xrSuggestInteractionProfileBindings",
-            xrSuggestInteractionProfileBindings(app->xr, &suggestion));
+    static const char *const hand_names[2] = {"left", "right"};
+    unsigned accepted = 0;
+    for (size_t p = 0; p < ARRAY_COUNT(profiles); ++p) {
+        if (!profiles[p].enabled)
+            continue;
+        XrActionSuggestedBinding bindings[4];
+        char text[2][2][96];
+        for (unsigned hand = 0; hand < 2; ++hand) {
+            snprintf(text[0][hand], sizeof(text[0][hand]),
+                     "/user/hand/%s/input/aim/pose", hand_names[hand]);
+            snprintf(text[1][hand], sizeof(text[1][hand]),
+                     "/user/hand/%s/input/%s", hand_names[hand],
+                     profiles[p].select_component);
+            bindings[hand * 2] = (XrActionSuggestedBinding){
+                app->aim_action, xr_path(app, text[0][hand])};
+            bindings[hand * 2 + 1] = (XrActionSuggestedBinding){
+                app->select_action, xr_path(app, text[1][hand])};
+        }
+        XrInteractionProfileSuggestedBinding suggestion = {
+            .type = XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING,
+            .interactionProfile = xr_path(app, profiles[p].profile),
+            .countSuggestedBindings = ARRAY_COUNT(bindings),
+            .suggestedBindings = bindings,
+        };
+        if (XR_SUCCEEDED(
+                xrSuggestInteractionProfileBindings(app->xr, &suggestion)))
+            ++accepted;
+    }
+    need(accepted > 0, "no controller interaction profile was accepted");
     for (unsigned hand = 0; hand < 2; ++hand) {
         XrActionSpaceCreateInfo space = {
             .type = XR_TYPE_ACTION_SPACE_CREATE_INFO,
@@ -855,15 +913,19 @@ static void sync_input(struct browser_app *app, XrTime time)
             .action = app->select_action,
             .subactionPath = app->hands[hand],
         };
-        XrActionStateBoolean select = {
-            .type = XR_TYPE_ACTION_STATE_BOOLEAN,
-        };
-        need_xr("xrGetActionStateBoolean",
-                xrGetActionStateBoolean(app->session,
-                                        &select_info, &select));
-        if (select.isActive && select.changedSinceLastSync &&
-            select.currentState)
+        XrActionStateFloat select = {.type = XR_TYPE_ACTION_STATE_FLOAT};
+        need_xr("xrGetActionStateFloat",
+                xrGetActionStateFloat(app->session, &select_info, &select));
+        bool down = app->select_down[hand];
+        if (!select.isActive)
+            down = false;
+        else if (!down && select.currentState >= SELECT_PRESS_THRESHOLD)
+            down = true;
+        else if (down && select.currentState < SELECT_RELEASE_THRESHOLD)
+            down = false;
+        if (down && !app->select_down[hand])
             pressed = true;
+        app->select_down[hand] = down;
     }
     if (hover != app->hover) {
         app->hover = hover;
