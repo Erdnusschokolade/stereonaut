@@ -592,6 +592,22 @@ static uint8_t glyph_row(unsigned char character, unsigned row)
         return (uint8_t[]){4, 2, 1, 2, 4}[row];
     if (character == '<')
         return (uint8_t[]){1, 2, 4, 2, 1}[row];
+    if (character == '(')
+        return (uint8_t[]){1, 2, 2, 2, 1}[row];
+    if (character == ')')
+        return (uint8_t[]){4, 2, 2, 2, 4}[row];
+    if (character == ',')
+        return (uint8_t[]){0, 0, 0, 2, 4}[row];
+    if (character == '+')
+        return (uint8_t[]){0, 2, 7, 2, 0}[row];
+    if (character == '!')
+        return (uint8_t[]){2, 2, 2, 0, 2}[row];
+    if (character == '?')
+        return (uint8_t[]){6, 1, 2, 0, 2}[row];
+    if (character == '&')
+        return (uint8_t[]){2, 5, 2, 5, 3}[row];
+    if (character == '\'')
+        return (uint8_t[]){2, 2, 0, 0, 0}[row];
     if (character == ' ')
         return 0;
     return (uint8_t[]){7, 5, 5, 5, 7}[row];

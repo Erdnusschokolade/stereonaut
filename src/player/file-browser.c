@@ -1,5 +1,6 @@
 #define _XOPEN_SOURCE 700
 #include "file-browser.h"
+#include "jellyfin.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -190,6 +191,220 @@ allocation_failure:
     return listing;
 }
 
+/* ---- virtual root and Jellyfin sources ---------------------------------- */
+
+static char login_code[16];
+static char login_secret[128];
+
+/* The pixel font has no umlauts: transliterate, replace everything else. */
+static void ascii_name(const char *source, char *target, size_t size)
+{
+    size_t used = 0;
+    for (const unsigned char *c = (const unsigned char *)source;
+         *c && used + 3U < size; ++c) {
+        if (*c < 0x80) {
+            target[used++] = (char)*c;
+        } else if (*c == 0xC3 && c[1]) {
+            const char *mapped = NULL;
+            switch (c[1]) {
+            case 0x84: mapped = "Ae"; break;
+            case 0x96: mapped = "Oe"; break;
+            case 0x9C: mapped = "Ue"; break;
+            case 0xA4: mapped = "ae"; break;
+            case 0xB6: mapped = "oe"; break;
+            case 0xBC: mapped = "ue"; break;
+            case 0x9F: mapped = "ss"; break;
+            default: mapped = "?"; break;
+            }
+            for (; *mapped && used + 1U < size; ++mapped)
+                target[used++] = *mapped;
+            ++c;
+        } else {
+            target[used++] = '?';
+            while (c[1] && (c[1] & 0xC0) == 0x80)
+                ++c;
+        }
+    }
+    target[used] = '\0';
+}
+
+static int add_entry(struct file_browser_listing *listing,
+                     enum file_browser_entry_kind kind, const char *name,
+                     const char *path)
+{
+    char *copy = strdup(path);
+    return copy ? append_entry(listing, kind, name, copy) : -1;
+}
+
+static struct file_browser_listing read_root(uint64_t generation)
+{
+    struct file_browser_listing listing = {.generation = generation};
+    listing.path = strdup("STEREONAUT");
+    const char *home = getenv("HOME");
+    if (add_entry(&listing, FILE_BROWSER_DIRECTORY, "LOKALE DATEIEN",
+                  home && home[0] ? home : "/") < 0 ||
+        add_entry(&listing, FILE_BROWSER_DIRECTORY, "JELLYFIN", "jf:") < 0) {
+        file_browser_listing_clear(&listing);
+        listing.generation = generation;
+        snprintf(listing.error, sizeof(listing.error), "NICHT GENUG SPEICHER");
+    }
+    return listing;
+}
+
+static struct file_browser_listing jellyfin_message(
+    uint64_t generation, const char *title, const char *message)
+{
+    struct file_browser_listing listing = {.generation = generation};
+    listing.path = strdup(title);
+    snprintf(listing.error, sizeof(listing.error), "%s", message);
+    add_entry(&listing, FILE_BROWSER_PARENT, "..", "root:");
+    return listing;
+}
+
+static struct file_browser_listing jellyfin_login(
+    uint64_t generation, struct jf_config *config, bool poll,
+    const char *note)
+{
+    char error[256] = {0};
+    if (poll && login_secret[0]) {
+        bool authenticated = false;
+        if (jf_quickconnect_poll(config, login_secret, &authenticated, error,
+                                 sizeof(error)) == 0 && authenticated) {
+            login_secret[0] = '\0';
+            return (struct file_browser_listing){.generation = generation};
+        }
+        if (!error[0])
+            note = "NOCH NICHT BESTAETIGT";
+        else
+            login_secret[0] = '\0'; /* expired or rejected: request a new code */
+    }
+    if (!login_secret[0] &&
+        jf_quickconnect_start(config, login_code, login_secret, error,
+                              sizeof(error)) < 0)
+        return jellyfin_message(generation, "JELLYFIN ANMELDEN",
+                                error[0] ? error : "ANMELDUNG NICHT MOEGLICH");
+    struct file_browser_listing listing = {.generation = generation};
+    listing.path = strdup("JELLYFIN ANMELDEN");
+    snprintf(listing.error, sizeof(listing.error), "%s",
+             note ? note : "CODE IN JELLYFIN BESTAETIGEN: QUICK CONNECT");
+    char label[64];
+    add_entry(&listing, FILE_BROWSER_PARENT, "..", "root:");
+    snprintf(label, sizeof(label), "CODE %s", login_code);
+    add_entry(&listing, FILE_BROWSER_DIRECTORY, label, "jf:login");
+    add_entry(&listing, FILE_BROWSER_DIRECTORY, "WEITER NACH BESTAETIGUNG",
+              "jf:login");
+    return listing;
+}
+
+static struct file_browser_listing read_jellyfin(const char *request,
+                                                  uint64_t generation)
+{
+    char error[256] = {0};
+    struct jf_config config;
+    if (jf_config_load(&config, error, sizeof(error)) < 0)
+        return jellyfin_message(generation, "JELLYFIN", error);
+    bool login_request = strcmp(request, "jf:login") == 0;
+    if (login_request || !jf_config_has_token(&config)) {
+        struct file_browser_listing login =
+            jellyfin_login(generation, &config, login_request, NULL);
+        if (login.path)
+            return login;
+        request = "jf:"; /* authenticated just now */
+    }
+
+    struct file_browser_listing listing = {.generation = generation};
+    struct jf_item *items = NULL;
+    size_t count = 0;
+    char title[320] = "JELLYFIN";
+    char parent_path_text[JF_ID_SIZE + 16] = "root:";
+    const char *folder_id = NULL;
+    int result;
+    if (strncmp(request, "jf:view:", 8) == 0)
+        folder_id = request + 8;
+    if (!folder_id) {
+        result = jf_list_views(&config, &items, &count, error, sizeof(error));
+    } else {
+        struct jf_item *views = NULL;
+        size_t view_count = 0;
+        bool is_view = false;
+        if (jf_list_views(&config, &views, &view_count, error,
+                          sizeof(error)) == 0) {
+            for (size_t i = 0; i < view_count; ++i)
+                if (strcmp(views[i].id, folder_id) == 0) {
+                    is_view = true;
+                    snprintf(title, sizeof(title), "JELLYFIN / %s",
+                             views[i].name);
+                }
+            free(views);
+        }
+        if (is_view) {
+            snprintf(parent_path_text, sizeof(parent_path_text), "jf:");
+        } else {
+            char name[256] = {0}, parent[JF_ID_SIZE] = {0};
+            if (jf_item_info(&config, folder_id, name, sizeof(name), parent,
+                             sizeof(parent), error, sizeof(error)) == 0) {
+                snprintf(title, sizeof(title), "JELLYFIN / %s", name);
+                if (parent[0])
+                    snprintf(parent_path_text, sizeof(parent_path_text),
+                             "jf:view:%s", parent);
+                else
+                    snprintf(parent_path_text, sizeof(parent_path_text), "jf:");
+            }
+        }
+        error[0] = '\0';
+        result = jf_list_children(&config, folder_id, &items, &count, error,
+                                  sizeof(error));
+    }
+    if (result == JF_AUTH_RETRY) {
+        config.token[0] = '\0';
+        login_secret[0] = '\0';
+        return jellyfin_login(generation, &config, false,
+                              "ANMELDUNG ABGELAUFEN: NEUEN CODE BESTAETIGEN");
+    }
+    if (result < 0)
+        return jellyfin_message(generation, "JELLYFIN",
+                                error[0] ? error : "JELLYFIN-FEHLER");
+    char display[300];
+    ascii_name(title, display, sizeof(display));
+    listing.path = strdup(display);
+    if (add_entry(&listing, FILE_BROWSER_PARENT, "..", parent_path_text) < 0)
+        goto allocation_failure;
+    for (size_t i = 0; i < count; ++i) {
+        char path[2 * JF_ID_SIZE + 16];
+        if (items[i].is_folder)
+            snprintf(path, sizeof(path), "jf:view:%s", items[i].id);
+        else
+            snprintf(path, sizeof(path), "jf:item:%s:%s", items[i].id,
+                     folder_id ? folder_id : "");
+        ascii_name(items[i].name, display, sizeof(display));
+        if (add_entry(&listing,
+                      items[i].is_folder ? FILE_BROWSER_DIRECTORY
+                                         : FILE_BROWSER_MEDIA,
+                      display, path) < 0)
+            goto allocation_failure;
+    }
+    free(items);
+    return listing;
+
+allocation_failure:
+    free(items);
+    file_browser_listing_clear(&listing);
+    listing.generation = generation;
+    listing.path = strdup("JELLYFIN");
+    snprintf(listing.error, sizeof(listing.error), "NICHT GENUG SPEICHER");
+    return listing;
+}
+
+static struct file_browser_listing read_location(const char *path,
+                                                  uint64_t generation)
+{
+    if (strcmp(path, "root:") == 0)
+        return read_root(generation);
+    if (strncmp(path, "jf:", 3) == 0)
+        return read_jellyfin(path, generation);
+    return read_directory(path, generation);
+}
+
 static void *browser_worker(void *argument)
 {
     struct file_browser *browser = argument;
@@ -207,7 +422,7 @@ static void *browser_worker(void *argument)
         pthread_mutex_unlock(&browser->mutex);
 
         struct file_browser_listing listing =
-            read_directory(path, generation);
+            read_location(path, generation);
         free(path);
 
         pthread_mutex_lock(&browser->mutex);

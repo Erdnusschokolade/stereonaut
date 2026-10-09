@@ -9,7 +9,8 @@ openxr_loader=${OPENXR_LOADER:-/opt/steamvr/bin/linuxarm64/libopenxr_loader.so}
 mkdir -p "$build_dir"
 
 cc -std=c11 -O2 -Wall -Wextra -Werror \
-  $(pkg-config --cflags libavformat libavcodec libavutil libswresample alsa) \
+  $(pkg-config --cflags libavformat libavcodec libavutil libswresample alsa \
+                       libcurl json-c) \
   -I"$project_dir/tools/openxr-playback" \
   -o "$build_dir/stereonaut-session" \
   "$script_dir/stereonaut-session.c" \
@@ -17,7 +18,9 @@ cc -std=c11 -O2 -Wall -Wextra -Werror \
   "$script_dir/packet-queue.c" \
   "$script_dir/audio-output.c" \
   "$script_dir/media-demux.c" \
-  $(pkg-config --libs libavformat libavcodec libavutil libswresample alsa) \
+  "$script_dir/jellyfin.c" \
+  $(pkg-config --libs libavformat libavcodec libavutil libswresample alsa \
+                libcurl json-c) \
   -lvulkan -pthread
 
 cc -std=c11 -O2 -Wall -Wextra -Werror \
@@ -27,9 +30,12 @@ cc -std=c11 -O2 -Wall -Wextra -Werror \
   -lvulkan -lm "$openxr_loader"
 
 cc -std=c11 -O2 -Wall -Wextra -Werror \
+  $(pkg-config --cflags libcurl json-c) \
   -I/usr/include -I"$script_dir" \
   -o "$build_dir/stereonaut-browser" \
   "$script_dir/stereonaut-browser.c" "$script_dir/file-browser.c" \
+  "$script_dir/jellyfin.c" \
+  $(pkg-config --libs libcurl json-c) \
   -lvulkan -lm -pthread "$openxr_loader"
 
 cc -std=c11 -O2 -Wall -Wextra -Werror \

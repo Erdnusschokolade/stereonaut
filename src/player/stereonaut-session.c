@@ -30,6 +30,7 @@
 
 #include "nv12-playback-ipc.h"
 #include "media-pipeline.h"
+#include "jellyfin.h"
 
 #define MAX_OUTPUT_BUFFERS 16U
 #define MAX_CAPTURE_BUFFERS 32U
@@ -146,6 +147,57 @@ static uint32_t renderer_action;
 static int64_t renderer_action_position_us;
 static struct panel_state panel_state;
 static bool renderer_held;
+
+/* Exit codes understood by the launcher. */
+#define EXIT_UNSUPPORTED_FORMAT 3
+#define EXIT_SOURCE_FAILED 4
+
+static struct jf_config jellyfin_config;
+static struct jf_playback jellyfin_playback;
+static bool jellyfin_active;
+
+static void jellyfin_cleanup(void)
+{
+    if (!jellyfin_active)
+        return;
+    jellyfin_active = false;
+    jf_stop_encoding(&jellyfin_config, &jellyfin_playback);
+}
+
+/* "jf:item:<id>[:<parent>]" names a Jellyfin title. Resolve it to a stream
+ * URL and hand the credentials to libavformat through the environment. */
+static int resolve_jellyfin_input(const char *spec, char *url, size_t size)
+{
+    char id[JF_ID_SIZE];
+    const char *start = spec + strlen("jf:item:");
+    size_t length = strcspn(start, ":");
+    if (length == 0 || length >= sizeof(id)) {
+        fprintf(stderr, "invalid Jellyfin item: %s\n", spec);
+        return -1;
+    }
+    memcpy(id, start, length);
+    id[length] = '\0';
+    char error[256] = {0};
+    if (jf_config_load(&jellyfin_config, error, sizeof(error)) < 0 ||
+        !jf_config_has_token(&jellyfin_config)) {
+        fprintf(stderr, "Jellyfin: not signed in (%s)\n", error);
+        return -1;
+    }
+    if (jf_resolve_playback(&jellyfin_config, id, &jellyfin_playback, error,
+                            sizeof(error)) < 0) {
+        fprintf(stderr, "Jellyfin: %s\n", error);
+        return -1;
+    }
+    char header[1024];
+    jf_authorization_header(&jellyfin_config, header, sizeof(header));
+    setenv("STEREONAUT_HTTP_HEADERS", header, 1);
+    snprintf(url, size, "%s", jellyfin_playback.url);
+    jellyfin_active = true;
+    atexit(jellyfin_cleanup);
+    printf("jellyfin_playback mode=%s\n",
+           jellyfin_playback.transcoding ? "hls-transcode" : "direct-play");
+    return 0;
+}
 
 static void queue_capture(unsigned index, size_t length);
 
@@ -1682,10 +1734,19 @@ int main(int argc, char **argv)
     panel_state = options.panel;
     char pipeline_error[512] = {0};
     struct media_pipeline *pipeline = NULL;
-    if (media_pipeline_open(&pipeline, argv[1], options.start_us, true, true,
+    char input_url[2304];
+    const char *input = argv[1];
+    if (strncmp(argv[1], "jf:item:", 8) == 0) {
+        if (resolve_jellyfin_input(argv[1], input_url, sizeof(input_url)) < 0)
+            return EXIT_SOURCE_FAILED;
+        input = input_url;
+    }
+    if (media_pipeline_open(&pipeline, input, options.start_us, true, true,
                             pipeline_error, sizeof(pipeline_error)) < 0) {
         fprintf(stderr, "open media pipeline: %s\n", pipeline_error);
-        return 2;
+        if (strstr(pipeline_error, "unsupported video"))
+            return EXIT_UNSUPPORTED_FORMAT;
+        return strncmp(input, "http", 4) == 0 ? EXIT_SOURCE_FAILED : 2;
     }
     const struct media_stream_info *info = media_pipeline_info(pipeline);
     uint32_t expected_width = (uint32_t)info->width;
@@ -2287,6 +2348,7 @@ int main(int argc, char **argv)
             snprintf(panel_text, sizeof(panel_text), "%.6f,%.6f,%.6f,%.6f,%u",
                      panel_state.x, panel_state.y, panel_state.z,
                      panel_state.yaw, panel_state.visible ? 1U : 0U);
+        jellyfin_cleanup();
         char renderer_text[48] = {0};
         bool keep_renderer = renderer_fd >= 0 && renderer_pid > 0;
         if (keep_renderer) {

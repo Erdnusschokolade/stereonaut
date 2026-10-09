@@ -3,4 +3,6 @@ set -eu
 
 mkdir -p build
 cc -std=c11 -O2 -Wall -Wextra -Werror \
-  -o build/file-browser-probe file-browser-probe.c file-browser.c -pthread
+  $(pkg-config --cflags libcurl json-c) \
+  -o build/file-browser-probe file-browser-probe.c file-browser.c jellyfin.c \
+  $(pkg-config --libs libcurl json-c) -pthread

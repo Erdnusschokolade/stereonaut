@@ -1,0 +1,570 @@
+#define _POSIX_C_SOURCE 200809L
+#include "jellyfin.h"
+
+#include <curl/curl.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <json-c/json.h>
+#include <pthread.h>
+#include <stdarg.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
+#define RESPONSE_LIMIT (48U * 1024U * 1024U)
+#define LIST_LIMIT 5000
+
+/* Direct Play only HEVC Main 8 bit in mkv/mp4; everything else becomes an HLS
+ * transcode to HEVC Main 8 bit (the only format the decoder path handles). */
+static const char DEVICE_PROFILE[] =
+    "{\"Name\":\"Stereonaut\",\"MaxStreamingBitrate\":200000000,"
+    "\"DirectPlayProfiles\":[{\"Type\":\"Video\",\"Container\":\"mkv,mp4\","
+    "\"VideoCodec\":\"hevc\",\"AudioCodec\":\"aac,ac3,eac3,mp3,opus\"}],"
+    "\"TranscodingProfiles\":[{\"Type\":\"Video\",\"Container\":\"ts\","
+    "\"Protocol\":\"hls\",\"VideoCodec\":\"hevc\",\"AudioCodec\":\"aac\","
+    "\"Context\":\"Streaming\",\"MaxAudioChannels\":\"2\","
+    "\"BreakOnNonKeyFrames\":true}],"
+    "\"CodecProfiles\":[{\"Type\":\"Video\",\"Codec\":\"hevc\","
+    "\"Conditions\":[{\"Condition\":\"EqualsAny\","
+    "\"Property\":\"VideoProfile\",\"Value\":\"main\",\"IsRequired\":true},"
+    "{\"Condition\":\"LessThanEqual\",\"Property\":\"VideoBitDepth\","
+    "\"Value\":\"8\",\"IsRequired\":true}]}]}";
+
+struct buffer {
+    char *data;
+    size_t size;
+};
+
+static pthread_once_t curl_once = PTHREAD_ONCE_INIT;
+
+static void curl_setup(void)
+{
+    curl_global_init(CURL_GLOBAL_DEFAULT);
+}
+
+static void set_error(char *error, size_t size, const char *format, ...)
+{
+    if (!error || !size)
+        return;
+    va_list arguments;
+    va_start(arguments, format);
+    vsnprintf(error, size, format, arguments);
+    va_end(arguments);
+}
+
+static void copy_string(char *target, size_t size, const char *source)
+{
+    snprintf(target, size, "%s", source ? source : "");
+}
+
+/* ---- configuration ------------------------------------------------- */
+
+static int config_path(char *path, size_t size, bool directory_only)
+{
+    const char *base = getenv("XDG_CONFIG_HOME");
+    char fallback[512];
+    if (!base || !base[0]) {
+        const char *home = getenv("HOME");
+        if (!home || !home[0])
+            return -1;
+        snprintf(fallback, sizeof(fallback), "%s/.config", home);
+        base = fallback;
+    }
+    int written = snprintf(path, size, "%s/stereonaut%s", base,
+                           directory_only ? "" : "/jellyfin.json");
+    return written > 0 && (size_t)written < size ? 0 : -1;
+}
+
+static const char *json_string(json_object *object, const char *key)
+{
+    json_object *value = NULL;
+    if (!json_object_object_get_ex(object, key, &value) || !value ||
+        !json_object_is_type(value, json_type_string))
+        return NULL;
+    return json_object_get_string(value);
+}
+
+static void ensure_device_id(struct jf_config *config);
+static int config_save(const struct jf_config *config, char *error,
+                       size_t error_size);
+
+int jf_config_load(struct jf_config *config, char *error, size_t error_size)
+{
+    memset(config, 0, sizeof(*config));
+    char path[640];
+    if (config_path(path, sizeof(path), false) < 0) {
+        set_error(error, error_size, "KEIN KONFIGURATIONSVERZEICHNIS");
+        return -1;
+    }
+    json_object *root = json_object_from_file(path);
+    if (!root) {
+        set_error(error, error_size, "JELLYFIN NICHT EINGERICHTET");
+        return -1;
+    }
+    copy_string(config->server, sizeof(config->server),
+                json_string(root, "server"));
+    copy_string(config->device_id, sizeof(config->device_id),
+                json_string(root, "device_id"));
+    copy_string(config->user_id, sizeof(config->user_id),
+                json_string(root, "user_id"));
+    copy_string(config->token, sizeof(config->token),
+                json_string(root, "token"));
+    json_object_put(root);
+    size_t length = strlen(config->server);
+    while (length && config->server[length - 1] == '/')
+        config->server[--length] = '\0';
+    if (!config->server[0]) {
+        set_error(error, error_size, "JELLYFIN-SERVER FEHLT IN DER KONFIGURATION");
+        return -1;
+    }
+    if (!config->device_id[0]) {
+        /* Persist the id: Quick Connect start and poll run in separate
+         * requests that each reload the configuration. */
+        ensure_device_id(config);
+        config_save(config, NULL, 0);
+    }
+    return 0;
+}
+
+bool jf_config_has_token(const struct jf_config *config)
+{
+    return config->token[0] && config->user_id[0] && config->device_id[0];
+}
+
+static int config_save(const struct jf_config *config, char *error,
+                       size_t error_size)
+{
+    char directory[640], path[640];
+    if (config_path(directory, sizeof(directory), true) < 0 ||
+        config_path(path, sizeof(path), false) < 0) {
+        set_error(error, error_size, "KEIN KONFIGURATIONSVERZEICHNIS");
+        return -1;
+    }
+    if (mkdir(directory, 0700) < 0 && errno != EEXIST) {
+        set_error(error, error_size, "KONFIGURATION NICHT SCHREIBBAR");
+        return -1;
+    }
+    json_object *root = json_object_new_object();
+    json_object_object_add(root, "server",
+                           json_object_new_string(config->server));
+    json_object_object_add(root, "device_id",
+                           json_object_new_string(config->device_id));
+    json_object_object_add(root, "user_id",
+                           json_object_new_string(config->user_id));
+    json_object_object_add(root, "token",
+                           json_object_new_string(config->token));
+    const char *text = json_object_to_json_string(root);
+    int descriptor = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    int result = -1;
+    if (descriptor >= 0) {
+        size_t length = strlen(text);
+        result = write(descriptor, text, length) == (ssize_t)length ? 0 : -1;
+        close(descriptor);
+    }
+    json_object_put(root);
+    if (result < 0)
+        set_error(error, error_size, "KONFIGURATION NICHT SCHREIBBAR");
+    return result;
+}
+
+static void ensure_device_id(struct jf_config *config)
+{
+    if (config->device_id[0])
+        return;
+    unsigned char random[8] = {0};
+    int descriptor = open("/dev/urandom", O_RDONLY);
+    if (descriptor >= 0) {
+        if (read(descriptor, random, sizeof(random)) < 0)
+            memset(random, 0, sizeof(random));
+        close(descriptor);
+    }
+    snprintf(config->device_id, sizeof(config->device_id),
+             "stereonaut-%02x%02x%02x%02x%02x%02x%02x%02x", random[0],
+             random[1], random[2], random[3], random[4], random[5],
+             random[6], random[7]);
+}
+
+void jf_authorization_header(const struct jf_config *config, char *out,
+                             size_t out_size)
+{
+    if (config->token[0])
+        snprintf(out, out_size,
+                 "Authorization: MediaBrowser Client=\"Stereonaut\", "
+                 "Device=\"Steam Frame\", DeviceId=\"%s\", Version=\"0.1\", "
+                 "Token=\"%s\"",
+                 config->device_id, config->token);
+    else
+        snprintf(out, out_size,
+                 "Authorization: MediaBrowser Client=\"Stereonaut\", "
+                 "Device=\"Steam Frame\", DeviceId=\"%s\", Version=\"0.1\"",
+                 config->device_id);
+}
+
+/* ---- HTTP ---------------------------------------------------------- */
+
+static size_t write_body(char *data, size_t size, size_t count, void *user)
+{
+    struct buffer *buffer = user;
+    size_t length = size * count;
+    if (buffer->size + length > RESPONSE_LIMIT)
+        return 0;
+    char *grown = realloc(buffer->data, buffer->size + length + 1U);
+    if (!grown)
+        return 0;
+    buffer->data = grown;
+    memcpy(buffer->data + buffer->size, data, length);
+    buffer->size += length;
+    buffer->data[buffer->size] = '\0';
+    return length;
+}
+
+/* Returns the HTTP status (>0) or -1 on a transport failure. The body is
+ * always NUL-terminated and owned by the caller (free(body->data)). */
+static long http_request(const struct jf_config *config, const char *method,
+                         const char *path, const char *body,
+                         struct buffer *response)
+{
+    pthread_once(&curl_once, curl_setup);
+    memset(response, 0, sizeof(*response));
+    CURL *curl = curl_easy_init();
+    if (!curl)
+        return -1;
+    char url[2304], header[1024];
+    snprintf(url, sizeof(url), "%s%s", config->server, path);
+    jf_authorization_header(config, header, sizeof(header));
+    struct curl_slist *headers = curl_slist_append(NULL, header);
+    if (body)
+        headers = curl_slist_append(headers,
+                                    "Content-Type: application/json");
+    curl_easy_setopt(curl, CURLOPT_URL, url);
+    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method);
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_body);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, response);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    curl_easy_setopt(curl, CURLOPT_USERAGENT, "Stereonaut");
+    if (body)
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
+    CURLcode result = curl_easy_perform(curl);
+    long status = -1;
+    if (result == CURLE_OK)
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(curl);
+    return status;
+}
+
+/* Parses a successful JSON response. 401 maps to JF_AUTH_RETRY. */
+static int json_call(const struct jf_config *config, const char *method,
+                     const char *path, const char *body, json_object **root,
+                     char *error, size_t error_size)
+{
+    struct buffer response;
+    long status = http_request(config, method, path, body, &response);
+    int result = 0;
+    if (status < 0) {
+        set_error(error, error_size, "JELLYFIN-SERVER NICHT ERREICHBAR");
+        result = -1;
+    } else if (status == 401 || status == 403) {
+        set_error(error, error_size, "JELLYFIN-ANMELDUNG ABGELAUFEN");
+        result = JF_AUTH_RETRY;
+    } else if (status < 200 || status >= 300) {
+        set_error(error, error_size, "JELLYFIN-FEHLER HTTP %ld", status);
+        result = -1;
+    } else {
+        *root = response.data ? json_tokener_parse(response.data) : NULL;
+        if (!*root) {
+            set_error(error, error_size, "UNGUELTIGE ANTWORT VOM SERVER");
+            result = -1;
+        }
+    }
+    free(response.data);
+    return result;
+}
+
+/* ---- Quick Connect -------------------------------------------------- */
+
+int jf_quickconnect_start(struct jf_config *config, char code[16],
+                          char secret[128], char *error, size_t error_size)
+{
+    ensure_device_id(config);
+    json_object *root = NULL;
+    int result = json_call(config, "POST", "/QuickConnect/Initiate", "{}",
+                           &root, error, error_size);
+    if (result < 0)
+        return result == JF_AUTH_RETRY ? -1 : result;
+    const char *code_text = json_string(root, "Code");
+    const char *secret_text = json_string(root, "Secret");
+    if (!code_text || !secret_text) {
+        set_error(error, error_size, "QUICK CONNECT IST AUF DEM SERVER AUS");
+        json_object_put(root);
+        return -1;
+    }
+    copy_string(code, 16, code_text);
+    copy_string(secret, 128, secret_text);
+    json_object_put(root);
+    return 0;
+}
+
+int jf_quickconnect_poll(struct jf_config *config, const char *secret,
+                         bool *authenticated, char *error, size_t error_size)
+{
+    *authenticated = false;
+    char path[256];
+    snprintf(path, sizeof(path), "/QuickConnect/Connect?secret=%s", secret);
+    json_object *root = NULL;
+    int result = json_call(config, "GET", path, NULL, &root, error,
+                           error_size);
+    if (result < 0)
+        return result == JF_AUTH_RETRY ? -1 : result;
+    json_object *flag = NULL;
+    bool done = json_object_object_get_ex(root, "Authenticated", &flag) &&
+                json_object_get_boolean(flag);
+    json_object_put(root);
+    if (!done)
+        return 0;
+    char body[256];
+    snprintf(body, sizeof(body), "{\"Secret\":\"%s\"}", secret);
+    result = json_call(config, "POST", "/Users/AuthenticateWithQuickConnect",
+                       body, &root, error, error_size);
+    if (result < 0)
+        return result == JF_AUTH_RETRY ? -1 : result;
+    const char *token = json_string(root, "AccessToken");
+    json_object *user = NULL;
+    const char *user_id = NULL;
+    if (json_object_object_get_ex(root, "User", &user))
+        user_id = json_string(user, "Id");
+    if (!token || !user_id) {
+        set_error(error, error_size, "ANMELDUNG VOM SERVER ABGELEHNT");
+        json_object_put(root);
+        return -1;
+    }
+    copy_string(config->token, sizeof(config->token), token);
+    copy_string(config->user_id, sizeof(config->user_id), user_id);
+    json_object_put(root);
+    if (config_save(config, error, error_size) < 0)
+        return -1;
+    *authenticated = true;
+    return 0;
+}
+
+/* ---- browsing -------------------------------------------------------- */
+
+static int compare_items(const void *left, const void *right)
+{
+    const struct jf_item *a = left, *b = right;
+    if (a->is_folder != b->is_folder)
+        return a->is_folder ? -1 : 1;
+    return strcasecmp(a->name, b->name);
+}
+
+static int collect_items(json_object *root, bool filter_views,
+                         struct jf_item **items, size_t *count)
+{
+    json_object *array = NULL;
+    *items = NULL;
+    *count = 0;
+    if (!json_object_object_get_ex(root, "Items", &array) ||
+        !json_object_is_type(array, json_type_array))
+        return 0;
+    size_t length = json_object_array_length(array);
+    struct jf_item *list = calloc(length ? length : 1U, sizeof(*list));
+    if (!list)
+        return -1;
+    size_t used = 0;
+    for (size_t i = 0; i < length; ++i) {
+        json_object *entry = json_object_array_get_idx(array, i);
+        const char *id = json_string(entry, "Id");
+        const char *name = json_string(entry, "Name");
+        if (!id || !name)
+            continue;
+        if (filter_views) {
+            const char *type = json_string(entry, "CollectionType");
+            if (type && (strcmp(type, "music") == 0 ||
+                         strcmp(type, "books") == 0 ||
+                         strcmp(type, "photos") == 0 ||
+                         strcmp(type, "playlists") == 0 ||
+                         strcmp(type, "livetv") == 0))
+                continue;
+        }
+        json_object *folder = NULL;
+        copy_string(list[used].id, sizeof(list[used].id), id);
+        copy_string(list[used].name, sizeof(list[used].name), name);
+        list[used].is_folder =
+            filter_views ||
+            (json_object_object_get_ex(entry, "IsFolder", &folder) &&
+             json_object_get_boolean(folder));
+        ++used;
+    }
+    qsort(list, used, sizeof(*list), compare_items);
+    *items = list;
+    *count = used;
+    return 0;
+}
+
+int jf_list_views(const struct jf_config *config, struct jf_item **items,
+                  size_t *count, char *error, size_t error_size)
+{
+    char path[256];
+    snprintf(path, sizeof(path), "/UserViews?userId=%s", config->user_id);
+    json_object *root = NULL;
+    int result = json_call(config, "GET", path, NULL, &root, error,
+                           error_size);
+    if (result < 0)
+        return result;
+    result = collect_items(root, true, items, count);
+    json_object_put(root);
+    if (result < 0)
+        set_error(error, error_size, "NICHT GENUG SPEICHER");
+    return result;
+}
+
+int jf_list_children(const struct jf_config *config, const char *parent_id,
+                     struct jf_item **items, size_t *count, char *error,
+                     size_t error_size)
+{
+    char path[512];
+    snprintf(path, sizeof(path),
+             "/Items?userId=%s&ParentId=%s&SortBy=SortName&"
+             "SortOrder=Ascending&Limit=%d&EnableTotalRecordCount=false",
+             config->user_id, parent_id, LIST_LIMIT);
+    json_object *root = NULL;
+    int result = json_call(config, "GET", path, NULL, &root, error,
+                           error_size);
+    if (result < 0)
+        return result;
+    result = collect_items(root, false, items, count);
+    json_object_put(root);
+    if (result < 0)
+        set_error(error, error_size, "NICHT GENUG SPEICHER");
+    return result;
+}
+
+int jf_item_info(const struct jf_config *config, const char *id, char *name,
+                 size_t name_size, char *parent, size_t parent_size,
+                 char *error, size_t error_size)
+{
+    char path[256];
+    snprintf(path, sizeof(path), "/Items/%s?userId=%s", id, config->user_id);
+    json_object *root = NULL;
+    int result = json_call(config, "GET", path, NULL, &root, error,
+                           error_size);
+    if (result < 0)
+        return result;
+    if (name)
+        copy_string(name, name_size, json_string(root, "Name"));
+    if (parent)
+        copy_string(parent, parent_size, json_string(root, "ParentId"));
+    json_object_put(root);
+    return 0;
+}
+
+/* ---- playback -------------------------------------------------------- */
+
+/* Copies a TranscodingUrl without the ApiKey parameter: the Authorization
+ * header carries the credentials, so no secret ends up in a URL. */
+static void strip_api_key(const char *source, char *target, size_t size)
+{
+    const char *query = strchr(source, '?');
+    size_t base = query ? (size_t)(query - source) : strlen(source);
+    size_t used = 0;
+    for (size_t i = 0; i < base && used + 1U < size; ++i)
+        target[used++] = source[i];
+    bool first = true;
+    if (query) {
+        const char *cursor = query + 1;
+        while (*cursor) {
+            const char *end = strchr(cursor, '&');
+            size_t length = end ? (size_t)(end - cursor) : strlen(cursor);
+            bool secret = (length >= 7 && strncmp(cursor, "ApiKey=", 7) == 0) ||
+                          (length >= 8 && strncmp(cursor, "api_key=", 8) == 0);
+            if (length && !secret && used + length + 2U < size) {
+                target[used++] = first ? '?' : '&';
+                memcpy(target + used, cursor, length);
+                used += length;
+                first = false;
+            }
+            cursor += length;
+            if (*cursor == '&')
+                ++cursor;
+        }
+    }
+    target[used] = '\0';
+}
+
+int jf_resolve_playback(const struct jf_config *config, const char *item_id,
+                        struct jf_playback *playback, char *error,
+                        size_t error_size)
+{
+    memset(playback, 0, sizeof(*playback));
+    char path[256], body[2048];
+    snprintf(path, sizeof(path), "/Items/%s/PlaybackInfo?UserId=%s", item_id,
+             config->user_id);
+    snprintf(body, sizeof(body),
+             "{\"DeviceProfile\":%s,\"AutoOpenLiveStream\":false}",
+             DEVICE_PROFILE);
+    json_object *root = NULL;
+    int result = json_call(config, "POST", path, body, &root, error,
+                           error_size);
+    if (result < 0)
+        return result;
+    json_object *sources = NULL, *source = NULL;
+    if (!json_object_object_get_ex(root, "MediaSources", &sources) ||
+        !json_object_is_type(sources, json_type_array) ||
+        json_object_array_length(sources) == 0 ||
+        !(source = json_object_array_get_idx(sources, 0))) {
+        set_error(error, error_size, "KEINE ABSPIELQUELLE VOM SERVER");
+        json_object_put(root);
+        return -1;
+    }
+    json_object *flag = NULL;
+    bool direct = json_object_object_get_ex(source, "SupportsDirectPlay",
+                                            &flag) &&
+                  json_object_get_boolean(flag);
+    const char *source_id = json_string(source, "Id");
+    const char *transcoding_url = json_string(source, "TranscodingUrl");
+    if (direct && source_id) {
+        snprintf(playback->url, sizeof(playback->url),
+                 "%s/Videos/%s/stream?static=true&MediaSourceId=%s",
+                 config->server, item_id, source_id);
+    } else if (transcoding_url) {
+        char stripped[1900];
+        strip_api_key(transcoding_url, stripped, sizeof(stripped));
+        int written = snprintf(playback->url, sizeof(playback->url), "%s%s",
+                               config->server, stripped);
+        if (written < 0 || (size_t)written >= sizeof(playback->url)) {
+            set_error(error, error_size, "STREAM-ADRESSE ZU LANG");
+            json_object_put(root);
+            return -1;
+        }
+        playback->transcoding = true;
+        copy_string(playback->play_session, sizeof(playback->play_session),
+                    json_string(root, "PlaySessionId"));
+    } else {
+        set_error(error, error_size, "TITEL KANN NICHT ABGESPIELT WERDEN");
+        json_object_put(root);
+        return -1;
+    }
+    json_object_put(root);
+    return 0;
+}
+
+void jf_stop_encoding(const struct jf_config *config,
+                      const struct jf_playback *playback)
+{
+    if (!playback->transcoding || !playback->play_session[0])
+        return;
+    char path[512];
+    snprintf(path, sizeof(path),
+             "/Videos/ActiveEncodings?deviceId=%s&playSessionId=%s",
+             config->device_id, playback->play_session);
+    struct buffer response;
+    http_request(config, "DELETE", path, NULL, &response);
+    free(response.data);
+}
