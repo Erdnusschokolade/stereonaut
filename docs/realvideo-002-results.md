@@ -93,6 +93,11 @@ Im Gegensatz zu einzelnen früheren Startläufen trat beim Endlauf kein
 Action-Manifest; die Probe besitzt absichtlich noch keine Eingabeaktionen.
 Der Prozess wurde nach dem Streamende regulär abgemeldet.
 
+Die abschließende Sichtprüfung des kontinuierlichen Laufs bestätigt den
+automatisierten Befund: Die Darstellung war sichtbar in Ordnung und lief
+augenscheinlich flüssig. Zusammen mit den null Compositor-Drops ist damit auch
+das qualitative Erfolgskriterium für diesen Prototyp erfüllt.
+
 ## Nachgewiesener Daten- und Bufferpfad
 
 Für jeden der zwölf CAPTURE-Indizes wurde genau ein 50.331.648-Byte-DMA-BUF
