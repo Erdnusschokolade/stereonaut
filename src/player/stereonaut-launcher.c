@@ -6,6 +6,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -13,6 +14,7 @@
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 /* Exit codes of stereonaut-session. */
@@ -23,16 +25,18 @@
 static int ui_fd = -1;
 static pid_t host_pid = -1;
 
-static int wait_child_status(pid_t child, const char *name, int *exit_code)
+static bool exit_after_playback; /* the host ended during playback */
+
+static double monotonic_seconds(void)
 {
-    int status = 0;
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (double)now.tv_sec + (double)now.tv_nsec / 1e9;
+}
+
+static int child_status(int status, const char *name, int *exit_code)
+{
     *exit_code = -1;
-    while (waitpid(child, &status, 0) < 0) {
-        if (errno != EINTR) {
-            perror("waitpid");
-            return -1;
-        }
-    }
     if (!WIFEXITED(status) || WEXITSTATUS(status) != 0) {
         fprintf(stderr, "%s exited abnormally\n", name);
         if (WIFEXITED(status))
@@ -168,7 +172,48 @@ static int run_playback(const char *path, char *const *extra, int *exit_code)
     close(sockets[1]);
     if (sent < 0)
         kill(child, SIGTERM);
-    return wait_child_status(child, "stereonaut-session", exit_code);
+    /* While the session runs, the host may ask to stop it (back pressed
+     * during loading) or report that the XR session ended. */
+    double stop_sent = 0.0;
+    int watch_fd = ui_fd; /* -1 once the host has closed its end */
+    for (;;) {
+        int status = 0;
+        pid_t done = waitpid(child, &status, WNOHANG);
+        if (done == child)
+            return child_status(status, "stereonaut-session", exit_code);
+        if (done < 0 && errno != EINTR) {
+            perror("waitpid");
+            return -1;
+        }
+        struct pollfd pollfd = {.fd = watch_fd, .events = POLLIN};
+        if (poll(&pollfd, 1, 100) > 0) {
+            struct player_ui_result result = {0};
+            ssize_t received = recv(watch_fd, &result, sizeof(result),
+                                    MSG_DONTWAIT);
+            if (received == (ssize_t)sizeof(result) &&
+                result.type == PLAYER_UI_EXIT_REQUESTED)
+                exit_after_playback = true;
+            if (received == 0 ||
+                (received == (ssize_t)sizeof(result) &&
+                 (result.type == PLAYER_UI_STOP_REQUESTED ||
+                  result.type == PLAYER_UI_EXIT_REQUESTED))) {
+                if (!stop_sent) {
+                    printf("playback_stop_requested\n");
+                    kill(child, SIGTERM);
+                    stop_sent = monotonic_seconds();
+                }
+            }
+            if (received == 0) {
+                exit_after_playback = true;
+                watch_fd = -1;
+            }
+        }
+        if (stop_sent && monotonic_seconds() - stop_sent > 5.0) {
+            fprintf(stderr, "stereonaut-session ignored SIGTERM\n");
+            kill(child, SIGKILL);
+            stop_sent = monotonic_seconds() + 3600.0;
+        }
+    }
 }
 
 static void selected_parent(const char *path, char *directory, size_t size)
@@ -263,7 +308,12 @@ int main(int argc, char **argv)
         printf("selected_file=%s\n", result.path);
         int exit_code = 0;
         browser_message[0] = '\0';
-        if (run_playback(result.path, NULL, &exit_code) < 0) {
+        int played = run_playback(result.path, NULL, &exit_code);
+        if (exit_after_playback) {
+            shutdown_host();
+            return 0;
+        }
+        if (played < 0) {
             fprintf(stderr, "playback failed; returning to browser\n");
             if (exit_code == EXIT_BROKEN_SOURCE)
                 snprintf(browser_message, sizeof(browser_message),

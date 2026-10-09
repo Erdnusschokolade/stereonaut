@@ -14,6 +14,7 @@
 #include <linux/dma-buf.h>
 #include <linux/videodev2.h>
 #include <poll.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -213,14 +214,29 @@ static int resolve_jellyfin_input(const char *spec, char *url, size_t size)
 
 static void queue_capture(unsigned index, size_t length);
 
+/* SIGTERM from the launcher: the viewer left while the title was still
+ * loading. Failures caused by the aborted I/O are then a normal exit. */
+static volatile sig_atomic_t stop_requested;
+
+static void handle_stop(int signal_number)
+{
+    (void)signal_number;
+    stop_requested = 1;
+    media_demux_request_abort();
+}
+
 static void fail_errno(const char *what)
 {
+    if (stop_requested)
+        exit(0);
     fprintf(stderr, "%s: errno=%d (%s)\n", what, errno, strerror(errno));
     exit(2);
 }
 
 static void fail_message(const char *what)
 {
+    if (stop_requested)
+        exit(0);
     fprintf(stderr, "%s\n", what);
     exit(2);
 }
@@ -1747,6 +1763,9 @@ int main(int argc, char **argv)
                 argv[0]);
         return 2;
     }
+    struct sigaction stop_action = {.sa_handler = handle_stop};
+    sigemptyset(&stop_action.sa_mask);
+    sigaction(SIGTERM, &stop_action, NULL);
     struct playback_options options = parse_playback_options(argc, argv);
     panel_state = options.panel;
     title_settings_key(argv[1], title_key, sizeof(title_key));
@@ -1769,6 +1788,8 @@ int main(int argc, char **argv)
     if (strncmp(argv[1], "jf:item:", 8) == 0) {
         int resolved = resolve_jellyfin_input(argv[1], input_url,
                                               sizeof(input_url));
+        if (stop_requested)
+            return 0;
         if (resolved == JF_BROKEN_ITEM)
             return EXIT_BROKEN_SOURCE;
         if (resolved < 0)
@@ -1777,6 +1798,8 @@ int main(int argc, char **argv)
     }
     if (media_pipeline_open(&pipeline, input, options.start_us, true, true,
                             pipeline_error, sizeof(pipeline_error)) < 0) {
+        if (stop_requested)
+            return 0;
         fprintf(stderr, "open media pipeline: %s\n", pipeline_error);
         if (strstr(pipeline_error, "unsupported video"))
             return EXIT_UNSUPPORTED_FORMAT;
@@ -1931,6 +1954,10 @@ int main(int argc, char **argv)
     double maximum_feed_lateness_ms = 0.0;
 
     while (!last_seen) {
+        if (stop_requested) {
+            printf("player_stop=signal\n");
+            exit(0);
+        }
         if (renderer_fd >= 0 &&
             process_renderer_messages(captures, capture_count))
             fail_message("unexpected renderer FLUSHED response");

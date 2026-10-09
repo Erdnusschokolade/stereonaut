@@ -10,6 +10,9 @@
 enum player_ui_result_type {
     PLAYER_UI_FILE_SELECTED = 1,
     PLAYER_UI_EXIT_REQUESTED = 2,
+    /* "Back" while the title is still loading: the session cannot answer
+     * then, so the launcher stops it. */
+    PLAYER_UI_STOP_REQUESTED = 3,
 };
 
 struct player_ui_result {

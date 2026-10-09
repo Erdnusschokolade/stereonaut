@@ -52,5 +52,8 @@ int media_demux_seek(struct media_demux *demux, int64_t target_us,
                      char *error, size_t error_size);
 void media_packet_unref(struct media_packet *packet);
 void media_demux_close(struct media_demux **demux);
+/* Makes blocking network operations of every demuxer fail promptly.
+ * Async-signal-safe (only sets a flag). */
+void media_demux_request_abort(void);
 
 #endif

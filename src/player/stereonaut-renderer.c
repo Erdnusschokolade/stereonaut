@@ -206,6 +206,7 @@ struct app {
 static void need_vk(const char *what, VkResult result);
 static void need(bool condition, const char *what);
 static void hold_current_frame(struct app *app);
+static void send_control(struct app *app, uint32_t type, const char *path);
 static void discard_held_frame(struct app *app);
 static void reinitialize_video(struct app *app,
                                const struct nv12_ipc_message *message,
@@ -2037,6 +2038,10 @@ static void sync_player_input(struct app *app, XrTime time)
             change_view(app, action);
         } else if (action) {
             send_ipc(app, NV12_IPC_ACTION, (uint32_t)action);
+            /* Before the first frame the session may be blocked opening the
+             * source and cannot read the action. */
+            if (action == NV12_ACTION_BACK && app->awaiting_frame)
+                send_control(app, PLAYER_UI_STOP_REQUESTED, NULL);
         }
     }
 

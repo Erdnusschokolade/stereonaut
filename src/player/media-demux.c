@@ -1,6 +1,7 @@
 #include "media-demux.h"
 
 #include <errno.h>
+#include <signal.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <stdarg.h>
@@ -61,6 +62,20 @@ static bool is_main_8_bit(const AVCodecParameters *parameters)
         parameters->format != AV_PIX_FMT_YUV420P)
         return false;
     return parameters->bits_per_raw_sample <= 8;
+}
+
+static volatile sig_atomic_t abort_requested;
+
+void media_demux_request_abort(void)
+{
+    abort_requested = 1;
+}
+
+/* libavformat polls this during blocking I/O (HTTP, HLS segment waits). */
+static int interrupt_requested(void *opaque)
+{
+    (void)opaque;
+    return abort_requested != 0;
 }
 
 static int select_audio_stream(AVFormatContext *format)
@@ -127,6 +142,14 @@ int media_demux_open(struct media_demux **result, const char *path,
     }
     demux->info.video_stream_index = -1;
     demux->info.audio_stream_index = -1;
+    demux->format = avformat_alloc_context();
+    if (!demux->format) {
+        set_error(error, error_size, "allocate format context");
+        free(demux);
+        return -1;
+    }
+    demux->format->interrupt_callback =
+        (AVIOInterruptCB){.callback = interrupt_requested};
     AVDictionary *options = NULL;
     if (strncmp(path, "http://", 7) == 0 || strncmp(path, "https://", 8) == 0) {
         /* Credentials come from the environment, never from argv, so they
