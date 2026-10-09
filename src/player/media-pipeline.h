@@ -11,6 +11,7 @@ struct media_pipeline;
 
 int media_pipeline_open(struct media_pipeline **result, const char *path,
                         int64_t start_us, bool enable_audio_device,
+                        bool start_paused,
                         char *error, size_t error_size);
 const struct media_stream_info *media_pipeline_info(
     const struct media_pipeline *pipeline);

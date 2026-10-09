@@ -31,6 +31,7 @@ struct media_pipeline {
     bool state_condition_initialized;
     bool stopping;
     bool paused;
+    bool audio_has_started;
     bool failed;
     char failure[512];
 };
@@ -125,6 +126,9 @@ static void *audio_worker(void *argument)
             fail_pipeline(pipeline, error);
             return NULL;
         }
+        pthread_mutex_lock(&pipeline->state_mutex);
+        pipeline->audio_has_started = true;
+        pthread_mutex_unlock(&pipeline->state_mutex);
     }
     if (reached_eof) {
         pthread_mutex_lock(&pipeline->audio_mutex);
@@ -139,6 +143,7 @@ static void *audio_worker(void *argument)
 
 int media_pipeline_open(struct media_pipeline **result, const char *path,
                         int64_t start_us, bool enable_audio_device,
+                        bool start_paused,
                         char *error, size_t error_size)
 {
     if (!result) {
@@ -169,6 +174,7 @@ int media_pipeline_open(struct media_pipeline **result, const char *path,
         return -1;
     }
     pipeline->state_condition_initialized = true;
+    pipeline->paused = start_paused;
     if (packet_queue_initialize(&pipeline->video_queue,
                                 VIDEO_QUEUE_CAPACITY) < 0 ||
         packet_queue_initialize(&pipeline->audio_queue,
@@ -273,16 +279,19 @@ int media_pipeline_pause(struct media_pipeline *pipeline, bool paused,
 {
     if (!pipeline)
         return -1;
+    pthread_mutex_lock(&pipeline->state_mutex);
+    bool audio_has_started = pipeline->audio_has_started;
+    pipeline->paused = paused;
+    pthread_cond_broadcast(&pipeline->state_changed);
+    pthread_mutex_unlock(&pipeline->state_mutex);
+    if (!audio_has_started)
+        return 0;
     pthread_mutex_lock(&pipeline->audio_mutex);
     int result = audio_output_pause(pipeline->audio, paused,
                                     error, error_size);
     pthread_mutex_unlock(&pipeline->audio_mutex);
     if (result < 0)
         return -1;
-    pthread_mutex_lock(&pipeline->state_mutex);
-    pipeline->paused = paused;
-    pthread_cond_broadcast(&pipeline->state_changed);
-    pthread_mutex_unlock(&pipeline->state_mutex);
     return 0;
 }
 

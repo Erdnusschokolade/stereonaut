@@ -17,7 +17,7 @@ int main(int argc, char **argv)
     bool audio_device = argc == 3 && strcmp(argv[2], "--audio") == 0;
     char error[512] = {0};
     struct media_pipeline *pipeline = NULL;
-    if (media_pipeline_open(&pipeline, argv[1], 0, audio_device,
+    if (media_pipeline_open(&pipeline, argv[1], 0, audio_device, false,
                             error, sizeof(error)) < 0) {
         fprintf(stderr, "pipeline_error=%s\n", error);
         return 1;
