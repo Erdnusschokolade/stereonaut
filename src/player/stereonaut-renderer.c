@@ -29,10 +29,19 @@
 #define UBO_STRIDE 256U
 #define DRM_FORMAT_MOD_LINEAR UINT64_C(0)
 #define UI_WIDTH 1024U
-#define UI_HEIGHT 256U
+#define UI_HEIGHT 320U
 #define UI_BYTES (UI_WIDTH * UI_HEIGHT * 4U)
 #define UI_PANEL_WIDTH_METERS 1.4f
-#define UI_PANEL_HEIGHT_METERS 0.35f
+#define UI_PANEL_HEIGHT_METERS 0.4375f
+#define UI_BAR_X 28
+#define UI_BAR_WIDTH 968
+#define UI_BAR_TRACK_Y 84
+#define UI_BAR_TRACK_HEIGHT 32
+#define UI_BAR_HIT_TOP 64
+#define UI_BAR_HIT_BOTTOM 128
+#define UI_BUTTON_Y 156
+#define UI_BUTTON_HEIGHT 108
+#define GRAB_RECENTER_COS 0.5f
 
 struct mat4 { float v[16]; };
 
@@ -98,7 +107,9 @@ struct app {
     XrActionSet action_set;
     XrAction aim_action;
     XrAction select_action;
-    XrAction menu_action;
+    XrAction squeeze_action;
+    bool has_valve_frame_controller;
+    bool has_generic_controller;
     XrPath hands[2];
     XrSpace aim_spaces[2];
     int ui_hover;
@@ -107,6 +118,14 @@ struct app {
     int ui_pointer_y;
     bool ui_visible;
     bool ui_dirty;
+    /* Panel placement in the local reference space. The panel is world-fixed
+     * and upright; only the yaw rotates it towards the viewer. */
+    float panel_x, panel_y, panel_z, panel_yaw;
+    int grab_hand;
+    XrVector3f grab_offset;
+    int scrub_hand;
+    int64_t scrub_us;
+    bool seek_pending;
     uint32_t player_state;
     int64_t position_us;
     int64_t duration_us;
@@ -236,32 +255,63 @@ static void initialize_actions(struct app *app)
                   "select", "Auswaehlen", app->hands,
                   &app->select_action);
     create_action(app->action_set, XR_ACTION_TYPE_BOOLEAN_INPUT,
-                  "menu", "Bedienfeld", app->hands,
-                  &app->menu_action);
-    XrPath profile = xr_path(app,
-        "/interaction_profiles/khr/simple_controller");
-    XrActionSuggestedBinding bindings[6] = {
-        {app->aim_action,
-         xr_path(app, "/user/hand/left/input/aim/pose")},
-        {app->aim_action,
-         xr_path(app, "/user/hand/right/input/aim/pose")},
-        {app->select_action,
-         xr_path(app, "/user/hand/left/input/select/click")},
-        {app->select_action,
-         xr_path(app, "/user/hand/right/input/select/click")},
-        {app->menu_action,
-         xr_path(app, "/user/hand/left/input/menu/click")},
-        {app->menu_action,
-         xr_path(app, "/user/hand/right/input/menu/click")},
+                  "squeeze", "Greifen", app->hands, &app->squeeze_action);
+    struct {
+        const char *profile;
+        const char *select_component;
+        const char *squeeze_component;
+        bool enabled;
+    } profiles[] = {
+        {"/interaction_profiles/valve/frame_controller",
+         "trigger/click", "squeeze/click", app->has_valve_frame_controller},
+        {"/interaction_profiles/khr/generic_controller",
+         "trigger/value", "squeeze/value", app->has_generic_controller},
+        {"/interaction_profiles/valve/index_controller",
+         "trigger/click", "squeeze/value", true},
+        /* No squeeze button: panel grab and show/hide are unavailable. */
+        {"/interaction_profiles/khr/simple_controller",
+         "select/click", NULL, true},
     };
-    XrInteractionProfileSuggestedBinding suggestion = {
-        .type = XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING,
-        .interactionProfile = profile,
-        .countSuggestedBindings = ARRAY_COUNT(bindings),
-        .suggestedBindings = bindings,
-    };
-    need_xr("xrSuggestInteractionProfileBindings",
-            xrSuggestInteractionProfileBindings(app->xr, &suggestion));
+    static const char *const hand_names[2] = {"left", "right"};
+    unsigned accepted = 0;
+    for (size_t p = 0; p < ARRAY_COUNT(profiles); ++p) {
+        if (!profiles[p].enabled)
+            continue;
+        XrActionSuggestedBinding bindings[6];
+        uint32_t count = 0;
+        char text[3][2][96];
+        for (unsigned hand = 0; hand < 2; ++hand) {
+            snprintf(text[0][hand], sizeof(text[0][hand]),
+                     "/user/hand/%s/input/aim/pose", hand_names[hand]);
+            bindings[count++] = (XrActionSuggestedBinding){
+                app->aim_action, xr_path(app, text[0][hand])};
+            snprintf(text[1][hand], sizeof(text[1][hand]),
+                     "/user/hand/%s/input/%s", hand_names[hand],
+                     profiles[p].select_component);
+            bindings[count++] = (XrActionSuggestedBinding){
+                app->select_action, xr_path(app, text[1][hand])};
+            if (profiles[p].squeeze_component) {
+                snprintf(text[2][hand], sizeof(text[2][hand]),
+                         "/user/hand/%s/input/%s", hand_names[hand],
+                         profiles[p].squeeze_component);
+                bindings[count++] = (XrActionSuggestedBinding){
+                    app->squeeze_action, xr_path(app, text[2][hand])};
+            }
+        }
+        XrInteractionProfileSuggestedBinding suggestion = {
+            .type = XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING,
+            .interactionProfile = xr_path(app, profiles[p].profile),
+            .countSuggestedBindings = count,
+            .suggestedBindings = bindings,
+        };
+        XrResult result =
+            xrSuggestInteractionProfileBindings(app->xr, &suggestion);
+        printf("controller_bindings profile=%s result=%d\n",
+               profiles[p].profile, result);
+        if (XR_SUCCEEDED(result))
+            ++accepted;
+    }
+    need(accepted > 0, "no controller interaction profile was accepted");
     for (unsigned hand = 0; hand < 2; ++hand) {
         XrActionSpaceCreateInfo space = {
             .type = XR_TYPE_ACTION_SPACE_CREATE_INFO,
@@ -340,20 +390,53 @@ static void receive_initial_buffers(struct app *app)
          "invalid projection mode in IPC contract");
     need(app->stereo_layout <= NV12_STEREO_TB,
          "invalid stereo layout in IPC contract");
+    if (message.panel_valid) {
+        app->panel_x = message.panel_x;
+        app->panel_y = message.panel_y;
+        app->panel_z = message.panel_z;
+        app->panel_yaw = message.panel_yaw;
+        app->ui_visible = message.panel_visible != 0;
+    }
     printf("render_config projection=%u stereo=%u swap_eyes=%u"
            " view0=left view1=right\n",
            app->projection_mode, app->stereo_layout, app->swap_eyes);
 }
 
+static void send_message(struct app *app, const struct nv12_ipc_message *message)
+{
+    ssize_t written;
+    do {
+        written = send(app->ipc_fd, message, sizeof(*message), MSG_NOSIGNAL);
+    } while (written < 0 && errno == EINTR);
+    if (written < 0) { perror("send NV12 IPC response"); exit(2); }
+    need((size_t)written == sizeof(*message), "short NV12 IPC response");
+}
+
 static void send_ipc(struct app *app, uint32_t type, uint32_t index)
 {
     struct nv12_ipc_message message = {.type = type, .index = index};
-    ssize_t written;
-    do {
-        written = send(app->ipc_fd, &message, sizeof(message), MSG_NOSIGNAL);
-    } while (written < 0 && errno == EINTR);
-    if (written < 0) { perror("send NV12 IPC response"); exit(2); }
-    need((size_t)written == sizeof(message), "short NV12 IPC response");
+    send_message(app, &message);
+}
+
+static void send_seek_to(struct app *app, int64_t target_us)
+{
+    struct nv12_ipc_message message = {
+        .type = NV12_IPC_ACTION, .index = NV12_ACTION_SEEK_TO,
+        .position_us = target_us,
+    };
+    send_message(app, &message);
+}
+
+static void send_panel_state(struct app *app)
+{
+    struct nv12_ipc_message message = {
+        .type = NV12_IPC_PANEL,
+        .panel_x = app->panel_x, .panel_y = app->panel_y,
+        .panel_z = app->panel_z, .panel_yaw = app->panel_yaw,
+        .panel_visible = app->ui_visible,
+        .panel_valid = 1,
+    };
+    send_message(app, &message);
 }
 
 static void release_current_video(struct app *app)
@@ -402,7 +485,8 @@ static void receive_frame_messages(struct app *app)
             app->eos_received = true;
         } else if (message.type == NV12_IPC_STATUS) {
             app->player_state = message.player_state;
-            app->position_us = message.position_us;
+            if (!app->seek_pending)
+                app->position_us = message.position_us;
             app->duration_us = message.duration_us;
             app->ui_dirty = true;
         } else {
@@ -495,6 +579,25 @@ static void poll_events(struct app *app)
         XrResult result = xrPollEvent(app->xr, &event);
         if (result == XR_EVENT_UNAVAILABLE) return;
         need_xr("xrPollEvent", result);
+        if (event.type == XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED) {
+            static const char *const hand_names[2] = {"left", "right"};
+            for (unsigned hand = 0; hand < 2; ++hand) {
+                XrInteractionProfileState profile = {
+                    .type = XR_TYPE_INTERACTION_PROFILE_STATE,
+                };
+                char text[XR_MAX_PATH_LENGTH] = "none";
+                if (XR_SUCCEEDED(xrGetCurrentInteractionProfile(
+                        app->session, app->hands[hand], &profile)) &&
+                    profile.interactionProfile != XR_NULL_PATH) {
+                    uint32_t length = 0;
+                    xrPathToString(app->xr, profile.interactionProfile,
+                                   sizeof(text), &length, text);
+                }
+                printf("interaction_profile hand=%s profile=%s\n",
+                       hand_names[hand], text);
+            }
+            continue;
+        }
         if (event.type != XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) continue;
         XrEventDataSessionStateChanged *change =
             (XrEventDataSessionStateChanged *)&event;
@@ -551,12 +654,41 @@ static VkShaderModule shader(VkDevice device, const char *path)
 
 static void initialize_xr_vulkan(struct app *app)
 {
-    const char *extensions[] = {XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME};
+    /* Controller profiles with a squeeze/grip button are optional extensions;
+     * khr/simple_controller has none. */
+    const char *valve_extension = "XR_VALVE_frame_controller_interaction";
+    const char *generic_extension = "XR_KHR_generic_controller";
+    uint32_t available_count = 0;
+    need_xr("xrEnumerateInstanceExtensionProperties(count)",
+            xrEnumerateInstanceExtensionProperties(NULL, 0, &available_count,
+                                                   NULL));
+    XrExtensionProperties *available =
+        calloc(available_count ? available_count : 1U, sizeof(*available));
+    need(available != NULL, "allocate OpenXR extension list");
+    for (uint32_t i = 0; i < available_count; ++i)
+        available[i].type = XR_TYPE_EXTENSION_PROPERTIES;
+    need_xr("xrEnumerateInstanceExtensionProperties(list)",
+            xrEnumerateInstanceExtensionProperties(NULL, available_count,
+                                                   &available_count,
+                                                   available));
+    for (uint32_t i = 0; i < available_count; ++i) {
+        if (strcmp(available[i].extensionName, valve_extension) == 0)
+            app->has_valve_frame_controller = true;
+        if (strcmp(available[i].extensionName, generic_extension) == 0)
+            app->has_generic_controller = true;
+    }
+    free(available);
+    const char *extensions[3] = {XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME};
+    uint32_t extension_count = 1;
+    if (app->has_valve_frame_controller)
+        extensions[extension_count++] = valve_extension;
+    if (app->has_generic_controller)
+        extensions[extension_count++] = generic_extension;
     XrInstanceCreateInfo info = {
         .type = XR_TYPE_INSTANCE_CREATE_INFO,
         .applicationInfo = {.applicationVersion = 1, .engineVersion = 1,
                             .apiVersion = XR_MAKE_VERSION(1, 0, 0)},
-        .enabledExtensionCount = ARRAY_COUNT(extensions),
+        .enabledExtensionCount = extension_count,
         .enabledExtensionNames = extensions,
     };
     snprintf(info.applicationInfo.applicationName,
@@ -1003,6 +1135,17 @@ static void format_time(char text[32], int64_t microseconds)
              seconds / 60, seconds % 60);
 }
 
+static float seek_ratio(const struct app *app)
+{
+    int64_t position = (app->scrub_hand >= 0 || app->seek_pending)
+                           ? app->scrub_us : app->position_us;
+    if (app->duration_us <= 0 || position <= 0)
+        return 0.0f;
+    if (position >= app->duration_us)
+        return 1.0f;
+    return (float)((double)position / (double)app->duration_us);
+}
+
 static void render_ui_pixels(struct app *app)
 {
     uint32_t transparent = ui_rgba(app, 0, 0, 0, 0);
@@ -1010,13 +1153,28 @@ static void render_ui_pixels(struct app *app)
     uint32_t button = ui_rgba(app, 37, 56, 84, 245);
     uint32_t hover = ui_rgba(app, 22, 139, 202, 255);
     uint32_t text = ui_rgba(app, 242, 248, 255, 255);
+    uint32_t grabbed = ui_rgba(app, 255, 244, 96, 255);
     ui_rectangle(app, 0, 0, UI_WIDTH, UI_HEIGHT, transparent);
-    ui_rectangle(app, 8, 8, 1008, 240, panel);
+    if (app->grab_hand >= 0)
+        ui_rectangle(app, 4, 4, 1016, 312, grabbed);
+    ui_rectangle(app, 8, 8, 1008, 304, panel);
     char position[32], duration[32], clock_text[80];
-    format_time(position, app->position_us);
+    bool scrubbing = app->scrub_hand >= 0 || app->seek_pending;
+    format_time(position, scrubbing ? app->scrub_us : app->position_us);
     format_time(duration, app->duration_us);
     snprintf(clock_text, sizeof(clock_text), "%s / %s", position, duration);
-    ui_text(app, 410, 34, 5, clock_text, text);
+    ui_text(app, 382, 24, 5, clock_text, text);
+
+    float ratio = seek_ratio(app);
+    int fill = (int)(ratio * UI_BAR_WIDTH);
+    bool bar_hot = scrubbing || app->ui_hover == NV12_ACTION_SEEK_TO;
+    ui_rectangle(app, UI_BAR_X, UI_BAR_TRACK_Y, UI_BAR_WIDTH,
+                 UI_BAR_TRACK_HEIGHT, button);
+    ui_rectangle(app, UI_BAR_X, UI_BAR_TRACK_Y, fill, UI_BAR_TRACK_HEIGHT,
+                 hover);
+    ui_rectangle(app, UI_BAR_X + fill - 8, UI_BAR_TRACK_Y - 8, 16,
+                 UI_BAR_TRACK_HEIGHT + 16, bar_hot ? grabbed : text);
+
     struct {
         int x, width, action;
         const char *label;
@@ -1028,9 +1186,11 @@ static void render_ui_pixels(struct app *app)
         {658, 150, NV12_ACTION_SEEK_FORWARD, "+10 S"},
     };
     for (size_t i = 0; i < ARRAY_COUNT(buttons); ++i) {
-        ui_rectangle(app, buttons[i].x, 104, buttons[i].width, 108,
+        ui_rectangle(app, buttons[i].x, UI_BUTTON_Y, buttons[i].width,
+                     UI_BUTTON_HEIGHT,
                      app->ui_hover == buttons[i].action ? hover : button);
-        ui_text(app, buttons[i].x + 20, 142, 5, buttons[i].label, text);
+        ui_text(app, buttons[i].x + 20, UI_BUTTON_Y + 38, 5,
+                buttons[i].label, text);
     }
     if (app->ui_pointer_visible) {
         uint32_t pointer = ui_rgba(app, 255, 244, 96, 255);
@@ -1325,11 +1485,69 @@ static XrVector3f rotate_vector(XrQuaternionf q, XrVector3f vector)
     };
 }
 
-static int ui_hit_test(float u, float v)
+static XrQuaternionf quaternion_conjugate(XrQuaternionf q)
+{
+    return (XrQuaternionf){-q.x, -q.y, -q.z, q.w};
+}
+
+static XrQuaternionf yaw_quaternion(float yaw)
+{
+    return (XrQuaternionf){0.0f, sinf(yaw * 0.5f), 0.0f, cosf(yaw * 0.5f)};
+}
+
+static float vector_dot(XrVector3f a, XrVector3f b)
+{
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+struct panel_hit {
+    bool plane;
+    float u, v;
+};
+
+static bool panel_hit_inside(const struct panel_hit *hit)
+{
+    return hit->plane && hit->u >= 0.0f && hit->u < 1.0f &&
+           hit->v >= 0.0f && hit->v < 1.0f;
+}
+
+/* Intersect the aim ray with the (unbounded) panel plane. u/v are panel
+ * texture coordinates and may lie outside [0,1). */
+static struct panel_hit panel_ray(const struct app *app, XrPosef aim)
+{
+    struct panel_hit hit = {0};
+    XrQuaternionf orientation = yaw_quaternion(app->panel_yaw);
+    XrVector3f normal = rotate_vector(orientation, (XrVector3f){0, 0, 1});
+    XrVector3f direction =
+        rotate_vector(aim.orientation, (XrVector3f){0, 0, -1});
+    float denominator = vector_dot(direction, normal);
+    if (denominator > -0.0001f)
+        return hit;
+    XrVector3f center = {app->panel_x, app->panel_y, app->panel_z};
+    XrVector3f to_center = {center.x - aim.position.x,
+                            center.y - aim.position.y,
+                            center.z - aim.position.z};
+    float distance = vector_dot(to_center, normal) / denominator;
+    if (distance <= 0.0f)
+        return hit;
+    XrVector3f point = {aim.position.x + direction.x * distance - center.x,
+                        aim.position.y + direction.y * distance - center.y,
+                        aim.position.z + direction.z * distance - center.z};
+    XrVector3f local = rotate_vector(quaternion_conjugate(orientation), point);
+    hit.plane = true;
+    hit.u = local.x / UI_PANEL_WIDTH_METERS + 0.5f;
+    hit.v = 0.5f - local.y / UI_PANEL_HEIGHT_METERS;
+    return hit;
+}
+
+static int ui_hit_test(const struct app *app, float u, float v)
 {
     int x = (int)(u * UI_WIDTH);
     int y = (int)(v * UI_HEIGHT);
-    if (y < 104 || y >= 212)
+    if (app->duration_us > 0 && y >= UI_BAR_HIT_TOP && y < UI_BAR_HIT_BOTTOM &&
+        x >= UI_BAR_X - 8 && x < UI_BAR_X + UI_BAR_WIDTH + 8)
+        return NV12_ACTION_SEEK_TO;
+    if (y < UI_BUTTON_Y || y >= UI_BUTTON_Y + UI_BUTTON_HEIGHT)
         return 0;
     if (x >= 28 && x < 218)
         return NV12_ACTION_BACK;
@@ -1342,6 +1560,80 @@ static int ui_hit_test(float u, float v)
     return 0;
 }
 
+static int64_t scrub_target_us(const struct app *app, float u)
+{
+    float ratio = (u * UI_WIDTH - UI_BAR_X) / UI_BAR_WIDTH;
+    if (ratio < 0.0f)
+        ratio = 0.0f;
+    if (ratio > 1.0f)
+        ratio = 1.0f;
+    return (int64_t)((double)ratio * (double)app->duration_us);
+}
+
+struct hand_input {
+    bool aim_valid;
+    XrPosef aim;
+    struct panel_hit hit;
+    XrActionStateBoolean select;
+    XrActionStateBoolean squeeze;
+};
+
+static void read_boolean(struct app *app, XrAction action, XrPath hand,
+                         XrActionStateBoolean *state)
+{
+    XrActionStateGetInfo info = {
+        .type = XR_TYPE_ACTION_STATE_GET_INFO,
+        .action = action,
+        .subactionPath = hand,
+    };
+    *state = (XrActionStateBoolean){.type = XR_TYPE_ACTION_STATE_BOOLEAN};
+    need_xr("xrGetActionStateBoolean",
+            xrGetActionStateBoolean(app->session, &info, state));
+}
+
+static bool pressed_edge(const XrActionStateBoolean *state)
+{
+    return state->isActive && state->changedSinceLastSync &&
+           state->currentState;
+}
+
+static bool held(const XrActionStateBoolean *state)
+{
+    return state->isActive && state->currentState;
+}
+
+/* Show the panel again. If it is far outside the gaze cone it is moved in
+ * front of the viewer, otherwise it keeps its world position. */
+static void show_panel(struct app *app, const XrSpaceLocation *head,
+                       bool head_valid)
+{
+    app->ui_visible = true;
+    if (head_valid) {
+        XrVector3f gaze = rotate_vector(head->pose.orientation,
+                                        (XrVector3f){0, 0, -1});
+        XrVector3f to_panel = {app->panel_x - head->pose.position.x,
+                               app->panel_y - head->pose.position.y,
+                               app->panel_z - head->pose.position.z};
+        float length = sqrtf(vector_dot(to_panel, to_panel));
+        if (length < 0.1f ||
+            vector_dot(gaze, to_panel) / length < GRAB_RECENTER_COS) {
+            float flat = sqrtf(gaze.x * gaze.x + gaze.z * gaze.z);
+            if (flat > 0.01f) {
+                gaze.x /= flat;
+                gaze.z /= flat;
+                app->panel_x = head->pose.position.x + gaze.x * 1.3f;
+                app->panel_y = head->pose.position.y - 0.45f;
+                app->panel_z = head->pose.position.z + gaze.z * 1.3f;
+                app->panel_yaw = atan2f(-gaze.x, -gaze.z);
+            }
+        }
+    }
+    app->ui_dirty = true;
+    send_panel_state(app);
+    printf("player_panel=visible x=%.3f y=%.3f z=%.3f yaw=%.3f\n",
+           app->panel_x, app->panel_y, app->panel_z, app->panel_yaw);
+}
+
 static void sync_player_input(struct app *app, XrTime time)
 {
     XrActiveActionSet active = {.actionSet = app->action_set};
@@ -1351,12 +1643,15 @@ static void sync_player_input(struct app *app, XrTime time)
         .activeActionSets = &active,
     };
     need_xr("xrSyncActions", xrSyncActions(app->session, &sync));
-    int hover = 0;
-    bool pressed = false;
-    bool menu_pressed = false;
-    bool pointer_visible = false;
-    int pointer_x = 0;
-    int pointer_y = 0;
+    XrSpaceLocation head = {.type = XR_TYPE_SPACE_LOCATION};
+    need_xr("xrLocateSpace(player head)",
+            xrLocateSpace(app->view_space, app->space, time, &head));
+    const XrSpaceLocationFlags valid =
+        XR_SPACE_LOCATION_POSITION_VALID_BIT |
+        XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+    bool head_valid = (head.locationFlags & valid) == valid;
+
+    struct hand_input hands[2] = {0};
     for (unsigned hand = 0; hand < 2; ++hand) {
         XrActionStateGetInfo pose_info = {
             .type = XR_TYPE_ACTION_STATE_GET_INFO,
@@ -1371,69 +1666,111 @@ static void sync_player_input(struct app *app, XrTime time)
             need_xr("xrLocateSpace(player aim)",
                     xrLocateSpace(app->aim_spaces[hand], app->space,
                                   time, &location));
-            XrSpaceLocationFlags valid =
-                XR_SPACE_LOCATION_POSITION_VALID_BIT |
-                XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
             if ((location.locationFlags & valid) == valid) {
-                XrVector3f direction = rotate_vector(
-                    location.pose.orientation, (XrVector3f){0, 0, -1});
-                if (direction.z < -0.0001f) {
-                    float distance =
-                        (-1.3f - location.pose.position.z) / direction.z;
-                    if (distance > 0.0f) {
-                        float x = location.pose.position.x +
-                                  direction.x * distance;
-                        float y = location.pose.position.y +
-                                  direction.y * distance;
-                        float u = x / UI_PANEL_WIDTH_METERS + 0.5f;
-                        float v = 0.5f -
-                            (y + 0.45f) / UI_PANEL_HEIGHT_METERS;
-                        if (u >= 0 && u < 1 && v >= 0 && v < 1) {
-                            pointer_visible = true;
-                            pointer_x = (int)(u * UI_WIDTH);
-                            pointer_y = (int)(v * UI_HEIGHT);
-                            hover = ui_hit_test(u, v);
-                        }
-                    }
-                }
+                hands[hand].aim_valid = true;
+                hands[hand].aim = location.pose;
+                hands[hand].hit = panel_ray(app, location.pose);
             }
         }
-        XrActionStateGetInfo select_info = {
-            .type = XR_TYPE_ACTION_STATE_GET_INFO,
-            .action = app->select_action,
-            .subactionPath = app->hands[hand],
-        };
-        XrActionStateBoolean select = {
-            .type = XR_TYPE_ACTION_STATE_BOOLEAN,
-        };
-        need_xr("xrGetActionStateBoolean",
-                xrGetActionStateBoolean(app->session,
-                                        &select_info, &select));
-        if (select.isActive && select.changedSinceLastSync &&
-            select.currentState)
-            pressed = true;
-        XrActionStateGetInfo menu_info = {
-            .type = XR_TYPE_ACTION_STATE_GET_INFO,
-            .action = app->menu_action,
-            .subactionPath = app->hands[hand],
-        };
-        XrActionStateBoolean menu = {
-            .type = XR_TYPE_ACTION_STATE_BOOLEAN,
-        };
-        need_xr("xrGetActionStateBoolean(menu)",
-                xrGetActionStateBoolean(app->session,
-                                        &menu_info, &menu));
-        if (menu.isActive && menu.changedSinceLastSync &&
-            menu.currentState)
-            menu_pressed = true;
+        read_boolean(app, app->select_action, app->hands[hand],
+                     &hands[hand].select);
+        read_boolean(app, app->squeeze_action, app->hands[hand],
+                     &hands[hand].squeeze);
     }
-    if (menu_pressed) {
-        app->ui_visible = !app->ui_visible;
-        printf("player_panel=%s\n", app->ui_visible ? "visible" : "hidden");
-        if (!app->ui_visible) {
-            hover = 0;
-            pointer_visible = false;
+
+    /* Grip: grab the panel, or show/hide it when pressed on empty space. */
+    if (app->grab_hand >= 0 &&
+        !held(&hands[app->grab_hand].squeeze)) {
+        app->grab_hand = -1;
+        app->ui_dirty = true;
+        send_panel_state(app);
+        printf("player_panel=released x=%.3f y=%.3f z=%.3f yaw=%.3f\n",
+               app->panel_x, app->panel_y, app->panel_z, app->panel_yaw);
+    }
+    for (unsigned hand = 0; hand < 2; ++hand) {
+        if (!pressed_edge(&hands[hand].squeeze) || app->grab_hand >= 0 ||
+            app->scrub_hand >= 0)
+            continue;
+        if (app->ui_visible && hands[hand].aim_valid &&
+            panel_hit_inside(&hands[hand].hit)) {
+            XrPosef aim = hands[hand].aim;
+            XrVector3f center = {app->panel_x - aim.position.x,
+                                 app->panel_y - aim.position.y,
+                                 app->panel_z - aim.position.z};
+            app->grab_offset = rotate_vector(
+                quaternion_conjugate(aim.orientation), center);
+            app->grab_hand = (int)hand;
+            app->ui_dirty = true;
+            printf("player_panel=grabbed hand=%u\n", hand);
+        } else if (app->ui_visible) {
+            app->ui_visible = false;
+            send_panel_state(app);
+            printf("player_panel=hidden\n");
+        } else {
+            show_panel(app, &head, head_valid);
         }
+    }
+    if (app->grab_hand >= 0 && hands[app->grab_hand].aim_valid) {
+        XrPosef aim = hands[app->grab_hand].aim;
+        XrVector3f offset = rotate_vector(aim.orientation, app->grab_offset);
+        app->panel_x = aim.position.x + offset.x;
+        app->panel_y = aim.position.y + offset.y;
+        app->panel_z = aim.position.z + offset.z;
+        if (head_valid)
+            app->panel_yaw = atan2f(head.pose.position.x - app->panel_x,
+                                    head.pose.position.z - app->panel_z);
+    }
+
+    /* Trigger: buttons on press, seek bar while held. */
+    if (app->scrub_hand >= 0) {
+        struct hand_input *input = &hands[app->scrub_hand];
+        if (input->aim_valid && input->hit.plane) {
+            int64_t target = scrub_target_us(app, input->hit.u);
+            if (target != app->scrub_us) {
+                app->scrub_us = target;
+                app->ui_dirty = true;
+            }
+        }
+        if (!held(&input->select)) {
+            printf("player_seek_bar target_us=%" PRId64 "\n", app->scrub_us);
+            app->scrub_hand = -1;
+            app->seek_pending = true;
+            app->ui_dirty = true;
+            send_seek_to(app, app->scrub_us);
+        }
+    }
+    for (unsigned hand = 0; hand < 2; ++hand) {
+        if (!app->ui_visible || app->grab_hand >= 0 ||
+            app->scrub_hand >= 0 || app->seek_pending ||
+            !pressed_edge(&hands[hand].select) || !hands[hand].aim_valid ||
+            !panel_hit_inside(&hands[hand].hit))
+            continue;
+        int action = ui_hit_test(app, hands[hand].hit.u, hands[hand].hit.v);
+        if (action == NV12_ACTION_SEEK_TO) {
+            app->scrub_hand = (int)hand;
+            app->scrub_us = scrub_target_us(app, hands[hand].hit.u);
+            app->ui_dirty = true;
+        } else if (action) {
+            send_ipc(app, NV12_IPC_ACTION, (uint32_t)action);
+        }
+    }
+
+    int hover = 0;
+    bool pointer_visible = false;
+    int pointer_x = 0;
+    int pointer_y = 0;
+    if (app->ui_visible && app->grab_hand < 0) {
+        for (unsigned hand = 0; hand < 2; ++hand) {
+            if (!hands[hand].aim_valid ||
+                !panel_hit_inside(&hands[hand].hit))
+                continue;
+            pointer_visible = true;
+            pointer_x = (int)(hands[hand].hit.u * UI_WIDTH);
+            pointer_y = (int)(hands[hand].hit.v * UI_HEIGHT);
+            hover = ui_hit_test(app, hands[hand].hit.u, hands[hand].hit.v);
+        }
+        if (app->scrub_hand >= 0)
+            hover = NV12_ACTION_SEEK_TO;
     }
     if (hover != app->ui_hover) {
         app->ui_hover = hover;
@@ -1448,8 +1785,6 @@ static void sync_player_input(struct app *app, XrTime time)
         app->ui_pointer_y = pointer_y;
         app->ui_dirty = true;
     }
-    if (app->ui_visible && pressed && hover)
-        send_ipc(app, NV12_IPC_ACTION, (uint32_t)hover);
 }
 
 static void render_frame(struct app *app)
@@ -1645,7 +1980,8 @@ static void render_frame(struct app *app)
             .swapchain = app->ui_swapchain,
             .imageRect = {.extent = {UI_WIDTH, UI_HEIGHT}},
         },
-        .pose = {{0, 0, 0, 1}, {0, -0.45f, -1.3f}},
+        .pose = {yaw_quaternion(app->panel_yaw),
+                 {app->panel_x, app->panel_y, app->panel_z}},
         .size = {UI_PANEL_WIDTH_METERS, UI_PANEL_HEIGHT_METERS},
     };
     const XrCompositionLayerBaseHeader *layers[] = {
@@ -1679,6 +2015,10 @@ int main(int argc, char **argv)
     app.player_state = NV12_PLAYER_PLAYING;
     app.ui_visible = true;
     app.ui_dirty = true;
+    app.panel_y = -0.45f;
+    app.panel_z = -1.3f;
+    app.grab_hand = -1;
+    app.scrub_hand = -1;
     receive_initial_buffers(&app);
     initialize_xr_vulkan(&app);
     XrGraphicsBindingVulkan2KHR binding = {.type = XR_TYPE_GRAPHICS_BINDING_VULKAN2_KHR,

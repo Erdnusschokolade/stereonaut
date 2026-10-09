@@ -105,12 +105,19 @@ struct video_layout {
     uint64_t uv_offset;
 };
 
+struct panel_state {
+    bool valid;
+    bool visible;
+    float x, y, z, yaw;
+};
+
 struct playback_options {
     uint32_t projection_mode;
     uint32_t stereo_layout;
     bool swap_eyes;
     uint32_t frame_limit;
     int64_t start_us;
+    struct panel_state panel;
 };
 
 struct capture_contract {
@@ -133,6 +140,8 @@ static int renderer_fd = -1;
 static pid_t renderer_pid = -1;
 static bool renderer_outstanding[MAX_CAPTURE_BUFFERS];
 static uint32_t renderer_action;
+static int64_t renderer_action_position_us;
+static struct panel_state panel_state;
 
 static void queue_capture(unsigned index, size_t length);
 
@@ -259,6 +268,12 @@ static void start_renderer(
         .projection_mode = options->projection_mode,
         .stereo_layout = options->stereo_layout,
         .swap_eyes = options->swap_eyes,
+        .panel_x = options->panel.x,
+        .panel_y = options->panel.y,
+        .panel_z = options->panel.z,
+        .panel_yaw = options->panel.yaw,
+        .panel_visible = options->panel.visible,
+        .panel_valid = options->panel.valid,
     };
     int fds[MAX_CAPTURE_BUFFERS];
     for (unsigned i = 0; i < count; ++i)
@@ -345,9 +360,17 @@ static bool process_renderer_messages(
             flushed = true;
         } else if (message.type == NV12_IPC_ACTION) {
             if (message.index < NV12_ACTION_TOGGLE_PAUSE ||
-                message.index > NV12_ACTION_BACK)
+                message.index > NV12_ACTION_SEEK_TO)
                 fail_message("invalid renderer player action");
             renderer_action = message.index;
+            renderer_action_position_us = message.position_us;
+        } else if (message.type == NV12_IPC_PANEL) {
+            panel_state = (struct panel_state){
+                .valid = true,
+                .visible = message.panel_visible != 0,
+                .x = message.panel_x, .y = message.panel_y,
+                .z = message.panel_z, .yaw = message.panel_yaw,
+            };
         } else {
             fail_message("unknown renderer response");
         }
@@ -460,6 +483,16 @@ static struct playback_options parse_playback_options(int argc, char **argv)
             if (++i >= argc)
                 fail_message("--frames requires a positive frame count");
             options.frame_limit = parse_u32(argv[i], "frame limit");
+        } else if (strcmp(argv[i], "--panel") == 0) {
+            if (++i >= argc)
+                fail_message("--panel requires x,y,z,yaw,visible");
+            unsigned visible = 0;
+            if (sscanf(argv[i], "%f,%f,%f,%f,%u", &options.panel.x,
+                       &options.panel.y, &options.panel.z,
+                       &options.panel.yaw, &visible) != 5 || visible > 1)
+                fail_message("invalid --panel value");
+            options.panel.visible = visible != 0;
+            options.panel.valid = true;
         } else if (strcmp(argv[i], "--start-us") == 0) {
             if (++i >= argc)
                 fail_message("--start-us requires a nonnegative timestamp");
@@ -1574,6 +1607,7 @@ int main(int argc, char **argv)
         return 2;
     }
     struct playback_options options = parse_playback_options(argc, argv);
+    panel_state = options.panel;
     char pipeline_error[512] = {0};
     struct media_pipeline *pipeline = NULL;
     if (media_pipeline_open(&pipeline, argv[1], options.start_us, true, true,
@@ -1754,13 +1788,18 @@ int main(int argc, char **argv)
                                  info->duration_us);
             last_status_sent = now;
         } else if (renderer_action == NV12_ACTION_SEEK_BACK ||
-                   renderer_action == NV12_ACTION_SEEK_FORWARD) {
+                   renderer_action == NV12_ACTION_SEEK_FORWARD ||
+                   renderer_action == NV12_ACTION_SEEK_TO) {
             int64_t position = media_pipeline_clock_us(pipeline);
             if (position == AV_NOPTS_VALUE)
                 position = options.start_us;
-            int64_t delta = renderer_action == NV12_ACTION_SEEK_BACK
-                                ? -INT64_C(10000000) : INT64_C(10000000);
-            requested_start_us = position + delta;
+            if (renderer_action == NV12_ACTION_SEEK_TO) {
+                requested_start_us = renderer_action_position_us;
+            } else {
+                int64_t delta = renderer_action == NV12_ACTION_SEEK_BACK
+                                    ? -INT64_C(10000000) : INT64_C(10000000);
+                requested_start_us = position + delta;
+            }
             if (requested_start_us < 0)
                 requested_start_us = 0;
             if (info->duration_us > 0 &&
@@ -2166,14 +2205,29 @@ int main(int argc, char **argv)
                                  ? "tb" : "mono";
         printf("player_restart target_us=%s projection=%s stereo=%s\n",
                start_text, projection, stereo);
+        char panel_text[96] = {0};
+        if (panel_state.valid)
+            snprintf(panel_text, sizeof(panel_text), "%.6f,%.6f,%.6f,%.6f,%u",
+                     panel_state.x, panel_state.y, panel_state.z,
+                     panel_state.yaw, panel_state.visible ? 1U : 0U);
+        char *restart_argv[16];
+        size_t restart_argc = 0;
+        restart_argv[restart_argc++] = argv[0];
+        restart_argv[restart_argc++] = argv[1];
+        restart_argv[restart_argc++] = "--projection";
+        restart_argv[restart_argc++] = (char *)projection;
+        restart_argv[restart_argc++] = "--stereo";
+        restart_argv[restart_argc++] = (char *)stereo;
         if (options.swap_eyes)
-            execl(argv[0], argv[0], argv[1], "--projection", projection,
-                  "--stereo", stereo, "--swap-eyes", "--start-us",
-                  start_text, (char *)NULL);
-        else
-            execl(argv[0], argv[0], argv[1], "--projection", projection,
-                  "--stereo", stereo, "--start-us", start_text,
-                  (char *)NULL);
+            restart_argv[restart_argc++] = "--swap-eyes";
+        restart_argv[restart_argc++] = "--start-us";
+        restart_argv[restart_argc++] = start_text;
+        if (panel_state.valid) {
+            restart_argv[restart_argc++] = "--panel";
+            restart_argv[restart_argc++] = panel_text;
+        }
+        restart_argv[restart_argc] = NULL;
+        execv(argv[0], restart_argv);
         fail_errno("restart stereonaut-session after seek");
     }
 

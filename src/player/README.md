@@ -98,3 +98,11 @@ media/V4L2/XR children cleanly and re-executes the same session at the
 preceding container keyframe; decoded video and PCM before the requested
 timestamp are discarded. Re-exec keeps repeated seeks simple and avoids
 reusing a stateful HEVC decoder across a GOP discontinuity.
+
+The playback panel is world-fixed and movable. Pressing the squeeze button
+while the aim ray hits the panel grabs it (it follows the controller and turns
+towards the head about the vertical axis); squeezing on empty space toggles its
+visibility. A seek bar above the buttons is dragged with the trigger and
+seeks on release (`NV12_ACTION_SEEK_TO`). The renderer reports the panel pose
+to the session (`NV12_IPC_PANEL`), which forwards it through the seek re-exec
+via `--panel x,y,z,yaw,visible`.

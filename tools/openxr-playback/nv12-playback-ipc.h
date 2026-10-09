@@ -27,6 +27,7 @@ enum nv12_ipc_type {
     NV12_IPC_READY = 7,
     NV12_IPC_STATUS = 8,
     NV12_IPC_ACTION = 9,
+    NV12_IPC_PANEL = 10,
 };
 
 enum nv12_player_state {
@@ -39,6 +40,8 @@ enum nv12_player_action {
     NV12_ACTION_SEEK_BACK = 2,
     NV12_ACTION_SEEK_FORWARD = 3,
     NV12_ACTION_BACK = 4,
+    /* Absolute seek; the target is carried in position_us. */
+    NV12_ACTION_SEEK_TO = 5,
 };
 
 struct nv12_ipc_message {
@@ -57,6 +60,12 @@ struct nv12_ipc_message {
     uint32_t player_state;
     int64_t position_us;
     int64_t duration_us;
+    /* Panel placement in the local reference space. Session -> renderer in
+     * INIT (when panel_valid) and renderer -> session in PANEL, so the layout
+     * survives the session re-exec performed for every seek. */
+    float panel_x, panel_y, panel_z, panel_yaw;
+    uint32_t panel_visible;
+    uint32_t panel_valid;
 };
 
 #endif

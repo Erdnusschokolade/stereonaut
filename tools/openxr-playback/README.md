@@ -37,3 +37,13 @@ Run host-side mapping checks with:
 ```sh
 python3 test-projection-math.py
 ```
+
+`xr-input-profile-probe.c` creates only an OpenXR instance and action set and
+reports which input paths the runtime accepts as suggested bindings for the
+Steam Frame, simple, generic and Index controller profiles. It needs no
+session. Results are recorded in `docs/mvp-player-handoff.md`.
+
+```sh
+cc -std=c11 -O2 -Wall -Wextra -Werror -I/usr/include -o xr-input-profile-probe \
+  xr-input-profile-probe.c /opt/steamvr/bin/linuxarm64/libopenxr_loader.so
+```
