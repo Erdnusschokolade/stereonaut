@@ -96,6 +96,12 @@ struct app {
     VkSamplerYcbcrConversion conversion;
     VkSampler video_sampler;
     struct video_buffer video_buffers[NV12_IPC_MAX_BUFFERS];
+    /* Last frame kept on screen while the session restarts after a seek. */
+    struct video_buffer held;
+    bool has_held;
+    VkDescriptorSet spare_set;
+    bool awaiting_frame;
+    bool first_init_done;
     uint32_t video_buffer_count;
     int current_video_index;
     bool current_video_presented;
@@ -163,6 +169,11 @@ struct app {
 
 static void need_vk(const char *what, VkResult result);
 static void need(bool condition, const char *what);
+static void hold_current_frame(struct app *app);
+static void discard_held_frame(struct app *app);
+static void reinitialize_video(struct app *app,
+                               const struct nv12_ipc_message *message,
+                               const struct msghdr *received);
 
 static uint64_t parse_u64(const char *text, const char *name)
 {
@@ -337,6 +348,66 @@ static void initialize_actions(struct app *app)
             xrAttachSessionActionSets(app->session, &attach));
 }
 
+static void apply_init(struct app *app, const struct nv12_ipc_message *message,
+                       const struct msghdr *received, bool first)
+{
+    need(message->buffer_count == 12 &&
+             message->buffer_count <= NV12_IPC_MAX_BUFFERS,
+         "NV12 IPC buffer count is not twelve");
+    need(first || message->buffer_count == app->video_buffer_count,
+         "NV12 IPC re-init changed the buffer count");
+    struct cmsghdr *header = CMSG_FIRSTHDR(received);
+    need(header && header->cmsg_level == SOL_SOCKET &&
+             header->cmsg_type == SCM_RIGHTS,
+         "NV12 IPC init lacks DMA-BUF file descriptors");
+    size_t fd_bytes = header->cmsg_len - CMSG_LEN(0);
+    need(fd_bytes == message->buffer_count * sizeof(int),
+         "NV12 IPC descriptor count differs from buffer count");
+    int *fds = (int *)CMSG_DATA(header);
+    app->video_buffer_count = message->buffer_count;
+    for (uint32_t i = 0; i < app->video_buffer_count; ++i) {
+        app->video_buffers[i].dma_buf_fd = fds[i];
+        struct stat status;
+        if (fstat(fds[i], &status) < 0) {
+            perror("fstat IPC DMA-BUF");
+            exit(2);
+        }
+        need((uint64_t)status.st_size == message->size,
+             "IPC DMA-BUF length differs from contract");
+    }
+    app->video_width = message->width;
+    app->video_height = message->height;
+    app->video_stride = message->stride;
+    app->dma_buf_size = message->size;
+    app->uv_offset = message->uv_offset;
+    app->projection_mode = message->projection_mode;
+    app->stereo_layout = message->stereo_layout;
+    app->swap_eyes = message->swap_eyes != 0;
+    need(app->video_width > 0 && app->video_height > 0 &&
+             !(app->video_width & 1U) && !(app->video_height & 1U) &&
+             app->video_stride >= app->video_width &&
+             app->uv_offset ==
+                 (uint64_t)app->video_stride * app->video_height &&
+             app->dma_buf_size == app->uv_offset +
+                 (uint64_t)app->video_stride * app->video_height / 2U,
+         "NV12 IPC layout is not contiguous linear 4:2:0");
+    need(app->projection_mode <= NV12_PROJECTION_EQUIRECT_360,
+         "invalid projection mode in IPC contract");
+    need(app->stereo_layout <= NV12_STEREO_TB,
+         "invalid stereo layout in IPC contract");
+    /* After the first INIT the renderer owns the panel placement. */
+    if (first && message->panel_valid) {
+        app->panel_x = message->panel_x;
+        app->panel_y = message->panel_y;
+        app->panel_z = message->panel_z;
+        app->panel_yaw = message->panel_yaw;
+        app->ui_visible = message->panel_visible != 0;
+    }
+    printf("render_config projection=%u stereo=%u swap_eyes=%u"
+           " view0=left view1=right\n",
+           app->projection_mode, app->stereo_layout, app->swap_eyes);
+}
+
 static void receive_initial_buffers(struct app *app)
 {
     struct nv12_ipc_message message = {0};
@@ -353,58 +424,7 @@ static void receive_initial_buffers(struct app *app)
     if (bytes < 0) { perror("recvmsg NV12 init"); exit(2); }
     need((size_t)bytes == sizeof(message) && message.type == NV12_IPC_INIT,
          "invalid NV12 IPC init message");
-    need(message.buffer_count == 12 &&
-             message.buffer_count <= NV12_IPC_MAX_BUFFERS,
-         "NV12 IPC buffer count is not twelve");
-    struct cmsghdr *header = CMSG_FIRSTHDR(&received);
-    need(header && header->cmsg_level == SOL_SOCKET &&
-             header->cmsg_type == SCM_RIGHTS,
-         "NV12 IPC init lacks DMA-BUF file descriptors");
-    size_t fd_bytes = header->cmsg_len - CMSG_LEN(0);
-    need(fd_bytes == message.buffer_count * sizeof(int),
-         "NV12 IPC descriptor count differs from buffer count");
-    int *fds = (int *)CMSG_DATA(header);
-    app->video_buffer_count = message.buffer_count;
-    for (uint32_t i = 0; i < app->video_buffer_count; ++i) {
-        app->video_buffers[i].dma_buf_fd = fds[i];
-        struct stat status;
-        if (fstat(fds[i], &status) < 0) {
-            perror("fstat IPC DMA-BUF");
-            exit(2);
-        }
-        need((uint64_t)status.st_size == message.size,
-             "IPC DMA-BUF length differs from contract");
-    }
-    app->video_width = message.width;
-    app->video_height = message.height;
-    app->video_stride = message.stride;
-    app->dma_buf_size = message.size;
-    app->uv_offset = message.uv_offset;
-    app->projection_mode = message.projection_mode;
-    app->stereo_layout = message.stereo_layout;
-    app->swap_eyes = message.swap_eyes != 0;
-    need(app->video_width > 0 && app->video_height > 0 &&
-             !(app->video_width & 1U) && !(app->video_height & 1U) &&
-             app->video_stride >= app->video_width &&
-             app->uv_offset ==
-                 (uint64_t)app->video_stride * app->video_height &&
-             app->dma_buf_size == app->uv_offset +
-                 (uint64_t)app->video_stride * app->video_height / 2U,
-         "NV12 IPC layout is not contiguous linear 4:2:0");
-    need(app->projection_mode <= NV12_PROJECTION_EQUIRECT_360,
-         "invalid projection mode in IPC contract");
-    need(app->stereo_layout <= NV12_STEREO_TB,
-         "invalid stereo layout in IPC contract");
-    if (message.panel_valid) {
-        app->panel_x = message.panel_x;
-        app->panel_y = message.panel_y;
-        app->panel_z = message.panel_z;
-        app->panel_yaw = message.panel_yaw;
-        app->ui_visible = message.panel_visible != 0;
-    }
-    printf("render_config projection=%u stereo=%u swap_eyes=%u"
-           " view0=left view1=right\n",
-           app->projection_mode, app->stereo_layout, app->swap_eyes);
+    apply_init(app, &message, &received, true);
 }
 
 static void send_message(struct app *app, const struct nv12_ipc_message *message)
@@ -463,8 +483,13 @@ static void receive_frame_messages(struct app *app)
 {
     for (;;) {
         struct nv12_ipc_message message = {0};
-        ssize_t bytes = recv(app->ipc_fd, &message, sizeof(message),
-                             MSG_DONTWAIT);
+        char control[CMSG_SPACE(sizeof(int) * NV12_IPC_MAX_BUFFERS)] = {0};
+        struct iovec iov = {.iov_base = &message, .iov_len = sizeof(message)};
+        struct msghdr received = {
+            .msg_iov = &iov, .msg_iovlen = 1,
+            .msg_control = control, .msg_controllen = sizeof(control),
+        };
+        ssize_t bytes = recvmsg(app->ipc_fd, &received, MSG_DONTWAIT);
         if (bytes < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
             return;
         if (bytes < 0 && errno == EINTR)
@@ -482,12 +507,22 @@ static void receive_frame_messages(struct app *app)
             app->current_video_index = (int)message.index;
             app->current_video_presented = false;
             app->video_buffers[message.index].producer_wait_pending = true;
-            if (app->received_frames == 0)
+            if (app->awaiting_frame) {
+                app->awaiting_frame = false;
+                app->seek_pending = false;
                 app->ui_dirty = true;
+            }
+            /* The held frame is superseded by the new stream. */
+            discard_held_frame(app);
             app->received_frames++;
         } else if (message.type == NV12_IPC_FLUSH) {
             release_current_video(app);
             send_ipc(app, NV12_IPC_FLUSHED, 0);
+        } else if (message.type == NV12_IPC_HOLD) {
+            hold_current_frame(app);
+            send_ipc(app, NV12_IPC_HELD, 0);
+        } else if (message.type == NV12_IPC_INIT) {
+            reinitialize_video(app, &message, &received);
         } else if (message.type == NV12_IPC_EOS) {
             app->eos_received = true;
         } else if (message.type == NV12_IPC_STATUS) {
@@ -823,6 +858,109 @@ static void initialize_swapchain(struct app *app)
     printf("openxr_swapchain format=%d dimensions=%ux%u images=%u\n", app->color_format, app->width, app->height, app->image_count);
 }
 
+static void import_video_buffer(struct app *app, uint32_t i)
+{
+    VkSamplerYcbcrConversionInfo conversion_info = {
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_INFO,
+        .conversion = app->conversion,
+    };
+    const VkSubresourceLayout planes[2] = {
+        {.offset = 0,
+         .size = (VkDeviceSize)app->video_stride * app->video_height,
+         .rowPitch = app->video_stride},
+        {.offset = app->uv_offset,
+         .size = (VkDeviceSize)app->video_stride * app->video_height / 2U,
+         .rowPitch = app->video_stride},
+    };
+    struct video_buffer *buffer = &app->video_buffers[i];
+    VkImageDrmFormatModifierExplicitCreateInfoEXT modifier = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT,
+        .drmFormatModifier = DRM_FORMAT_MOD_LINEAR,
+        .drmFormatModifierPlaneCount = 2, .pPlaneLayouts = planes,
+    };
+    VkExternalMemoryImageCreateInfo external = {
+        .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
+        .pNext = &modifier,
+        .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+    };
+    VkImageCreateInfo image = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .pNext = &external,
+        .imageType = VK_IMAGE_TYPE_2D,
+        .format = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM,
+        .extent = {app->video_width, app->video_height, 1},
+        .mipLevels = 1, .arrayLayers = 1,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT,
+        .usage = VK_IMAGE_USAGE_SAMPLED_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+    };
+    need_vk("vkCreateImage(NV12 DMA-BUF)",
+            vkCreateImage(app->device, &image, NULL, &buffer->image));
+    VkImageDrmFormatModifierPropertiesEXT chosen = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_PROPERTIES_EXT,
+    };
+    need_vk("vkGetImageDrmFormatModifierPropertiesEXT",
+            app->get_modifier_properties(app->device, buffer->image,
+                                         &chosen));
+    need(chosen.drmFormatModifier == DRM_FORMAT_MOD_LINEAR,
+         "Vulkan substituted the NV12 modifier");
+    VkMemoryRequirements requirements;
+    vkGetImageMemoryRequirements(app->device, buffer->image, &requirements);
+    need(requirements.size <= app->dma_buf_size,
+         "NV12 Vulkan memory requirement exceeds DMA-BUF");
+    VkMemoryFdPropertiesKHR fd_properties = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR,
+    };
+    need_vk("vkGetMemoryFdPropertiesKHR",
+            app->get_memory_fd_properties(
+                app->device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+                buffer->dma_buf_fd, &fd_properties));
+    uint32_t bits =
+        requirements.memoryTypeBits & fd_properties.memoryTypeBits;
+    need(bits != 0, "NV12 DMA-BUF memory-type intersection is empty");
+    uint32_t type = memory_type(app->physical, bits, 0);
+    int imported_fd = dup(buffer->dma_buf_fd);
+    if (imported_fd < 0) { perror("dup NV12 DMA-BUF"); exit(2); }
+    VkImportMemoryFdInfoKHR import = {
+        .sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR,
+        .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+        .fd = imported_fd,
+    };
+    VkMemoryDedicatedAllocateInfo dedicated = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
+        .pNext = &import, .image = buffer->image,
+    };
+    VkMemoryAllocateInfo allocation = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .pNext = &dedicated, .allocationSize = app->dma_buf_size,
+        .memoryTypeIndex = type,
+    };
+    need_vk("vkAllocateMemory(import NV12)",
+            vkAllocateMemory(app->device, &allocation, NULL,
+                             &buffer->memory));
+    need_vk("vkBindImageMemory(import NV12)",
+            vkBindImageMemory(app->device, buffer->image,
+                              buffer->memory, 0));
+    VkImageViewCreateInfo view = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .pNext = &conversion_info, .image = buffer->image,
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM,
+        .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                             .levelCount = 1, .layerCount = 1},
+    };
+    need_vk("vkCreateImageView(NV12)",
+            vkCreateImageView(app->device, &view, NULL, &buffer->view));
+    VkSemaphoreCreateInfo semaphore = {
+        .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+    };
+    need_vk("vkCreateSemaphore(producer)",
+            vkCreateSemaphore(app->device, &semaphore, NULL,
+                              &buffer->producer_semaphore));
+    printf("nv12_import index=%u memory_type=%u\n", i, type);
+}
+
 static void import_nv12_frames(struct app *app)
 {
     VkDrmFormatModifierPropertiesListEXT list = {
@@ -899,103 +1037,8 @@ static void import_nv12_frames(struct app *app)
             vkCreateSampler(app->device, &sampler, NULL,
                             &app->video_sampler));
 
-    const VkSubresourceLayout planes[2] = {
-        {.offset = 0,
-         .size = (VkDeviceSize)app->video_stride * app->video_height,
-         .rowPitch = app->video_stride},
-        {.offset = app->uv_offset,
-         .size = (VkDeviceSize)app->video_stride * app->video_height / 2U,
-         .rowPitch = app->video_stride},
-    };
-    for (uint32_t i = 0; i < app->video_buffer_count; ++i) {
-        struct video_buffer *buffer = &app->video_buffers[i];
-        VkImageDrmFormatModifierExplicitCreateInfoEXT modifier = {
-            .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT,
-            .drmFormatModifier = DRM_FORMAT_MOD_LINEAR,
-            .drmFormatModifierPlaneCount = 2, .pPlaneLayouts = planes,
-        };
-        VkExternalMemoryImageCreateInfo external = {
-            .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
-            .pNext = &modifier,
-            .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
-        };
-        VkImageCreateInfo image = {
-            .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .pNext = &external,
-            .imageType = VK_IMAGE_TYPE_2D,
-            .format = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM,
-            .extent = {app->video_width, app->video_height, 1},
-            .mipLevels = 1, .arrayLayers = 1,
-            .samples = VK_SAMPLE_COUNT_1_BIT,
-            .tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT,
-            .usage = VK_IMAGE_USAGE_SAMPLED_BIT,
-            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
-            .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-        };
-        need_vk("vkCreateImage(NV12 DMA-BUF)",
-                vkCreateImage(app->device, &image, NULL, &buffer->image));
-        VkImageDrmFormatModifierPropertiesEXT chosen = {
-            .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_PROPERTIES_EXT,
-        };
-        need_vk("vkGetImageDrmFormatModifierPropertiesEXT",
-                app->get_modifier_properties(app->device, buffer->image,
-                                             &chosen));
-        need(chosen.drmFormatModifier == DRM_FORMAT_MOD_LINEAR,
-             "Vulkan substituted the NV12 modifier");
-        VkMemoryRequirements requirements;
-        vkGetImageMemoryRequirements(app->device, buffer->image, &requirements);
-        need(requirements.size <= app->dma_buf_size,
-             "NV12 Vulkan memory requirement exceeds DMA-BUF");
-        VkMemoryFdPropertiesKHR fd_properties = {
-            .sType = VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR,
-        };
-        need_vk("vkGetMemoryFdPropertiesKHR",
-                app->get_memory_fd_properties(
-                    app->device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
-                    buffer->dma_buf_fd, &fd_properties));
-        uint32_t bits =
-            requirements.memoryTypeBits & fd_properties.memoryTypeBits;
-        need(bits != 0, "NV12 DMA-BUF memory-type intersection is empty");
-        uint32_t type = memory_type(app->physical, bits, 0);
-        int imported_fd = dup(buffer->dma_buf_fd);
-        if (imported_fd < 0) { perror("dup NV12 DMA-BUF"); exit(2); }
-        VkImportMemoryFdInfoKHR import = {
-            .sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR,
-            .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
-            .fd = imported_fd,
-        };
-        VkMemoryDedicatedAllocateInfo dedicated = {
-            .sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
-            .pNext = &import, .image = buffer->image,
-        };
-        VkMemoryAllocateInfo allocation = {
-            .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
-            .pNext = &dedicated, .allocationSize = app->dma_buf_size,
-            .memoryTypeIndex = type,
-        };
-        need_vk("vkAllocateMemory(import NV12)",
-                vkAllocateMemory(app->device, &allocation, NULL,
-                                 &buffer->memory));
-        need_vk("vkBindImageMemory(import NV12)",
-                vkBindImageMemory(app->device, buffer->image,
-                                  buffer->memory, 0));
-        VkImageViewCreateInfo view = {
-            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-            .pNext = &conversion_info, .image = buffer->image,
-            .viewType = VK_IMAGE_VIEW_TYPE_2D,
-            .format = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM,
-            .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                                 .levelCount = 1, .layerCount = 1},
-        };
-        need_vk("vkCreateImageView(NV12)",
-                vkCreateImageView(app->device, &view, NULL, &buffer->view));
-        VkSemaphoreCreateInfo semaphore = {
-            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
-        };
-        need_vk("vkCreateSemaphore(producer)",
-                vkCreateSemaphore(app->device, &semaphore, NULL,
-                                  &buffer->producer_semaphore));
-        printf("nv12_import index=%u memory_type=%u\n", i, type);
-    }
+    for (uint32_t i = 0; i < app->video_buffer_count; ++i)
+        import_video_buffer(app, i);
     printf("nv12_contract format=%d modifier=0 memory_planes=2"
            " plane0_offset=0 plane0_pitch=%u plane1_offset=%" PRIu64
            " plane1_pitch=%u bytes=%" PRIu64
@@ -1171,7 +1214,7 @@ static void render_ui_pixels(struct app *app)
     format_time(duration, app->duration_us);
     snprintf(clock_text, sizeof(clock_text), "%s / %s", position, duration);
     ui_text(app, 382, 24, 5, clock_text, text);
-    if (app->received_frames == 0)
+    if (app->awaiting_frame)
         ui_text(app, 28, 24, 5, "LADEN", grabbed);
 
     float ratio = seek_ratio(app);
@@ -1403,6 +1446,32 @@ static void upload_ui(struct app *app)
     app->ui_dirty = false;
 }
 
+static void write_video_descriptor(struct app *app, VkDescriptorSet set,
+                                   VkImageView view)
+{
+    VkDescriptorBufferInfo descriptor_buffer = {
+        .buffer = app->uniform_buffer,
+        .offset = 0,
+        .range = sizeof(struct view_uniform),
+    };
+    VkDescriptorImageInfo descriptor_image = {
+        .sampler = app->video_sampler,
+        .imageView = view,
+        .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+    };
+    VkWriteDescriptorSet writes[2] = {
+        {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         .dstSet = set, .dstBinding = 0, .descriptorCount = 1,
+         .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
+         .pBufferInfo = &descriptor_buffer},
+        {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         .dstSet = set, .dstBinding = 1, .descriptorCount = 1,
+         .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+         .pImageInfo = &descriptor_image},
+    };
+    vkUpdateDescriptorSets(app->device, 2, writes, 0, NULL);
+}
+
 static void create_render_resources(struct app *app)
 {
     VkCommandPoolCreateInfo pool = {.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
@@ -1427,51 +1496,103 @@ static void create_render_resources(struct app *app)
     need_vk("vkAllocateMemory(uniform)", vkAllocateMemory(app->device, &allocation, NULL, &app->uniform_memory));
     need_vk("vkBindBufferMemory(uniform)", vkBindBufferMemory(app->device, app->uniform_buffer, app->uniform_memory, 0));
     need_vk("vkMapMemory(uniform)", vkMapMemory(app->device, app->uniform_memory, 0, VK_WHOLE_SIZE, 0, &app->uniform_mapping));
+    /* One extra set lets a frame be kept on screen across a session restart
+     * while the regular buffers are imported again. */
     VkDescriptorPoolSize sizes[2] = {
         {.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
-         .descriptorCount = app->video_buffer_count},
+         .descriptorCount = app->video_buffer_count + 1U},
         {.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-         .descriptorCount = app->video_buffer_count},
+         .descriptorCount = app->video_buffer_count + 1U},
     };
     VkDescriptorPoolCreateInfo descriptor_pool = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-        .maxSets = app->video_buffer_count, .poolSizeCount = 2,
+        .maxSets = app->video_buffer_count + 1U, .poolSizeCount = 2,
         .pPoolSizes = sizes};
     need_vk("vkCreateDescriptorPool", vkCreateDescriptorPool(app->device, &descriptor_pool, NULL, &app->descriptor_pool));
-    VkDescriptorSetLayout layouts[NV12_IPC_MAX_BUFFERS];
-    VkDescriptorSet sets[NV12_IPC_MAX_BUFFERS];
-    for (uint32_t i = 0; i < app->video_buffer_count; ++i)
+    VkDescriptorSetLayout layouts[NV12_IPC_MAX_BUFFERS + 1U];
+    VkDescriptorSet sets[NV12_IPC_MAX_BUFFERS + 1U];
+    for (uint32_t i = 0; i <= app->video_buffer_count; ++i)
         layouts[i] = app->descriptor_layout;
     VkDescriptorSetAllocateInfo descriptor_allocate = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
         .descriptorPool = app->descriptor_pool,
-        .descriptorSetCount = app->video_buffer_count,
+        .descriptorSetCount = app->video_buffer_count + 1U,
         .pSetLayouts = layouts};
     need_vk("vkAllocateDescriptorSets",
             vkAllocateDescriptorSets(app->device, &descriptor_allocate,
                                      sets));
-    VkDescriptorBufferInfo descriptor_buffer = {
-        .buffer = app->uniform_buffer,
-        .offset = 0,
-        .range = sizeof(struct view_uniform),
-    };
     for (uint32_t i = 0; i < app->video_buffer_count; ++i) {
         app->video_buffers[i].descriptor_set = sets[i];
-        VkDescriptorImageInfo descriptor_image = {
-            .sampler = app->video_sampler,
-            .imageView = app->video_buffers[i].view,
-            .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
-        };
-        VkWriteDescriptorSet writes[2] = {
-            {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-             .dstSet = sets[i], .dstBinding = 0, .descriptorCount = 1,
-             .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
-             .pBufferInfo = &descriptor_buffer},
-            {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
-             .dstSet = sets[i], .dstBinding = 1, .descriptorCount = 1,
-             .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-             .pImageInfo = &descriptor_image},
-        };
-        vkUpdateDescriptorSets(app->device, 2, writes, 0, NULL);
+        write_video_descriptor(app, sets[i], app->video_buffers[i].view);
     }
+    app->spare_set = sets[app->video_buffer_count];
+}
+
+static void destroy_video_buffer(struct app *app, struct video_buffer *buffer)
+{
+    VkDescriptorSet set = buffer->descriptor_set;
+    if (buffer->producer_semaphore)
+        vkDestroySemaphore(app->device, buffer->producer_semaphore, NULL);
+    if (buffer->view)
+        vkDestroyImageView(app->device, buffer->view, NULL);
+    if (buffer->image)
+        vkDestroyImage(app->device, buffer->image, NULL);
+    if (buffer->memory)
+        vkFreeMemory(app->device, buffer->memory, NULL);
+    if (buffer->dma_buf_fd >= 0)
+        close(buffer->dma_buf_fd);
+    *buffer = (struct video_buffer){.dma_buf_fd = -1, .descriptor_set = set};
+}
+
+/* Session restart (seek): keep only the frame on screen, free the other
+ * imports so the new decoder can allocate its CAPTURE buffers, and keep
+ * presenting the held frame until the first frame of the new stream. */
+static void hold_current_frame(struct app *app)
+{
+    need_vk("vkDeviceWaitIdle(hold)", vkDeviceWaitIdle(app->device));
+    int keep = app->current_video_index;
+    if (keep >= 0) {
+        discard_held_frame(app);
+        app->held = app->video_buffers[keep];
+        app->held.producer_wait_pending = false;
+        app->video_buffers[keep] = (struct video_buffer){
+            .dma_buf_fd = -1, .descriptor_set = app->spare_set,
+        };
+        app->spare_set = VK_NULL_HANDLE;
+        app->has_held = true;
+    }
+    for (uint32_t i = 0; i < app->video_buffer_count; ++i)
+        if ((int)i != keep)
+            destroy_video_buffer(app, &app->video_buffers[i]);
+    app->current_video_index = -1;
+    app->awaiting_frame = true;
+    app->ui_dirty = true;
+    printf("video_hold kept_frame=%d\n", keep);
+}
+
+static void discard_held_frame(struct app *app)
+{
+    if (!app->has_held)
+        return;
+    need_vk("vkDeviceWaitIdle(discard held)", vkDeviceWaitIdle(app->device));
+    VkDescriptorSet set = app->held.descriptor_set;
+    destroy_video_buffer(app, &app->held);
+    app->spare_set = set;
+    app->has_held = false;
+}
+
+static void reinitialize_video(struct app *app,
+                               const struct nv12_ipc_message *message,
+                               const struct msghdr *received)
+{
+    apply_init(app, message, received, false);
+    for (uint32_t i = 0; i < app->video_buffer_count; ++i) {
+        import_video_buffer(app, i);
+        write_video_descriptor(app, app->video_buffers[i].descriptor_set,
+                               app->video_buffers[i].view);
+    }
+    app->current_video_index = -1;
+    app->eos_received = false;
+    send_ipc(app, NV12_IPC_READY, 0);
+    printf("video_reinit buffers=%u\n", app->video_buffer_count);
 }
 
 static XrVector3f rotate_vector(XrQuaternionf q, XrVector3f vector)
@@ -1854,7 +1975,12 @@ static void render_frame(struct app *app)
         need_xr("xrEndFrame(empty)", xrEndFrame(app->session, &end));
         return;
     }
-    if (app->current_video_index < 0) {
+    struct video_buffer *video = NULL;
+    if (app->current_video_index >= 0)
+        video = &app->video_buffers[app->current_video_index];
+    else if (app->has_held)
+        video = &app->held;
+    if (!video) {
         /* No decoded frame yet (start or seek preroll): keep the panel
          * visible so the interface does not vanish while loading. */
         XrCompositionLayerQuad ui_only = make_ui_layer(app);
@@ -1869,8 +1995,6 @@ static void render_frame(struct app *app)
         need_xr("xrEndFrame(no video)", xrEndFrame(app->session, &end));
         return;
     }
-    struct video_buffer *video =
-        &app->video_buffers[app->current_video_index];
     XrView views[2] = {{.type = XR_TYPE_VIEW}, {.type = XR_TYPE_VIEW}};
     XrViewState view_state = {.type = XR_TYPE_VIEW_STATE};
     uint32_t count = 0;
@@ -2064,6 +2188,7 @@ int main(int argc, char **argv)
     app.panel_z = -1.3f;
     app.grab_hand = -1;
     app.scrub_hand = -1;
+    app.awaiting_frame = true;
     receive_initial_buffers(&app);
     initialize_xr_vulkan(&app);
     XrGraphicsBindingVulkan2KHR binding = {.type = XR_TYPE_GRAPHICS_BINDING_VULKAN2_KHR,

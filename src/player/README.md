@@ -106,3 +106,10 @@ visibility. A seek bar above the buttons is dragged with the trigger and
 seeks on release (`NV12_ACTION_SEEK_TO`). The renderer reports the panel pose
 to the session (`NV12_IPC_PANEL`), which forwards it through the seek re-exec
 via `--panel x,y,z,yaw,visible`.
+
+A seek keeps the renderer alive: the session sends `NV12_IPC_HOLD`, the
+renderer retains only the frame on screen and acknowledges with
+`NV12_IPC_HELD`, and the re-executed session adopts the renderer through the
+inherited socket (`--renderer fd,pid`) and sends a fresh `INIT`. The held frame
+stays visible, with the panel and a LOADING marker, until the first frame of
+the new stream arrives.

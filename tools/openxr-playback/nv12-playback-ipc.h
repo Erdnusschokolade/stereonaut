@@ -28,6 +28,11 @@ enum nv12_ipc_type {
     NV12_IPC_STATUS = 8,
     NV12_IPC_ACTION = 9,
     NV12_IPC_PANEL = 10,
+    /* Session -> renderer before a seek restart: keep showing the current
+     * frame, drop every other buffer and wait for a new INIT. The renderer
+     * process survives the session re-exec. */
+    NV12_IPC_HOLD = 11,
+    NV12_IPC_HELD = 12,
 };
 
 enum nv12_player_state {

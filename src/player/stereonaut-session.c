@@ -118,6 +118,9 @@ struct playback_options {
     uint32_t frame_limit;
     int64_t start_us;
     struct panel_state panel;
+    /* Renderer kept alive across a seek restart (inherited socket + pid). */
+    int adopt_renderer_fd;
+    pid_t adopt_renderer_pid;
 };
 
 struct capture_contract {
@@ -142,6 +145,7 @@ static bool renderer_outstanding[MAX_CAPTURE_BUFFERS];
 static uint32_t renderer_action;
 static int64_t renderer_action_position_us;
 static struct panel_state panel_state;
+static bool renderer_held;
 
 static void queue_capture(unsigned index, size_t length);
 
@@ -243,28 +247,48 @@ static void start_renderer(
     struct capture_buffer buffers[MAX_CAPTURE_BUFFERS], unsigned count,
     const struct video_layout *layout, const struct playback_options *options)
 {
-    int sockets[2];
-    if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets) < 0)
-        fail_errno("socketpair OpenXR renderer");
-    int inherited_fd = fcntl(sockets[1], F_DUPFD, 3);
-    if (inherited_fd < 0)
-        fail_errno("duplicate renderer IPC fd");
-    char fd_text[32];
-    snprintf(fd_text, sizeof(fd_text), "%d", inherited_fd);
-    renderer_pid = fork();
-    if (renderer_pid < 0)
-        fail_errno("fork OpenXR playback renderer");
-    if (renderer_pid == 0) {
-        close(sockets[0]);
+    bool adopted = options->adopt_renderer_fd >= 0;
+    if (adopted) {
+        /* The renderer survived the seek restart: it keeps showing the last
+         * frame and re-imports the new buffers on INIT. */
+        renderer_fd = options->adopt_renderer_fd;
+        renderer_pid = options->adopt_renderer_pid;
+        int fd_flags = fcntl(renderer_fd, F_GETFD);
+        if (fd_flags >= 0)
+            fcntl(renderer_fd, F_SETFD, fd_flags | FD_CLOEXEC);
+        struct nv12_ipc_message stale;
+        ssize_t drained;
+        do {
+            drained = recv(renderer_fd, &stale, sizeof(stale), MSG_DONTWAIT);
+        } while (drained > 0 || (drained < 0 && errno == EINTR));
+        if (drained == 0)
+            fail_message("adopted OpenXR renderer is gone");
+        printf("renderer_adopted pid=%ld fd=%d\n", (long)renderer_pid,
+               renderer_fd);
+    } else {
+        int sockets[2];
+        if (socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, sockets) < 0)
+            fail_errno("socketpair OpenXR renderer");
+        int inherited_fd = fcntl(sockets[1], F_DUPFD, 3);
+        if (inherited_fd < 0)
+            fail_errno("duplicate renderer IPC fd");
+        char fd_text[32];
+        snprintf(fd_text, sizeof(fd_text), "%d", inherited_fd);
+        renderer_pid = fork();
+        if (renderer_pid < 0)
+            fail_errno("fork OpenXR playback renderer");
+        if (renderer_pid == 0) {
+            close(sockets[0]);
+            close(sockets[1]);
+            execl("./stereonaut-renderer", "stereonaut-renderer",
+                  fd_text, (char *)NULL);
+            perror("exec stereonaut-renderer");
+            _exit(127);
+        }
+        close(inherited_fd);
         close(sockets[1]);
-        execl("./stereonaut-renderer", "stereonaut-renderer",
-              fd_text, (char *)NULL);
-        perror("exec stereonaut-renderer");
-        _exit(127);
+        renderer_fd = sockets[0];
     }
-    close(inherited_fd);
-    close(sockets[1]);
-    renderer_fd = sockets[0];
 
     struct nv12_ipc_message message = {
         .type = NV12_IPC_INIT,
@@ -320,8 +344,11 @@ static void start_renderer(
         ssize_t received = recv(renderer_fd, &response, sizeof(response),
                                 MSG_DONTWAIT);
         if (received == (ssize_t)sizeof(response)) {
-            if (response.type != NV12_IPC_READY)
+            if (response.type != NV12_IPC_READY) {
+                if (adopted)
+                    continue;
                 fail_message("unexpected renderer initialization response");
+            }
             break;
         }
         if (received == 0)
@@ -373,6 +400,8 @@ static bool process_renderer_messages(
                 fail_message("invalid renderer player action");
             renderer_action = message.index;
             renderer_action_position_us = message.position_us;
+        } else if (message.type == NV12_IPC_HELD) {
+            renderer_held = true;
         } else if (message.type == NV12_IPC_PANEL) {
             panel_state = (struct panel_state){
                 .valid = true,
@@ -407,6 +436,29 @@ static void flush_renderer(
     for (unsigned i = 0; i < count; ++i)
         if (renderer_outstanding[i])
             fail_message("renderer retained CAPTURE buffer after flush");
+}
+
+/* Seek restart: ask the renderer to keep its current frame and wait until it
+ * dropped every other import, so this process may close the decoder. The
+ * renderer stays alive and is adopted by the re-executed session. */
+static void hold_renderer(struct capture_buffer buffers[MAX_CAPTURE_BUFFERS],
+                          unsigned count)
+{
+    renderer_held = false;
+    send_renderer_message(NV12_IPC_HOLD, 0, 0);
+    double deadline = monotonic_seconds() + 5.0;
+    while (!renderer_held) {
+        process_renderer_messages(buffers, count);
+        if (renderer_held)
+            break;
+        if (monotonic_seconds() > deadline)
+            fail_message("OpenXR renderer did not acknowledge HOLD");
+        struct pollfd pollfd = {.fd = renderer_fd, .events = POLLIN};
+        int result = poll(&pollfd, 1, 20);
+        if (result < 0 && errno != EINTR)
+            fail_errno("poll renderer hold");
+    }
+    printf("renderer_held pid=%ld\n", (long)renderer_pid);
 }
 
 static void wait_renderer(void)
@@ -463,6 +515,7 @@ static int64_t parse_i64_nonnegative(const char *text, const char *name)
 static struct playback_options parse_playback_options(int argc, char **argv)
 {
     struct playback_options options = {0};
+    options.adopt_renderer_fd = -1;
     for (int i = 2; i < argc; ++i) {
         if (strcmp(argv[i], "--swap-eyes") == 0) {
             options.swap_eyes = true;
@@ -502,6 +555,16 @@ static struct playback_options parse_playback_options(int argc, char **argv)
                 fail_message("invalid --panel value");
             options.panel.visible = visible != 0;
             options.panel.valid = true;
+        } else if (strcmp(argv[i], "--renderer") == 0) {
+            if (++i >= argc)
+                fail_message("--renderer requires fd,pid");
+            int fd = -1;
+            long pid = 0;
+            if (sscanf(argv[i], "%d,%ld", &fd, &pid) != 2 || fd < 3 ||
+                pid <= 0)
+                fail_message("invalid --renderer value");
+            options.adopt_renderer_fd = fd;
+            options.adopt_renderer_pid = (pid_t)pid;
         } else if (strcmp(argv[i], "--start-us") == 0) {
             if (++i >= argc)
                 fail_message("--start-us requires a nonnegative timestamp");
@@ -2178,7 +2241,10 @@ int main(int argc, char **argv)
                     pipeline_error);
             return 2;
         }
-        wait_renderer();
+        if (requested_control == NV12_ACTION_BACK || !capture_started)
+            wait_renderer();
+        else
+            hold_renderer(captures, capture_count);
         if (capture_started) {
             type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
             must_ioctl(VIDIOC_STREAMOFF, &type,
@@ -2221,7 +2287,17 @@ int main(int argc, char **argv)
             snprintf(panel_text, sizeof(panel_text), "%.6f,%.6f,%.6f,%.6f,%u",
                      panel_state.x, panel_state.y, panel_state.z,
                      panel_state.yaw, panel_state.visible ? 1U : 0U);
-        char *restart_argv[16];
+        char renderer_text[48] = {0};
+        bool keep_renderer = renderer_fd >= 0 && renderer_pid > 0;
+        if (keep_renderer) {
+            int fd_flags = fcntl(renderer_fd, F_GETFD);
+            if (fd_flags < 0 ||
+                fcntl(renderer_fd, F_SETFD, fd_flags & ~FD_CLOEXEC) < 0)
+                fail_errno("keep renderer IPC across exec");
+            snprintf(renderer_text, sizeof(renderer_text), "%d,%ld",
+                     renderer_fd, (long)renderer_pid);
+        }
+        char *restart_argv[20];
         size_t restart_argc = 0;
         restart_argv[restart_argc++] = argv[0];
         restart_argv[restart_argc++] = argv[1];
@@ -2236,6 +2312,10 @@ int main(int argc, char **argv)
         if (panel_state.valid) {
             restart_argv[restart_argc++] = "--panel";
             restart_argv[restart_argc++] = panel_text;
+        }
+        if (keep_renderer) {
+            restart_argv[restart_argc++] = "--renderer";
+            restart_argv[restart_argc++] = renderer_text;
         }
         restart_argv[restart_argc] = NULL;
         execv(argv[0], restart_argv);
