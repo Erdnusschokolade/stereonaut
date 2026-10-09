@@ -60,12 +60,10 @@ enum ui_view_action {
  * trigger's full click travel. */
 #define SELECT_PRESS_THRESHOLD 0.30f
 #define SELECT_RELEASE_THRESHOLD 0.15f
-/* Thumbstick left/right: same low threshold as the trigger. Held in the
- * browser it repeats the page flip. */
+/* Thumbstick left/right: same low threshold as the trigger, one action per
+ * deflection. */
 #define STICK_PRESS_THRESHOLD 0.30f
 #define STICK_RELEASE_THRESHOLD 0.15f
-#define STICK_REPEAT_DELAY_NS INT64_C(500000000)
-#define STICK_REPEAT_INTERVAL_NS INT64_C(250000000)
 
 struct mat4 { float v[16]; };
 
@@ -161,8 +159,7 @@ struct app {
     XrAction select_action;
     XrAction squeeze_action;
     XrAction stick_action;
-    int stick_direction[2];    /* -1 left, +1 right, 0 centred */
-    XrTime stick_repeat_at[2]; /* next auto repeat while held */
+    int stick_direction[2]; /* -1 left, +1 right, 0 centred */
     bool select_down[2];
     bool has_valve_frame_controller;
     bool has_generic_controller;
@@ -1875,10 +1872,8 @@ static void read_boolean(struct app *app, XrAction action, XrPath hand,
 }
 
 /* Horizontal thumbstick flicks: -1/+1 once per deflection past the
- * threshold (vertical movement is ignored), 0 otherwise. With `repeat` a
- * held stick fires again after a delay. */
-static int read_stick(struct app *app, unsigned hand, XrTime time,
-                      bool repeat)
+ * threshold (vertical movement is ignored), 0 otherwise. */
+static int read_stick(struct app *app, unsigned hand)
 {
     XrActionStateGetInfo info = {
         .type = XR_TYPE_ACTION_STATE_GET_INFO,
@@ -1900,11 +1895,6 @@ static int read_stick(struct app *app, unsigned hand, XrTime time,
             return 0;
         direction = x > 0.0f ? 1 : -1;
         app->stick_direction[hand] = direction;
-        app->stick_repeat_at[hand] = time + STICK_REPEAT_DELAY_NS;
-        return direction;
-    }
-    if (repeat && time >= app->stick_repeat_at[hand]) {
-        app->stick_repeat_at[hand] = time + STICK_REPEAT_INTERVAL_NS;
         return direction;
     }
     return 0;
@@ -2017,7 +2007,7 @@ static void sync_player_input(struct app *app, XrTime time)
         read_select(app, hand, &hands[hand]);
         read_boolean(app, app->squeeze_action, app->hands[hand],
                      &hands[hand].squeeze);
-        int flick = read_stick(app, hand, time, false);
+        int flick = read_stick(app, hand);
         if (flick && app->scrub_hand < 0 && !app->seek_pending)
             send_ipc(app, NV12_IPC_ACTION,
                      flick > 0 ? NV12_ACTION_SEEK_FORWARD
@@ -2665,7 +2655,7 @@ static void sync_browser_input(struct app *app, XrTime time)
         read_select(app, hand, &input);
         if (input.select_edge)
             pressed = true;
-        int flick = read_stick(app, hand, time, true);
+        int flick = read_stick(app, hand);
         if (flick)
             browser_ui_flip(&app->browser, flick);
         if (!pose.isActive)
