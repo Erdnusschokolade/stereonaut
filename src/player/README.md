@@ -23,4 +23,6 @@ cd build
 For a bounded diagnostic run, append `--frames N`. The session starts audio
 only after Iris has reported the initial source format and the OpenXR renderer
 is ready. Container DTS controls decoder feed, while audio playback position
-is the presentation clock for decoded video frames.
+is the presentation clock for decoded video frames. Iris chooses the
+compressed OUTPUT-buffer capacity; every access unit is checked against the
+actual allocation before it is queued.

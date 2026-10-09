@@ -1607,9 +1607,8 @@ int main(int argc, char **argv)
     must_ioctl(VIDIOC_S_FMT, &output_format, "VIDIOC_S_FMT OUTPUT HEVC");
     if (output_format.fmt.pix_mp.pixelformat != V4L2_PIX_FMT_HEVC ||
         output_format.fmt.pix_mp.num_planes != 1 ||
-        output_format.fmt.pix_mp.plane_fmt[0].sizeimage <
-            MAX_COMPRESSED_ACCESS_UNIT)
-        fail_message("Iris OUTPUT format cannot hold bounded access units");
+        !output_format.fmt.pix_mp.plane_fmt[0].sizeimage)
+        fail_message("Iris rejected the HEVC OUTPUT format");
     printf("output_format fourcc=HEVC width=%u height=%u sizeimage=%u\n",
            output_format.fmt.pix_mp.width, output_format.fmt.pix_mp.height,
            output_format.fmt.pix_mp.plane_fmt[0].sizeimage);
