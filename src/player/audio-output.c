@@ -338,6 +338,10 @@ int audio_output_pause(struct audio_output *audio, bool paused,
             audio->paused = paused;
         return 0;
     }
+    /* snd_pcm_pause fails with EBADFD when the state is already requested,
+     * e.g. when a seek pauses a stream that the user already paused. */
+    if (audio->paused == paused)
+        return 0;
     if (!audio->hardware_pause) {
         set_error(error, error_size,
                   "ALSA default device does not support hardware pause");
