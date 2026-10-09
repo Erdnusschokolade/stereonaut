@@ -8,6 +8,7 @@
 #include <inttypes.h>
 #include <linux/dma-buf.h>
 #include <math.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -646,6 +647,45 @@ static struct mat4 projection_from_fov(XrFovf fov)
     result.v[11] = -1.0f;
     result.v[14] = -(far_z * near_z) / (far_z - near_z);
     return result;
+}
+
+/* Started from the desktop overlay inside the SteamVR dashboard, the app
+ * becomes visible but keeps the dashboard in front (session state VISIBLE
+ * instead of FOCUSED) until the viewer clicks "back to game". Hide it with
+ * SteamVR's own tool, only during startup so a dashboard the viewer opens
+ * later stays alone. */
+static void hide_dashboard_at_startup(const struct app *app)
+{
+    enum { WINDOW_S = 20, MAX_ATTEMPTS = 4 };
+    static time_t first_call_s;
+    static time_t last_attempt_s;
+    static int attempts;
+    time_t now = time(NULL);
+    if (!first_call_s)
+        first_call_s = now;
+    if (app->state != XR_SESSION_STATE_VISIBLE ||
+        now - first_call_s > WINDOW_S || attempts >= MAX_ATTEMPTS ||
+        (attempts && now - last_attempt_s < 1))
+        return;
+    ++attempts;
+    last_attempt_s = now;
+    const char *tool = getenv("STEREONAUT_VRCMD");
+    if (!tool || !tool[0])
+        tool = "/opt/steamvr/bin/linuxarm64/vrcmd";
+    if (access(tool, X_OK) < 0)
+        return;
+    signal(SIGCHLD, SIG_IGN);
+    pid_t child = fork();
+    if (child == 0) {
+        int null = open("/dev/null", O_WRONLY);
+        if (null >= 0) {
+            dup2(null, STDOUT_FILENO);
+            dup2(null, STDERR_FILENO);
+        }
+        execl(tool, "vrcmd", "--hidedashboard", (char *)NULL);
+        _exit(127);
+    }
+    printf("hide_dashboard attempt=%d pid=%ld\n", attempts, (long)child);
 }
 
 static void poll_events(struct app *app)
@@ -2678,6 +2718,7 @@ int main(int argc, char **argv)
             receive_frame_messages(&app);
         browser_ui_update(&app.browser);
         poll_events(&app);
+        hide_dashboard_at_startup(&app);
         if (app.quit)
             break;
         if (app.running) render_frame(&app); else nanosleep(&pause, NULL);
