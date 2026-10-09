@@ -24,8 +24,8 @@ struct jf_item {
     char id[JF_ID_SIZE];
     char name[256];
     bool is_folder;
-    /* Image path below /Items/ID/Images/ for tiles: a landscape backdrop if
-     * there is one, otherwise the primary image ("" if neither). */
+    /* Image path below /Items/ID/Images/ for tiles: the primary image
+     * (poster), otherwise a backdrop ("" if neither). */
     char image[96];
     int64_t runtime_ticks; /* 0 if unknown; 10 000 000 ticks per second */
     int year;              /* 0 if unknown */

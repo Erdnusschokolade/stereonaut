@@ -10,7 +10,7 @@
  * $XDG_CACHE_HOME/stereonaut/thumbs. Results are decoded, side-by-side frames
  * reduced to the left eye, and scaled to THUMBNAIL_WIDTH. */
 
-#define THUMBNAIL_WIDTH 324
+#define THUMBNAIL_WIDTH 216
 
 struct ui_image;
 struct thumbnail_loader;

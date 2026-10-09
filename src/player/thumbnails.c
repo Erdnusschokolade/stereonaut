@@ -16,7 +16,7 @@
 #include <unistd.h>
 
 #define WORKERS 2
-#define DOWNLOAD_WIDTH 480
+#define DOWNLOAD_WIDTH 320
 
 struct job {
     uint64_t generation;

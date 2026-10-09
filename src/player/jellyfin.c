@@ -398,18 +398,19 @@ static int collect_items(json_object *root, bool filter_views,
         const char *primary = NULL;
         if (json_object_object_get_ex(entry, "ImageTags", &tags))
             primary = json_string(tags, "Primary");
-        if (json_object_object_get_ex(entry, "BackdropImageTags", &tags) &&
-            json_object_is_type(tags, json_type_array) &&
-            json_object_array_length(tags) > 0 &&
-            json_object_is_type(json_object_array_get_idx(tags, 0),
-                                json_type_string))
+        if (primary)
+            snprintf(list[used].image, sizeof(list[used].image),
+                     "Primary?tag=%.48s", primary);
+        else if (json_object_object_get_ex(entry, "BackdropImageTags",
+                                           &tags) &&
+                 json_object_is_type(tags, json_type_array) &&
+                 json_object_array_length(tags) > 0 &&
+                 json_object_is_type(json_object_array_get_idx(tags, 0),
+                                     json_type_string))
             snprintf(list[used].image, sizeof(list[used].image),
                      "Backdrop/0?tag=%.48s",
                      json_object_get_string(
                          json_object_array_get_idx(tags, 0)));
-        else if (primary)
-            snprintf(list[used].image, sizeof(list[used].image),
-                     "Primary?tag=%.48s", primary);
         if (json_object_object_get_ex(entry, "RunTimeTicks", &value))
             list[used].runtime_ticks = json_object_get_int64(value);
         if (json_object_object_get_ex(entry, "ProductionYear", &value))

@@ -115,11 +115,11 @@ int ui_draw_text(struct ui_canvas *canvas, struct ui_font *font,
                  int pixel_size, int x, int y, int max_width,
                  enum ui_align align, struct ui_color color,
                  const char *text);
-/* Greedy word wrap; returns the number of lines drawn (limited by
- * `max_lines`, the last one ellipsized). */
+/* Greedy word wrap inside [x, x + width); returns the number of lines
+ * drawn (limited by `max_lines`, the last one ellipsized). */
 int ui_draw_text_wrapped(struct ui_canvas *canvas, struct ui_font *font,
                          int pixel_size, int x, int y, int width,
-                         int line_height, int max_lines, struct ui_color color,
-                         const char *text);
+                         int line_height, int max_lines, enum ui_align align,
+                         struct ui_color color, const char *text);
 
 #endif

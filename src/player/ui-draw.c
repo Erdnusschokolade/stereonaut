@@ -887,8 +887,8 @@ static bool breakable_after(uint32_t code)
 
 int ui_draw_text_wrapped(struct ui_canvas *canvas, struct ui_font *font,
                          int pixel_size, int x, int y, int width,
-                         int line_height, int max_lines, struct ui_color color,
-                         const char *text)
+                         int line_height, int max_lines, enum ui_align align,
+                         struct ui_color color, const char *text)
 {
     if (!ui_font_ready(font) || !text)
         return 0;
@@ -897,9 +897,12 @@ int ui_draw_text_wrapped(struct ui_canvas *canvas, struct ui_font *font,
     while (*line && lines < max_lines) {
         while (*line == ' ')
             ++line;
+        int anchor = align == UI_ALIGN_CENTER ? x + width / 2
+                     : align == UI_ALIGN_RIGHT ? x + width
+                                               : x;
         if (lines == max_lines - 1) {
-            ui_draw_text(canvas, font, pixel_size, x, y + lines * line_height,
-                         width, UI_ALIGN_LEFT, color, line);
+            ui_draw_text(canvas, font, pixel_size, anchor,
+                         y + lines * line_height, width, align, color, line);
             return lines + 1;
         }
         const char *cursor = line, *last_break = NULL;
@@ -920,8 +923,15 @@ int ui_draw_text_wrapped(struct ui_canvas *canvas, struct ui_font *font,
         if (end == line) /* a single glyph wider than the box */
             next_codepoint(&end);
         int baseline = y + lines * line_height + ascent(font, pixel_size);
-        draw_run(canvas, font, pixel_size, x, baseline, color, line,
-                 (int)(end - line));
+        int length = (int)(end - line);
+        while (length > 0 && line[length - 1] == ' ')
+            --length;
+        int line_width = measure(font, pixel_size, line, length);
+        int start = align == UI_ALIGN_CENTER ? anchor - line_width / 2
+                    : align == UI_ALIGN_RIGHT ? anchor - line_width
+                                              : x;
+        draw_run(canvas, font, pixel_size, start, baseline, color, line,
+                 length);
         ++lines;
         line = end;
     }
