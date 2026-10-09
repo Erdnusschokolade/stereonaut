@@ -49,11 +49,27 @@ int jf_quickconnect_start(struct jf_config *config, char code[16],
 int jf_quickconnect_poll(struct jf_config *config, const char *secret,
                          bool *authenticated, char *error, size_t error_size);
 
-/* Libraries (views) and the children of a folder, sorted by name. The array
- * is freed with free(). */
+/* Sort criteria of a folder listing (server side; same order as the menu). */
+enum jf_sort {
+    JF_SORT_NAME,
+    JF_SORT_RANDOM,
+    JF_SORT_COMMUNITY_RATING,
+    JF_SORT_CRITIC_RATING,
+    JF_SORT_DATE_ADDED,
+    JF_SORT_DATE_PLAYED,
+    JF_SORT_OFFICIAL_RATING,
+    JF_SORT_PLAY_COUNT,
+    JF_SORT_PREMIERE_DATE,
+    JF_SORT_RUNTIME,
+    JF_SORT_COUNT,
+};
+
+/* Libraries (views) sorted by name and the children of a folder in the given
+ * order (folders first). The array is freed with free(). */
 int jf_list_views(const struct jf_config *config, struct jf_item **items,
                   size_t *count, char *error, size_t error_size);
 int jf_list_children(const struct jf_config *config, const char *parent_id,
+                     enum jf_sort sort, bool descending,
                      struct jf_item **items, size_t *count,
                      char *error, size_t error_size);
 /* Name and parent id of an item (parent may be empty). */

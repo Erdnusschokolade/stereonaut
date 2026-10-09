@@ -23,6 +23,8 @@ struct file_browser {
     uint64_t request_generation;
     struct file_browser_listing ready;
     bool has_ready;
+    int sort;
+    bool descending;
 };
 
 static void set_error(char *error, size_t size, const char *format, ...)
@@ -286,7 +288,9 @@ static struct file_browser_listing jellyfin_login(
 }
 
 static struct file_browser_listing read_jellyfin(const char *request,
-                                                  uint64_t generation)
+                                                  uint64_t generation,
+                                                  enum jf_sort sort,
+                                                  bool descending)
 {
     char error[256] = {0};
     struct jf_config config;
@@ -341,8 +345,8 @@ static struct file_browser_listing read_jellyfin(const char *request,
             }
         }
         error[0] = '\0';
-        result = jf_list_children(&config, folder_id, &items, &count, error,
-                                  sizeof(error));
+        result = jf_list_children(&config, folder_id, sort, descending,
+                                  &items, &count, error, sizeof(error));
     }
     if (result == JF_AUTH_RETRY) {
         config.token[0] = '\0';
@@ -393,12 +397,14 @@ allocation_failure:
 }
 
 static struct file_browser_listing read_location(const char *path,
-                                                  uint64_t generation)
+                                                  uint64_t generation,
+                                                  int sort, bool descending)
 {
     if (strcmp(path, "root:") == 0)
         return read_root(generation);
     if (strncmp(path, "jf:", 3) == 0)
-        return read_jellyfin(path, generation);
+        return read_jellyfin(path, generation, (enum jf_sort)sort,
+                             descending);
     return read_directory(path, generation);
 }
 
@@ -415,11 +421,13 @@ static void *browser_worker(void *argument)
         }
         char *path = browser->request_path;
         uint64_t generation = browser->request_generation;
+        int sort = browser->sort;
+        bool descending = browser->descending;
         browser->request_path = NULL;
         pthread_mutex_unlock(&browser->mutex);
 
         struct file_browser_listing listing =
-            read_location(path, generation);
+            read_location(path, generation, sort, descending);
         free(path);
 
         pthread_mutex_lock(&browser->mutex);
@@ -433,6 +441,17 @@ static void *browser_worker(void *argument)
         pthread_mutex_unlock(&browser->mutex);
         file_browser_listing_clear(&listing);
     }
+}
+
+void file_browser_set_sort(struct file_browser *browser, int sort,
+                           bool descending)
+{
+    if (!browser)
+        return;
+    pthread_mutex_lock(&browser->mutex);
+    browser->sort = sort;
+    browser->descending = descending;
+    pthread_mutex_unlock(&browser->mutex);
 }
 
 int file_browser_request(struct file_browser *browser, const char *path,

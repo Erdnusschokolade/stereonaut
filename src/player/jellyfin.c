@@ -364,6 +364,24 @@ static int compare_items(const void *left, const void *right)
     return strcasecmp(a->name, b->name);
 }
 
+/* Server-side order with a name tie-break; folders are moved to the front
+ * afterwards (stable), so the chosen order holds within each group. */
+static void folders_first(struct jf_item *list, size_t count)
+{
+    struct jf_item *ordered = malloc((count ? count : 1U) * sizeof(*ordered));
+    if (!ordered)
+        return;
+    size_t used = 0;
+    for (size_t i = 0; i < count; ++i)
+        if (list[i].is_folder)
+            ordered[used++] = list[i];
+    for (size_t i = 0; i < count; ++i)
+        if (!list[i].is_folder)
+            ordered[used++] = list[i];
+    memcpy(list, ordered, count * sizeof(*list));
+    free(ordered);
+}
+
 static int collect_items(json_object *root, bool filter_views,
                          struct jf_item **items, size_t *count)
 {
@@ -422,7 +440,10 @@ static int collect_items(json_object *root, bool filter_views,
              json_object_get_boolean(folder));
         ++used;
     }
-    qsort(list, used, sizeof(*list), compare_items);
+    if (filter_views)
+        qsort(list, used, sizeof(*list), compare_items);
+    else
+        folders_first(list, used);
     *items = list;
     *count = used;
     return 0;
@@ -446,14 +467,24 @@ int jf_list_views(const struct jf_config *config, struct jf_item **items,
 }
 
 int jf_list_children(const struct jf_config *config, const char *parent_id,
+                     enum jf_sort sort, bool descending,
                      struct jf_item **items, size_t *count, char *error,
                      size_t error_size)
 {
+    static const char *const fields[JF_SORT_COUNT] = {
+        "SortName", "Random", "CommunityRating,SortName",
+        "CriticRating,SortName", "DateCreated,SortName",
+        "DatePlayed,SortName", "OfficialRating,SortName",
+        "PlayCount,SortName", "PremiereDate,SortName", "Runtime,SortName",
+    };
+    if ((unsigned)sort >= JF_SORT_COUNT)
+        sort = JF_SORT_NAME;
     char path[512];
     snprintf(path, sizeof(path),
-             "/Items?userId=%s&ParentId=%s&SortBy=SortName&"
-             "SortOrder=Ascending&Limit=%d&EnableTotalRecordCount=false",
-             config->user_id, parent_id, LIST_LIMIT);
+             "/Items?userId=%s&ParentId=%s&SortBy=%s&"
+             "SortOrder=%s&Limit=%d&EnableTotalRecordCount=false",
+             config->user_id, parent_id, fields[sort],
+             descending ? "Descending" : "Ascending", LIST_LIMIT);
     json_object *root = NULL;
     int result = json_call(config, "GET", path, NULL, &root, error,
                            error_size);

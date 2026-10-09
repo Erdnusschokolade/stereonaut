@@ -1,6 +1,7 @@
 #ifndef STEREONAUT_FILE_BROWSER_H
 #define STEREONAUT_FILE_BROWSER_H
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -35,6 +36,10 @@ int file_browser_open(struct file_browser **result, const char *initial_path,
                       char *error, size_t error_size);
 int file_browser_request(struct file_browser *browser, const char *path,
                          char *error, size_t error_size);
+/* Order of Jellyfin folder listings (enum jf_sort); applies to the next
+ * request. Local directories are always sorted by name. */
+void file_browser_set_sort(struct file_browser *browser, int sort,
+                           bool descending);
 int file_browser_poll(struct file_browser *browser,
                       struct file_browser_listing *listing);
 void file_browser_listing_clear(struct file_browser_listing *listing);

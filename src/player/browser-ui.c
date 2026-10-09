@@ -1,13 +1,17 @@
 #define _POSIX_C_SOURCE 200809L
 #include "browser-ui.h"
 
+#include "jellyfin.h"
 #include "thumbnails.h"
 #include "ui-draw.h"
 
 #include <inttypes.h>
+#include <json-c/json.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 /* Layout of the 2048 x 1024 panel: navigation card (left), grid card
  * (centre) with a pager below, detail card (right). */
@@ -47,6 +51,17 @@
 #define BACK_X 488
 #define BACK_Y 74
 
+/* Sort chip in the header and its menu. */
+#define SORT_W 300
+#define SORT_H 52
+#define SORT_X (CENTER_X + CENTER_W - SORT_W - 32)
+#define SORT_Y 48
+#define MENU_ITEM_H 52
+#define MENU_W 470
+#define MENU_X (CENTER_X + CENTER_W - MENU_W - 32)
+#define MENU_Y (SORT_Y + SORT_H + 8)
+#define MENU_H (JF_SORT_COUNT * MENU_ITEM_H + 16)
+
 /* Control ids returned by browser_ui_hit_test. */
 enum {
     ID_TILE = 0, /* 0 .. PAGE_ENTRIES-1 */
@@ -57,7 +72,29 @@ enum {
     ID_BACK = 30,
     ID_RAIL = 40, /* start, jellyfin, local */
     ID_EXIT = 43,
+    ID_SORT = 50,       /* the chip */
+    ID_SORT_ITEM = 60,  /* 60 .. 60+JF_SORT_COUNT-1 */
+    ID_SORT_AREA = 79,  /* hit test only: resolved with the model */
 };
+
+static const char *const sort_labels[JF_SORT_COUNT] = {
+    "Name", "Zufällig", "Community-Bewertung", "Kritikerbewertung",
+    "Hinzugefügt am", "Abgespielt am", "Altersfreigabe", "Wiedergabezähler",
+    "Veröffentlichungsdatum", "Laufzeit",
+};
+
+/* Dates, ratings and counts are most useful newest/highest first. */
+static bool default_descending(int sort)
+{
+    return sort != JF_SORT_NAME && sort != JF_SORT_RANDOM &&
+           sort != JF_SORT_OFFICIAL_RATING && sort != JF_SORT_RUNTIME;
+}
+
+/* Only folder listings of a Jellyfin library can be sorted. */
+static bool sortable(const struct browser_ui *ui)
+{
+    return strncmp(ui->location, "jf:view:", 8) == 0;
+}
 
 enum { RAIL_START, RAIL_JELLYFIN, RAIL_LOCAL, RAIL_COUNT };
 
@@ -311,6 +348,56 @@ static void draw_back_button(struct browser_ui *ui, struct ui_canvas *canvas,
     ui_draw_icon(canvas, UI_ICON_BACK, BACK_X, BACK_Y, 34, color_text);
 }
 
+static void draw_sort_chip(struct browser_ui *ui, struct ui_canvas *canvas,
+                           bool hover)
+{
+    if (!sortable(ui))
+        return;
+    ui_set_rect_raw(canvas, SORT_X - 4, SORT_Y - 4, SORT_W + 8, SORT_H + 8,
+                    ui->card_pixel);
+    ui_fill_round_rect(canvas, SORT_X, SORT_Y, SORT_W, SORT_H, SORT_H / 2.0f,
+                       hover || ui->sort_menu_open ? color_tile_hover
+                                                   : color_chip);
+    ui_draw_text(canvas, ui->font, 24, SORT_X + 24, SORT_Y + 10,
+                 SORT_W - 112, UI_ALIGN_LEFT, color_text,
+                 sort_labels[ui->sort]);
+    if (ui->sort != JF_SORT_RANDOM)
+        ui_draw_icon(canvas,
+                     ui->sort_descending ? UI_ICON_ARROW_DOWN
+                                         : UI_ICON_ARROW_UP,
+                     SORT_X + SORT_W - 70, SORT_Y + SORT_H / 2.0f, 28,
+                     color_accent);
+    ui_draw_icon(canvas, UI_ICON_CHEVRON_DOWN, SORT_X + SORT_W - 32,
+                 SORT_Y + SORT_H / 2.0f, 28, color_dim);
+}
+
+static void draw_sort_menu(struct browser_ui *ui, struct ui_canvas *canvas,
+                           int hover)
+{
+    ui_shadow_round_rect(canvas, MENU_X, MENU_Y + 6, MENU_W, MENU_H, 22, 24,
+                         color_shadow);
+    ui_fill_round_rect(canvas, MENU_X, MENU_Y, MENU_W, MENU_H, 22,
+                       UI_RGBA(30, 32, 39, 255));
+    ui_stroke_round_rect(canvas, MENU_X, MENU_Y, MENU_W, MENU_H, 22, 2,
+                         color_border);
+    for (int i = 0; i < JF_SORT_COUNT; ++i) {
+        int y = MENU_Y + 8 + i * MENU_ITEM_H;
+        bool current = i == ui->sort;
+        if (hover == ID_SORT_ITEM + i)
+            ui_fill_round_rect(canvas, MENU_X + 8, y, MENU_W - 16,
+                               MENU_ITEM_H, 14, color_tile_hover);
+        ui_draw_text(canvas, current ? ui->bold : ui->font, 25, MENU_X + 28,
+                     y + 11, MENU_W - 96, UI_ALIGN_LEFT,
+                     current ? color_accent : color_text, sort_labels[i]);
+        if (current && i != JF_SORT_RANDOM)
+            ui_draw_icon(canvas,
+                         ui->sort_descending ? UI_ICON_ARROW_DOWN
+                                             : UI_ICON_ARROW_UP,
+                         MENU_X + MENU_W - 40, y + MENU_ITEM_H / 2.0f, 28,
+                         color_accent);
+    }
+}
+
 static void draw_pager(struct browser_ui *ui, struct ui_canvas *canvas,
                        int hover)
 {
@@ -378,8 +465,10 @@ static void draw_base(struct browser_ui *ui, struct ui_canvas *canvas)
     draw_rail(ui, canvas, -1);
 
     draw_back_button(ui, canvas, false);
-    ui_draw_text(canvas, ui->bold, 40, CENTER_X + CENTER_W / 2, 46, 820,
-                 UI_ALIGN_CENTER, color_text, current_title(ui));
+    ui_draw_text(canvas, ui->bold, 40, CENTER_X + CENTER_W / 2, 46,
+                 sortable(ui) ? 480 : 820, UI_ALIGN_CENTER, color_text,
+                 current_title(ui));
+    draw_sort_chip(ui, canvas, false);
     draw_breadcrumbs(ui, canvas);
     for (int slot = 0; slot < (int)PAGE_ENTRIES; ++slot)
         draw_tile(ui, canvas, slot, false);
@@ -507,7 +596,9 @@ void browser_ui_render(struct browser_ui *ui, uint32_t *pixels, bool bgra)
     ui->content_dirty = false;
     /* Hover states are redrawn over the cached layer. */
     int hover = ui->hover;
-    if (hover >= ID_TILE && hover < ID_TILE + (int)PAGE_ENTRIES)
+    if (hover == ID_SORT)
+        draw_sort_chip(ui, &canvas, true);
+    else if (hover >= ID_TILE && hover < ID_TILE + (int)PAGE_ENTRIES)
         draw_tile(ui, &canvas, hover - ID_TILE, true);
     else if (hover == ID_BACK)
         draw_back_button(ui, &canvas, true);
@@ -517,6 +608,8 @@ void browser_ui_render(struct browser_ui *ui, uint32_t *pixels, bool bgra)
     else if (hover >= ID_PREVIOUS && hover < ID_PAGE + PAGE_BUTTONS)
         draw_pager(ui, &canvas, hover);
     draw_detail(ui, &canvas);
+    if (ui->sort_menu_open)
+        draw_sort_menu(ui, &canvas, hover);
     ui->dirty = false;
 }
 
@@ -526,6 +619,12 @@ int browser_ui_hit_test(float u, float v)
 {
     int x = (int)(u * BROWSER_UI_WIDTH);
     int y = (int)(v * BROWSER_UI_HEIGHT);
+    if (x >= SORT_X && x < SORT_X + SORT_W && y >= SORT_Y &&
+        y < SORT_Y + SORT_H)
+        return ID_SORT;
+    if (x >= MENU_X && x < MENU_X + MENU_W && y >= MENU_Y &&
+        y < MENU_Y + MENU_H)
+        return ID_SORT_AREA; /* only counts while the menu is open */
     for (int slot = 0; slot < (int)PAGE_ENTRIES; ++slot) {
         int tx, ty;
         tile_rect(slot, &tx, &ty);
@@ -573,6 +672,22 @@ static int resolve_page_button(const struct browser_ui *ui, int x)
 void browser_ui_set_pointer(struct browser_ui *ui, bool visible, int x, int y,
                             int hover)
 {
+    if (hover == ID_SORT_AREA) {
+        /* The menu hides everything below it while open; closed, the area
+         * is just grid. */
+        if (ui->sort_menu_open) {
+            int row = (y - MENU_Y - 8) / MENU_ITEM_H;
+            hover = row >= 0 && row < JF_SORT_COUNT ? ID_SORT_ITEM + row : -1;
+        } else {
+            hover = -1;
+        }
+    } else if (ui->sort_menu_open) {
+        /* Clicks outside the menu only close it. */
+        if (hover != ID_SORT)
+            hover = -1;
+    }
+    if (hover == ID_SORT && !sortable(ui))
+        hover = -1;
     if (hover == ID_PAGE_AREA)
         hover = resolve_page_button(ui, x);
     if ((hover == ID_PREVIOUS || hover == ID_NEXT) && page_count(ui) <= 1)
@@ -637,6 +752,99 @@ static void request_thumbnails(struct browser_ui *ui)
         }
 }
 
+/* ---- persisted sort choice -------------------------------------------- */
+
+static bool settings_path(char *path, size_t size)
+{
+    const char *base = getenv("XDG_CONFIG_HOME");
+    const char *home = getenv("HOME");
+    if (base && base[0])
+        return snprintf(path, size, "%s/stereonaut/settings.json", base) <
+               (int)size;
+    if (home && home[0])
+        return snprintf(path, size, "%s/.config/stereonaut/settings.json",
+                        home) < (int)size;
+    return false;
+}
+
+static void load_sort(struct browser_ui *ui)
+{
+    ui->sort = JF_SORT_NAME;
+    ui->sort_descending = false;
+    char path[4200];
+    if (!settings_path(path, sizeof(path)))
+        return;
+    json_object *root = json_object_from_file(path);
+    json_object *value = NULL;
+    if (!root)
+        return;
+    if (json_object_object_get_ex(root, "sort", &value) &&
+        json_object_is_type(value, json_type_int)) {
+        int sort = json_object_get_int(value);
+        if (sort >= 0 && sort < JF_SORT_COUNT)
+            ui->sort = sort;
+    }
+    if (json_object_object_get_ex(root, "sort_descending", &value) &&
+        json_object_is_type(value, json_type_boolean))
+        ui->sort_descending = json_object_get_boolean(value);
+    json_object_put(root);
+}
+
+/* Keeps other keys of the settings file; failure to save is not fatal. */
+static void save_sort(const struct browser_ui *ui)
+{
+    char path[4200];
+    if (!settings_path(path, sizeof(path)))
+        return;
+    json_object *root = access(path, F_OK) == 0
+                            ? json_object_from_file(path) : NULL;
+    if (!root || !json_object_is_type(root, json_type_object)) {
+        if (root)
+            json_object_put(root);
+        if (access(path, F_OK) == 0)
+            return; /* unreadable: do not overwrite */
+        root = json_object_new_object();
+    }
+    json_object_object_add(root, "sort", json_object_new_int(ui->sort));
+    json_object_object_add(root, "sort_descending",
+                           json_object_new_boolean(ui->sort_descending));
+    char directory[4200];
+    snprintf(directory, sizeof(directory), "%s", path);
+    char *slash = strrchr(directory, '/');
+    if (slash) {
+        *slash = '\0';
+        char parent[4200];
+        snprintf(parent, sizeof(parent), "%s", directory);
+        char *parent_slash = strrchr(parent, '/');
+        if (parent_slash) {
+            *parent_slash = '\0';
+            mkdir(parent, 0700);
+        }
+        mkdir(directory, 0700);
+    }
+    char temporary[4300];
+    snprintf(temporary, sizeof(temporary), "%s.tmp", path);
+    if (json_object_to_file_ext(temporary, root, JSON_C_TO_STRING_PRETTY) == 0)
+        chmod(temporary, 0600),
+        rename(temporary, path);
+    json_object_put(root);
+}
+
+/* Chooses a criterion; choosing the current one flips the direction. */
+static void choose_sort(struct browser_ui *ui, int sort)
+{
+    if (sort == ui->sort && sort != JF_SORT_RANDOM)
+        ui->sort_descending = !ui->sort_descending;
+    else {
+        ui->sort = sort;
+        ui->sort_descending = default_descending(sort);
+    }
+    save_sort(ui);
+    file_browser_set_sort(ui->browser, ui->sort, ui->sort_descending);
+    ui->restore_page = 0;
+    request(ui, ui->location);
+}
+
 static void set_page(struct browser_ui *ui, size_t page)
 {
     if (page >= page_count(ui) || page == ui->page)
@@ -648,8 +856,18 @@ static void set_page(struct browser_ui *ui, size_t page)
     ui->dirty = true;
 }
 
+void browser_ui_close_menus(struct browser_ui *ui)
+{
+    if (ui->sort_menu_open) {
+        ui->sort_menu_open = false;
+        ui->dirty = true;
+    }
+}
+
 void browser_ui_flip(struct browser_ui *ui, int direction)
 {
+    if (ui->sort_menu_open)
+        return;
     if (direction < 0 && ui->page > 0)
         set_page(ui, ui->page - 1);
     else if (direction > 0)
@@ -660,6 +878,19 @@ enum browser_ui_action browser_ui_activate(struct browser_ui *ui, char *path,
                                            size_t path_size)
 {
     int hover = ui->hover;
+    if (ui->sort_menu_open) {
+        if (hover >= ID_SORT_ITEM && hover < ID_SORT_ITEM + JF_SORT_COUNT)
+            choose_sort(ui, hover - ID_SORT_ITEM);
+        ui->sort_menu_open = false;
+        ui->hover = -1;
+        ui->dirty = true;
+        return BROWSER_UI_NONE;
+    }
+    if (hover == ID_SORT && sortable(ui)) {
+        ui->sort_menu_open = true;
+        ui->dirty = true;
+        return BROWSER_UI_NONE;
+    }
     if (hover >= ID_TILE && hover < ID_TILE + (int)PAGE_ENTRIES) {
         int index = slot_entry(ui, hover);
         if (index < 0)
@@ -802,7 +1033,11 @@ int browser_ui_open(struct browser_ui *ui, const char *location,
         snprintf(ui->status_message, sizeof(ui->status_message), "%s",
                  message);
     ui->loader = thumbnail_loader_create();
-    return file_browser_open(&ui->browser, location, error, error_size);
+    load_sort(ui);
+    int opened = file_browser_open(&ui->browser, location, error, error_size);
+    if (opened == 0)
+        file_browser_set_sort(ui->browser, ui->sort, ui->sort_descending);
+    return opened;
 }
 
 void browser_ui_navigate(struct browser_ui *ui, const char *location,

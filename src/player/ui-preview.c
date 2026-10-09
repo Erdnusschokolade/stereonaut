@@ -35,6 +35,11 @@ int file_browser_poll(struct file_browser *browser,
     (void)browser; (void)listing;
     return 0;
 }
+void file_browser_set_sort(struct file_browser *browser, int sort,
+                           bool descending)
+{
+    (void)browser; (void)sort; (void)descending;
+}
 void file_browser_listing_clear(struct file_browser_listing *listing)
 {
     for (size_t i = 0; i < listing->entry_count; ++i) {
@@ -211,7 +216,18 @@ int main(int argc, char **argv)
     ui.hover = -1;
     browser_ui_set_pointer(&ui, true, 0, 0, -1);
     int px = 452 + (hover % 4) * 294 + 200, py = 196 + (hover / 4) * 220 + 90;
+    if (hover >= 60) { /* sort menu open, item hover - 60 */
+        ui.sort_menu_open = true;
+        ui.sort = 4;
+        ui.sort_descending = true;
+        ui.content_dirty = true;
+    } else if (hover == 50) {
+        ui.sort = 4;
+        ui.sort_descending = true;
+    }
     browser_ui_set_pointer(&ui, true, px, py, hover);
+    if (hover >= 60)
+        ui.hover = hover;
 
     uint32_t *pixels = malloc((size_t)BROWSER_UI_WIDTH * BROWSER_UI_HEIGHT * 4);
     browser_ui_render(&ui, pixels, false);

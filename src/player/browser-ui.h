@@ -36,6 +36,9 @@ struct browser_ui {
     struct ui_image **thumbs; /* per listing entry, may be NULL */
     bool *thumb_requested;    /* per listing entry */
     struct thumbnail_loader *loader;
+    int sort;             /* enum jf_sort */
+    bool sort_descending;
+    bool sort_menu_open;
     size_t page;
     size_t selected_page; /* page of the last started title */
     char selected_title[256]; /* name of the last started title */
@@ -73,6 +76,8 @@ void browser_ui_set_pointer(struct browser_ui *ui, bool visible, int x, int y,
                             int hover);
 enum browser_ui_action browser_ui_activate(struct browser_ui *ui, char *path,
                                            size_t path_size);
+/* Closes the sort menu (e.g. when the browser is left). */
+void browser_ui_close_menus(struct browser_ui *ui);
 /* Previous (< 0) or next (> 0) page, e.g. from the thumbstick. */
 void browser_ui_flip(struct browser_ui *ui, int direction);
 

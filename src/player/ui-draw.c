@@ -596,6 +596,28 @@ void ui_draw_icon(struct ui_canvas *canvas, enum ui_icon icon, float cx,
                   color);
         ui_fill_circle(canvas, cx, cy - size * 0.2f, size * 0.06f, color);
         break;
+    case UI_ICON_ARROW_UP:
+        icon_line(canvas, cx, cy, size, 0.5f, 0.84f, 0.5f, 0.18f, stroke,
+                  color);
+        icon_line(canvas, cx, cy, size, 0.5f, 0.18f, 0.26f, 0.44f, stroke,
+                  color);
+        icon_line(canvas, cx, cy, size, 0.5f, 0.18f, 0.74f, 0.44f, stroke,
+                  color);
+        break;
+    case UI_ICON_ARROW_DOWN:
+        icon_line(canvas, cx, cy, size, 0.5f, 0.16f, 0.5f, 0.82f, stroke,
+                  color);
+        icon_line(canvas, cx, cy, size, 0.5f, 0.82f, 0.26f, 0.56f, stroke,
+                  color);
+        icon_line(canvas, cx, cy, size, 0.5f, 0.82f, 0.74f, 0.56f, stroke,
+                  color);
+        break;
+    case UI_ICON_CHEVRON_DOWN:
+        icon_line(canvas, cx, cy, size, 0.2f, 0.36f, 0.5f, 0.66f, stroke,
+                  color);
+        icon_line(canvas, cx, cy, size, 0.5f, 0.66f, 0.8f, 0.36f, stroke,
+                  color);
+        break;
     case UI_ICON_USER:
         ui_fill_circle(canvas, cx, cy - size * 0.16f, size * 0.18f, color);
         icon_arc(canvas, cx, cy, size, 0.5f, 0.92f, 0.32f, pi, 2.0f * pi,
