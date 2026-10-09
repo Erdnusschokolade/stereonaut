@@ -30,8 +30,13 @@ install -m 0644 \
 cat >"$bin_dir/stereonaut" <<'EOF'
 #!/bin/sh
 set -eu
+# Without an argument the launcher opens the start page (local files and
+# Jellyfin). The log of the last run helps to diagnose stutter and failures.
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/stereonaut"
+mkdir -p "$state_dir"
+exec >"$state_dir/launcher.log" 2>&1
 cd "$HOME/.local/lib/stereonaut"
-exec ./stereonaut-launcher "${1:-$HOME}"
+exec ./stereonaut-launcher ${1:+"$1"}
 EOF
 chmod 0755 "$bin_dir/stereonaut"
 
