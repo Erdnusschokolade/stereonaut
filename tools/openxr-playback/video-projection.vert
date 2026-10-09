@@ -32,11 +32,15 @@ void main()
 
     flat_uv = vec2(position.x * 0.5 + 0.5,
                    1.0 - (position.y + 0.5));
-    vec3 view_direction = normalize(vec3(
+    /* Keep the corner rays unnormalized while the rasterizer interpolates
+     * them. Normalizing each corner first bends the reconstructed ray field,
+     * and asymmetric per-eye FOVs then produce different horizontal and
+     * vertical image offsets. The fragment shader normalizes the final ray. */
+    vec3 view_direction = vec3(
         mix(view.fov_tangents.x, view.fov_tangents.y,
             view_ndc.x * 0.5 + 0.5),
         mix(view.fov_tangents.z, view.fov_tangents.w,
             view_ndc.y * 0.5 + 0.5),
-        -1.0));
+        -1.0);
     projection_direction = mat3(view.camera_to_world) * view_direction;
 }

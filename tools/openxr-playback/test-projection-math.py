@@ -27,6 +27,14 @@ def stereo_uv(uv, layout, eye, swap=False):
     return u, v
 
 
+def view_ray(fov_tangents, ndc):
+    """Reconstruct the unnormalized varying emitted by the vertex shader."""
+    left, right, down, up = fov_tangents
+    x = left + (right - left) * (ndc[0] * 0.5 + 0.5)
+    y = down + (up - down) * (ndc[1] * 0.5 + 0.5)
+    return x, y, -1.0
+
+
 def close(actual, expected):
     assert actual is not None
     assert all(math.isclose(a, e, abs_tol=1e-7)
@@ -51,5 +59,12 @@ close(stereo_uv((0.25, 0.75), "sbs", 1), (0.625, 0.75))
 close(stereo_uv((0.25, 0.75), "tb", 0), (0.25, 0.375))
 close(stereo_uv((0.25, 0.75), "tb", 1), (0.25, 0.875))
 close(stereo_uv((0.25, 0.75), "sbs", 0, True), (0.625, 0.75))
+
+# The varying must stay in tangent space until fragment interpolation. These
+# asymmetric values reproduce the kind of per-eye FOV reported by SteamVR.
+close(view_ray((-1.62, 1.26, -1.78, 1.12), (0.0, 0.0)),
+      (-0.18, -0.33, -1.0))
+close(view_ray((-1.62, 1.26, -1.78, 1.12), (0.5, -0.5)),
+      (0.54, -1.055, -1.0))
 
 print("projection_math=success")
