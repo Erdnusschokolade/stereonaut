@@ -26,6 +26,8 @@ struct browser_ui {
     struct file_browser_listing listing;
     char status_message[256];
     size_t page;
+    size_t selected_page; /* page of the last started title */
+    size_t restore_page;  /* page to show for the next listing */
     int hover;
     bool pointer_visible;
     int pointer_x;

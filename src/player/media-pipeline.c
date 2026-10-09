@@ -5,6 +5,7 @@
 #include "packet-queue.h"
 
 #include <errno.h>
+#include <inttypes.h>
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -14,6 +15,8 @@
 
 #define VIDEO_QUEUE_CAPACITY 24
 #define AUDIO_QUEUE_CAPACITY 256
+/* Reads slower than this indicate a starving source (network, transcode). */
+#define DEMUX_STALL_LOG_MS 300
 /* After a seek the demuxer starts at the preceding video keyframe, which can
  * be many seconds before the target. Audio packets more than this far before
  * the target are dropped at the demuxer; otherwise the paused audio worker
@@ -90,8 +93,12 @@ static void *demux_worker(void *argument)
         if (stopping)
             break;
         struct media_packet packet;
+        int64_t read_started_us = monotonic_us();
         int result = media_demux_read(pipeline->demux, &packet,
                                       error, sizeof(error));
+        int64_t read_ms = (monotonic_us() - read_started_us) / 1000;
+        if (read_ms >= DEMUX_STALL_LOG_MS)
+            printf("demux_stall ms=%" PRId64 "\n", read_ms);
         if (result < 0) {
             fail_pipeline(pipeline, error);
             return NULL;

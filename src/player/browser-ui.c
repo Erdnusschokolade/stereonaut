@@ -219,6 +219,7 @@ enum browser_ui_action browser_ui_activate(struct browser_ui *ui, char *path,
             return BROWSER_UI_NONE;
         const struct file_browser_entry *entry = &ui->listing.entries[index];
         if (entry->kind == FILE_BROWSER_MEDIA) {
+            ui->selected_page = ui->page;
             snprintf(path, path_size, "%s", entry->path);
             return BROWSER_UI_FILE_SELECTED;
         }
@@ -251,7 +252,10 @@ bool browser_ui_update(struct browser_ui *ui)
         return false;
     file_browser_listing_clear(&ui->listing);
     ui->listing = updated;
-    ui->page = 0;
+    ui->page = ui->restore_page;
+    ui->restore_page = 0;
+    if (ui->page >= page_count(ui))
+        ui->page = 0;
     ui->hover = -1;
     ui->dirty = true;
     printf("browser_listing generation=%" PRIu64 " path=%s entries=%zu"
@@ -279,6 +283,9 @@ void browser_ui_navigate(struct browser_ui *ui, const char *location,
 {
     snprintf(ui->status_message, sizeof(ui->status_message), "%s",
              message ? message : "");
+    /* Coming back from playback shows the page the title was picked on. */
+    ui->restore_page = ui->selected_page;
+    ui->selected_page = 0;
     ui->hover = -1;
     ui->dirty = true;
     char error[256] = {0};
