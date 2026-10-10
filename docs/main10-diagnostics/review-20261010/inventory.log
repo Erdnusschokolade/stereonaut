@@ -1,0 +1,77 @@
+6.18.0-gfbdbca41fd45
+deckard-mesa-linux-aarch64 26.3.0_devel+git8aa73b4b-1
+'DISPLAY' environment variable not set... skipping surface info
+==========
+VULKANINFO
+==========
+
+Vulkan Instance Version: 1.4.309
+
+
+Instance Extensions: count = 24
+-------------------------------
+VK_EXT_acquire_drm_display             : extension revision 1
+VK_EXT_acquire_xlib_display            : extension revision 1
+VK_EXT_debug_report                    : extension revision 10
+VK_EXT_debug_utils                     : extension revision 2
+VK_EXT_direct_mode_display             : extension revision 1
+VK_EXT_display_surface_counter         : extension revision 1
+VK_EXT_headless_surface                : extension revision 1
+VK_EXT_surface_maintenance1            : extension revision 1
+VK_EXT_swapchain_colorspace            : extension revision 5
+VK_KHR_device_group_creation           : extension revision 1
+VK_KHR_display                         : extension revision 23
+VK_KHR_external_fence_capabilities     : extension revision 1
+VK_KHR_external_memory_capabilities    : extension revision 1
+VK_KHR_external_semaphore_capabilities : extension revision 1
+VK_KHR_get_display_properties2         : extension revision 1
+VK_KHR_get_physical_device_properties2 : extension revision 2
+VK_KHR_get_surface_capabilities2       : extension revision 1
+VK_KHR_portability_enumeration         : extension revision 1
+VK_KHR_surface                         : extension revision 25
+VK_KHR_surface_protected_capabilities  : extension revision 1
+VK_KHR_wayland_surface                 : extension revision 6
+VK_KHR_xcb_surface                     : extension revision 6
+VK_KHR_xlib_surface                    : extension revision 6
+VK_LUNARG_direct_driver_loading        : extension revision 1
+
+Instance Layers: count = 16
+---------------------------
+VK_LAYER_FROG_gamescope_wsi_aarch64  Gamescope WSI (XWayland Bypass) Layer (aarch64) 1.3.221  version 1
+VK_LAYER_LUNARG_api_dump             LunarG API dump layer                           1.4.309  version 2
+VK_LAYER_LUNARG_gfxreconstruct       GFXReconstruct Capture Layer Version 1.0.5-dev  1.4.350  version 4194309
+VK_LAYER_LUNARG_monitor              Execution Monitoring Layer                      1.4.309  version 1
+VK_LAYER_LUNARG_screenshot           LunarG image capture layer                      1.4.309  version 1
+VK_LAYER_MANGOHUD_overlay_aarch64    Vulkan Hud Overlay                              1.3.0    version 1
+VK_LAYER_MESA_vram_report_limit      Limit reported VRAM                             1.4.303  version 1
+VK_LAYER_RENDERDOC_Capture           Debugging capture layer for RenderDoc           1.4.324  version 46
+VK_LAYER_VALVE_fdm_injection         FDM injection                                   1.4.303  version 1
+VK_LAYER_VALVE_rpo                   Renderpass Optimizer                            1.4.303  version 1
+VK_LAYER_VALVE_steam_fossilize_32    Steam Pipeline Caching Layer                    1.3.207  version 1
+VK_LAYER_VALVE_steam_fossilize_64    Steam Pipeline Caching Layer                    1.3.207  version 1
+VK_LAYER_VALVE_steam_fossilize_arm64 Steam Pipeline Caching Layer                    1.3.207  version 1
+VK_LAYER_VALVE_steam_overlay_32      Steam Overlay Layer                             1.3.207  version 1
+VK_LAYER_VALVE_steam_overlay_64      Steam Overlay Layer                             1.3.207  version 1
+VK_LAYER_fossilize                   Fossilize capture layer                         1.4.303  version 1
+
+Devices:
+========
+GPU0:
+	apiVersion         = 1.4.359
+	driverVersion      = 26.2.99
+	vendorID           = 0x5143
+	deviceID           = 0x43051401
+	deviceType         = PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU
+	deviceName         = Turnip Adreno (TM) 750
+	driverID           = DRIVER_ID_MESA_TURNIP
+	driverName         = turnip Mesa driver
+	driverInfo         = Mesa 26.3.0-devel (git-8aa73b4b19)
+	conformanceVersion = 1.4.0.0
+	deviceUUID         = 72935926-0b51-4406-15cd-57aae941a569
+	driverUUID         = 59cb4253-2917-b7e8-3b09-e8b40d422a22
+debug
+deckard-mesa-linux-aarch64 /usr/lib/libvulkan_freedreno.so
+deckard-mesa-linux-aarch64 /usr/share/vulkan/icd.d/
+deckard-mesa-linux-aarch64 /usr/share/vulkan/icd.d/freedreno_icd.aarch64.json
+deckard-mesa-linux-aarch64 /usr/share/vulkan/implicit_layer.d/VkLayer_MESA_vram_report_limit.json
+/home/steamos/stereonaut-decoder-002-20261008-01

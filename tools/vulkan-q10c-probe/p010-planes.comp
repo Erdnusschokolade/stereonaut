@@ -1,0 +1,20 @@
+#version 450
+// Per-plane nearest texelFetch; no matrix, filtering, range conversion, or RGB8.
+layout(local_size_x = 16, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D luma;
+layout(set = 0, binding = 1) uniform sampler2D chroma;
+layout(set = 0, binding = 2, std430) writeonly buffer Result { uint pairs[]; } output_data;
+uint p010(float sample_value) {
+    return uint(round(clamp(sample_value, 0.0, 1.0) * 1023.0)) << 6;
+}
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= 960 || p.y >= 1088) return;
+    uint a = p010(texelFetch(luma, ivec2(2 * p.x, p.y), 0).r);
+    uint b = p010(texelFetch(luma, ivec2(2 * p.x + 1, p.y), 0).r);
+    output_data.pairs[p.y * 960 + p.x] = a | (b << 16);
+    if (p.y < 544) {
+        vec2 uv = texelFetch(chroma, p, 0).rg;
+        output_data.pairs[1044480 + p.y * 960 + p.x] = p010(uv.r) | (p010(uv.g) << 16);
+    }
+}
