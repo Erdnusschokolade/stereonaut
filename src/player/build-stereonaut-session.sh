@@ -34,6 +34,7 @@ cc -std=c11 -O2 -Wall -Wextra -Werror \
   "$script_dir/player-ui.c" "$script_dir/ui-draw.c" "$script_dir/thumbnails.c" \
   "$script_dir/file-browser.c" "$script_dir/jellyfin.c" \
   "$script_dir/trickplay.c" "$script_dir/settings.c" \
+  "$script_dir/title-settings.c" \
   $(pkg-config --libs libcurl json-c freetype2 libjpeg) \
   -lvulkan -lm -pthread "$openxr_loader"
 

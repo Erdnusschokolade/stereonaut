@@ -67,4 +67,79 @@ close(view_ray((-1.62, 1.26, -1.78, 1.12), (0.0, 0.0)),
 close(view_ray((-1.62, 1.26, -1.78, 1.12), (0.5, -0.5)),
       (0.54, -1.055, -1.0))
 
+
+
+# Dome placement (stereonaut-renderer.c): rotation_axis() and world_to_dome
+# = Rz(roll) * Rx(-tilt) * Ry(yaw); the eye offset is followed to the unit
+# sphere as in the fragment shaders.
+def rotation_axis(axis, angle):
+    c, s = math.cos(angle), math.sin(angle)
+    m = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]  # m[row][col]
+    a, b = (axis + 1) % 3, (axis + 2) % 3
+    m[a][a] = c
+    m[b][b] = c
+    m[b][a] = s
+    m[a][b] = -s
+    return m
+
+
+def mat_mul(a, b):
+    return [[sum(a[r][k] * b[k][c] for k in range(3)) for c in range(3)]
+            for r in range(3)]
+
+
+def apply(m, v):
+    return tuple(sum(m[r][k] * v[k] for k in range(3)) for r in range(3))
+
+
+def world_to_dome(yaw, tilt, roll):
+    return mat_mul(rotation_axis(2, roll),
+                   mat_mul(rotation_axis(0, -tilt), rotation_axis(1, yaw)))
+
+
+def dome_lookup(direction, eye):
+    length = math.sqrt(sum(d * d for d in direction))
+    d = [x / length for x in direction]
+    b = sum(e * x for e, x in zip(eye, d))
+    t = -b + math.sqrt(b * b - sum(e * e for e in eye) + 1.0)
+    return tuple(e + t * x for e, x in zip(eye, d))
+
+
+rad = math.radians
+# "Drehung +30" puts the picture centre 30 degrees to the right.
+right30 = (math.sin(rad(30)), 0.0, -math.cos(rad(30)))
+close(apply(world_to_dome(rad(30), 0, 0), right30), (0.0, 0.0, -1.0))
+# "Neigung +20" puts it 20 degrees up.
+up20 = (0.0, math.sin(rad(20)), -math.cos(rad(20)))
+close(apply(world_to_dome(0, rad(20), 0), up20), (0.0, 0.0, -1.0))
+# "Kippen +10" rolls it clockwise: the picture's top leans right.
+top = apply(world_to_dome(0, 0, rad(10)),
+            (math.sin(rad(10)), math.cos(rad(10)), 0.0))
+close(top, (0.0, 1.0, 0.0))
+# Yaw, then tilt: the centre is up and to the right.
+centre = apply(world_to_dome(rad(30), rad(20), 0),
+               (math.sin(rad(30)) * math.cos(rad(20)), math.sin(rad(20)),
+                -math.cos(rad(30)) * math.cos(rad(20))))
+close(centre, (0.0, 0.0, -1.0))
+# The renderer's dome_to_world is the inverse.
+inverse = mat_mul(rotation_axis(1, -rad(30)),
+                  mat_mul(rotation_axis(0, rad(20)),
+                          rotation_axis(2, -rad(10))))
+identity = mat_mul(inverse, world_to_dome(rad(30), rad(20), rad(10)))
+for r in range(3):
+    close(identity[r], [1.0 if c == r else 0.0 for c in range(3)])
+
+# Without offset the lookup is the plain direction.
+close(dome_lookup((0.3, 0.2, -1.0), (0, 0, 0)),
+      tuple(x / math.sqrt(1.13) for x in (0.3, 0.2, -1.0)))
+# Zoom (eye forward) magnifies: what is seen 30 degrees off axis lies
+# closer to the picture centre.
+hit = dome_lookup(right30, (0.0, 0.0, -0.3))
+assert math.degrees(math.atan2(hit[0], -hit[2])) < 30.0 - 5.0, hit
+assert math.isclose(sum(x * x for x in hit), 1.0, abs_tol=1e-9)
+# Height -0.2 (eye lower, picture up): looking straight ahead shows a point
+# below the picture centre.
+hit = dome_lookup((0.0, 0.0, -1.0), (0.0, -0.2, 0.0))
+assert hit[1] < 0.0, hit
+
 print("projection_math=success")

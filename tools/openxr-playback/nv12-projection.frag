@@ -14,6 +14,9 @@ layout(set = 0, binding = 0, std140) uniform ViewUniform {
     vec4 source_info;  /* width, height, inverse width, inverse height */
     vec4 video_scale;  /* TP10 only (tp10-projection.frag) */
     vec4 levels;       /* black, white, chroma range (8-bit code values) */
+    vec4 eye_offset;   /* eye inside the dome (radius 1), dome axes */
+    vec4 stereo_offset; /* longitude, latitude (rad); flat u, v */
+    vec4 picture;      /* brightness, contrast, saturation, gamma */
 } view;
 
 layout(location = 0) in vec2 flat_uv;
@@ -31,8 +34,17 @@ vec2 direction_to_projection_uv(vec3 unnormalized_direction,
                                 out bool valid)
 {
     vec3 direction = normalize(unnormalized_direction);
-    float longitude = atan(direction.x, -direction.z);
-    float latitude = asin(clamp(direction.y, -1.0, 1.0));
+    /* The eye may sit off the dome centre (head motion, zoom, height):
+     * follow the ray to the unit sphere and look up that point. */
+    vec3 eye = view.eye_offset.xyz;
+    if (dot(eye, eye) > 0.0) {
+        float b = dot(eye, direction);
+        float t = -b + sqrt(b * b - dot(eye, eye) + 1.0);
+        direction = normalize(eye + t * direction);
+    }
+    float longitude = atan(direction.x, -direction.z) + view.stereo_offset.x;
+    float latitude = asin(clamp(direction.y, -1.0, 1.0)) +
+                     view.stereo_offset.y;
     valid = true;
 
     if (view.modes.x == PROJECTION_EQUIRECT_180) {
@@ -76,13 +88,25 @@ vec3 ycbcr_to_rgb(float y, vec2 cbcr)
     vec3 rgb = vec3(luma + 1.5748 * chroma.y,
                     luma - 0.18733 * chroma.x - 0.46813 * chroma.y,
                     luma + 1.8556 * chroma.x);
-    return clamp(rgb, 0.0, 1.0);
+    return rgb;
+}
+
+/* Brightness, contrast, saturation and gamma; neutral values leave the
+ * colour untouched. */
+vec3 adjust_picture(vec3 rgb)
+{
+    rgb = (rgb - 0.5) * view.picture.y + 0.5 + view.picture.x;
+    float luma = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+    rgb = clamp(mix(vec3(luma), rgb, view.picture.z), 0.0, 1.0);
+    if (view.picture.w != 1.0)
+        rgb = pow(rgb, vec3(1.0 / view.picture.w));
+    return rgb;
 }
 
 void main()
 {
     bool valid = true;
-    vec2 projection_uv = flat_uv;
+    vec2 projection_uv = flat_uv + view.stereo_offset.zw;
     if (view.modes.x != PROJECTION_FLAT)
         projection_uv = direction_to_projection_uv(projection_direction,
                                                     valid);
@@ -98,5 +122,6 @@ void main()
     source_uv = clamp(source_uv, region_min + half_texel,
                       region_max - half_texel);
     vec3 crycb = texture(video_frame, source_uv).rgb * 255.0;
-    output_color = vec4(ycbcr_to_rgb(crycb.g, crycb.br), 1.0);
+    output_color = vec4(adjust_picture(ycbcr_to_rgb(crycb.g, crycb.br)),
+                        1.0);
 }

@@ -26,6 +26,7 @@
 #include "browser-ui.h"
 #include "player-ui.h"
 #include "settings.h"
+#include "title-settings.h"
 #include "trickplay.h"
 #include "ui-draw.h"
 #include "nv12-playback-ipc.h"
@@ -35,6 +36,7 @@
 #define MAX_IMAGES 8U
 #define VIDEO_BUFFER_COUNT 12U
 #define UBO_STRIDE 256U
+#define PI_F 3.14159265358979f
 #define DRM_FORMAT_MOD_LINEAR UINT64_C(0)
 #define DRM_FORMAT_MOD_QCOM_COMPRESSED UINT64_C(0x0500000000000001)
 #define UI_WIDTH PLAYER_UI_WIDTH
@@ -62,6 +64,13 @@ struct view_uniform {
     float source_info[4];
     float video_scale[4]; /* TP10: visible / padded size of the planes */
     float levels[4];      /* black, white, chroma range (8-bit codes) */
+    /* Eye position inside the video dome (radius 1 m, dome axes): head
+     * motion (6DoF), zoom, height and slide. */
+    float eye_offset[4];
+    /* This eye's stereo offset: longitude and latitude shift (radians) and
+     * the same as texture offset for the flat screen. */
+    float stereo_offset[4];
+    float picture[4];     /* brightness, contrast, saturation, gamma */
 };
 
 _Static_assert(sizeof(struct view_uniform) <= UBO_STRIDE,
@@ -202,6 +211,15 @@ struct app {
     uint32_t *ui_cpu;    /* the panel draws here */
     struct player_ui player_ui;
     bool popup_open;
+    int popup_tab;                       /* enum player_ui_tab */
+    float adjust[PLAYER_ADJUST_COUNT];   /* see player_adjust_info */
+    char title_key[TITLE_KEY_SIZE];      /* titles.json entry, "" if none */
+    /* The dome (and the flat screen) is centred on this head position and
+     * faces this gaze yaw; set at the first frame and by "zentrieren". */
+    bool recenter_pending;
+    bool recenter_yaw;
+    XrVector3f dome_center;
+    float dome_yaw;                      /* radians */
     char title[256];
     /* Seek bar preview: trickplay pictures of the playing Jellyfin item. */
     struct trickplay *trickplay;
@@ -541,6 +559,85 @@ static void change_view(struct app *app, int control)
            app->video_levels);
 }
 
+/* ---- picture position and adjustments ------------------------------- */
+
+/* Per-title values go to the title's entry in titles.json, tilt and head
+ * motion to settings.json. */
+static void save_adjust(const struct app *app, int index)
+{
+    const struct player_adjust_info *info = &player_adjust_info[index];
+    if (info->global) {
+        settings_set_double(info->key, app->adjust[index]);
+        return;
+    }
+    if (!app->title_key[0])
+        return;
+    const char *names[PLAYER_ADJUST_COUNT];
+    for (int i = 0; i < PLAYER_ADJUST_COUNT; ++i)
+        names[i] = player_adjust_info[i].global ? NULL
+                                                : player_adjust_info[i].key;
+    if (title_settings_save_numbers(app->title_key, "adjust", names,
+                                    app->adjust, PLAYER_ADJUST_COUNT) < 0)
+        fprintf(stderr, "picture adjustments could not be saved\n");
+}
+
+static float clamp_adjust(int index, float value)
+{
+    const struct player_adjust_info *info = &player_adjust_info[index];
+    return value < info->minimum ? info->minimum
+           : value > info->maximum ? info->maximum : value;
+}
+
+/* Global values at startup, per-title values when a title starts. */
+static void load_adjust(struct app *app, bool global)
+{
+    const char *names[PLAYER_ADJUST_COUNT];
+    for (int i = 0; i < PLAYER_ADJUST_COUNT; ++i) {
+        const struct player_adjust_info *info = &player_adjust_info[i];
+        names[i] = info->global ? NULL : info->key;
+        if (info->global == global)
+            app->adjust[i] = info->standard;
+        if (global && info->global)
+            app->adjust[i] = clamp_adjust(
+                i, (float)settings_get_double(info->key, info->standard));
+    }
+    if (!global && app->title_key[0]) {
+        float values[PLAYER_ADJUST_COUNT];
+        memcpy(values, app->adjust, sizeof(values));
+        if (title_settings_load_numbers(app->title_key, "adjust", names,
+                                        values, PLAYER_ADJUST_COUNT) > 0)
+            for (int i = 0; i < PLAYER_ADJUST_COUNT; ++i)
+                if (!player_adjust_info[i].global)
+                    app->adjust[i] = clamp_adjust(i, values[i]);
+    }
+}
+
+static void change_adjust(struct app *app, int control)
+{
+    int index = (control - PLAYER_UI_ADJUST) / 2;
+    int direction = (control - PLAYER_UI_ADJUST) % 2 ? 1 : -1;
+    app->adjust[index] = player_adjust_step((enum player_adjust)index,
+                                            app->adjust[index], direction);
+    save_adjust(app, index);
+    app->ui_dirty = true;
+    printf("player_adjust %s=%.3f\n", player_adjust_info[index].key,
+           app->adjust[index]);
+}
+
+/* "Zurücksetzen" of the position or the picture tab. */
+static void reset_adjust(struct app *app, bool picture)
+{
+    for (int i = 0; i < PLAYER_ADJUST_COUNT; ++i) {
+        bool is_picture = i >= PLAYER_ADJUST_BRIGHTNESS;
+        if (is_picture != picture || i == PLAYER_ADJUST_HEAD_MOTION)
+            continue;
+        app->adjust[i] = player_adjust_info[i].standard;
+        save_adjust(app, i);
+    }
+    app->ui_dirty = true;
+    printf("player_adjust_reset picture=%d\n", picture);
+}
+
 /* Scrub preview settings from the view popup; global, kept in
  * settings.json. */
 static void change_preview(struct app *app, int control)
@@ -732,6 +829,28 @@ static struct mat4 rotation_from_pose(XrPosef pose)
         2*x*z + 2*y*w,     2*y*z - 2*x*w,     1 - 2*x*x - 2*y*y, 0,
         0,                 0,                 0,                 1,
     }};
+}
+
+/* Rotation about the x (0), y (1) or z (2) axis, right-handed. */
+static struct mat4 rotation_axis(int axis, float angle)
+{
+    float c = cosf(angle), s = sinf(angle);
+    struct mat4 m = {{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}};
+    int a = (axis + 1) % 3, b = (axis + 2) % 3;
+    m.v[a * 4 + a] = c;
+    m.v[b * 4 + b] = c;
+    m.v[a * 4 + b] = s;  /* column a, row b */
+    m.v[b * 4 + a] = -s; /* column b, row a */
+    return m;
+}
+
+static XrVector3f transform_direction(struct mat4 m, XrVector3f v)
+{
+    return (XrVector3f){
+        m.v[0] * v.x + m.v[4] * v.y + m.v[8] * v.z,
+        m.v[1] * v.x + m.v[5] * v.y + m.v[9] * v.z,
+        m.v[2] * v.x + m.v[6] * v.y + m.v[10] * v.z,
+    };
 }
 
 static struct mat4 projection_from_fov(XrFovf fov)
@@ -1422,6 +1541,8 @@ static struct player_ui_state player_state(const struct app *app)
         .paused = app->player_state == NV12_PLAYER_PAUSED,
         .grabbed = app->grab_hand >= 0,
         .popup_open = app->popup_open,
+        .popup_tab = app->popup_tab,
+        .adjust = app->adjust,
         .projection_mode = app->projection_mode,
         .stereo_layout = app->stereo_layout,
         .swap_eyes = app->swap_eyes,
@@ -2176,6 +2297,19 @@ static void sync_player_input(struct app *app, XrTime time)
         } else if (action == PLAYER_UI_VIEW_POPUP) {
             app->popup_open = !app->popup_open;
             app->ui_dirty = true;
+        } else if (action >= PLAYER_UI_ADJUST &&
+                   action < PLAYER_UI_ADJUST_END) {
+            change_adjust(app, action);
+        } else if (action >= PLAYER_UI_TAB &&
+                   action < PLAYER_UI_TAB + PLAYER_UI_TAB_COUNT) {
+            app->popup_tab = action - PLAYER_UI_TAB;
+            app->ui_dirty = true;
+        } else if (action == PLAYER_UI_RECENTER) {
+            app->recenter_pending = true;
+            app->recenter_yaw = true;
+        } else if (action == PLAYER_UI_RESET_POSITION ||
+                   action == PLAYER_UI_RESET_PICTURE) {
+            reset_adjust(app, action == PLAYER_UI_RESET_PICTURE);
         } else if (action >= PLAYER_UI_PREVIEW_MODE) {
             change_preview(app, action);
         } else if (action >= PLAYER_UI_PROJECTION) {
@@ -2693,6 +2827,17 @@ static void begin_playback(struct app *app, int fd, const char *location)
         item[length < sizeof(item) ? length : 0] = '\0';
         trickplay_open(app->trickplay, item);
     }
+    if (location[0])
+        title_settings_key(location, app->title_key, sizeof(app->title_key));
+    else
+        app->title_key[0] = '\0';
+    load_adjust(app, false);
+    /* Centre the dome on the head at the first rendered frame; the gaze
+     * yaw only changes on "zentrieren" (SteamVR's seated origin faces the
+     * viewer already). */
+    app->recenter_pending = true;
+    app->recenter_yaw = false;
+    app->dome_yaw = 0.0f;
     app->ipc_fd = fd;
     app->playing = true;
     app->awaiting_command = false;
@@ -2896,12 +3041,90 @@ static void render_frame(struct app *app)
     XrSwapchainImageWaitInfo image_wait = {.type = XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, .timeout = XR_INFINITE_DURATION};
     need_xr("xrWaitSwapchainImage", xrWaitSwapchainImage(app->swapchain, &image_wait));
     need(image_index < app->image_count, "invalid OpenXR swapchain index");
+    /* Dome placement: centred on the head of the first frame (or of
+     * "zentrieren"), turned by the gaze yaw and the viewer's rotation.
+     * world_to_dome undoes yaw, then tilt, then roll. */
+    if (app->recenter_pending &&
+        (center.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT)) {
+        app->dome_center = center.pose.position;
+        if (app->recenter_yaw) {
+            XrVector3f gaze = rotate_vector(center.pose.orientation,
+                                            (XrVector3f){0, 0, -1});
+            app->dome_yaw = atan2f(gaze.x, -gaze.z);
+        }
+        app->recenter_pending = false;
+        printf("player_recenter x=%.3f y=%.3f z=%.3f yaw=%.1f\n",
+               app->dome_center.x, app->dome_center.y, app->dome_center.z,
+               app->dome_yaw * 180.0f / PI_F);
+    }
+    const float degrees = PI_F / 180.0f;
+    float yaw = app->dome_yaw + app->adjust[PLAYER_ADJUST_YAW] * degrees;
+    float tilt = app->adjust[PLAYER_ADJUST_TILT] * degrees;
+    float roll = app->adjust[PLAYER_ADJUST_ROLL] * degrees;
+    struct mat4 world_to_dome = multiply(
+        rotation_axis(2, roll),
+        multiply(rotation_axis(0, -tilt), rotation_axis(1, yaw)));
+    struct mat4 dome_to_world = multiply(
+        rotation_axis(1, -yaw),
+        multiply(rotation_axis(0, tilt), rotation_axis(2, -roll)));
+    /* Eye inside the dome (radius 1 m): head motion, then zoom, height and
+     * slide along the dome axes. */
+    float motion = app->adjust[PLAYER_ADJUST_HEAD_MOTION];
+    XrVector3f head = {
+        (center.pose.position.x - app->dome_center.x) * motion,
+        (center.pose.position.y - app->dome_center.y) * motion,
+        (center.pose.position.z - app->dome_center.z) * motion,
+    };
+    XrVector3f eye_position = transform_direction(world_to_dome, head);
+    eye_position.x -= app->adjust[PLAYER_ADJUST_SLIDE];
+    eye_position.y -= app->adjust[PLAYER_ADJUST_HEIGHT];
+    eye_position.z -= app->adjust[PLAYER_ADJUST_ZOOM];
+    float eye_distance = sqrtf(vector_dot(eye_position, eye_position));
+    if (eye_distance > 0.9f) {
+        eye_position.x *= 0.9f / eye_distance;
+        eye_position.y *= 0.9f / eye_distance;
+        eye_position.z *= 0.9f / eye_distance;
+    }
+    /* Flat screen: 2 m wide, 2 m ahead of the dome centre, moved and
+     * turned like the dome. */
+    float eye_width = (float)app->video_width /
+                      (app->stereo_layout == NV12_STEREO_SBS ? 2.0f : 1.0f);
+    float eye_height = (float)app->video_height /
+                       (app->stereo_layout == NV12_STEREO_TB ? 2.0f : 1.0f);
+    float screen_height = eye_width > 0.0f && eye_height > 0.0f
+                              ? 2.0f * eye_height / eye_width : 1.0f;
+    XrVector3f screen = transform_direction(
+        dome_to_world,
+        (XrVector3f){app->adjust[PLAYER_ADJUST_SLIDE],
+                     app->adjust[PLAYER_ADJUST_HEIGHT],
+                     -(2.0f - app->adjust[PLAYER_ADJUST_ZOOM])});
+    struct mat4 screen_model = dome_to_world;
+    screen_model.v[12] = app->dome_center.x + screen.x;
+    screen_model.v[13] = app->dome_center.y + screen.y;
+    screen_model.v[14] = app->dome_center.z + screen.z;
+    struct mat4 screen_scale = {{2.0f, 0, 0, 0, 0, screen_height, 0, 0,
+                                 0, 0, 1, 0, 0, 0, 0, 1}};
+    screen_model = multiply(screen_model, screen_scale);
     for (uint32_t eye = 0; eye < 2; ++eye) {
         struct mat4 projection = projection_from_fov(views[eye].fov);
         struct mat4 view = view_from_pose(views[eye].pose);
+        float side = eye == 0 ? -1.0f : 1.0f;
+        float stereo_x = app->adjust[PLAYER_ADJUST_STEREO_X] * 0.5f;
+        float stereo_y = app->adjust[PLAYER_ADJUST_STEREO_Y] * 0.5f;
         struct view_uniform uniform = {
-            .mvp = multiply(projection, view),
-            .camera_to_world = rotation_from_pose(views[eye].pose),
+            .mvp = multiply(projection, multiply(view, screen_model)),
+            .camera_to_world = multiply(world_to_dome,
+                                        rotation_from_pose(views[eye].pose)),
+            .eye_offset = {eye_position.x, eye_position.y, eye_position.z,
+                           0.0f},
+            .stereo_offset = {-side * stereo_x * degrees,
+                              -side * stereo_y * degrees,
+                              -side * stereo_x / 60.0f,
+                              side * stereo_y / 60.0f},
+            .picture = {app->adjust[PLAYER_ADJUST_BRIGHTNESS],
+                        app->adjust[PLAYER_ADJUST_CONTRAST],
+                        app->adjust[PLAYER_ADJUST_SATURATION],
+                        app->adjust[PLAYER_ADJUST_GAMMA]},
             .fov_tangents = {
                 tanf(views[eye].fov.angleLeft),
                 tanf(views[eye].fov.angleRight),
@@ -3088,6 +3311,7 @@ int main(int argc, char **argv)
     }
     app.trickplay = trickplay_create();
     load_preview_settings(&app);
+    load_adjust(&app, true);
     initialize_xr_vulkan(&app);
     XrGraphicsBindingVulkan2KHR binding = {.type = XR_TYPE_GRAPHICS_BINDING_VULKAN2_KHR,
         .instance = app.instance, .physicalDevice = app.physical, .device = app.device, .queueFamilyIndex = app.queue_family, .queueIndex = 0};

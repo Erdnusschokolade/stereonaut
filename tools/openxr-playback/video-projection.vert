@@ -23,8 +23,8 @@ void main()
     vec2 view_ndc = vec2(position.x, position.y * 2.0);
 
     if (view.modes.x == PROJECTION_FLAT) {
-        /* A 2:1 plane centred two metres in front of LOCAL-space origin. */
-        gl_Position = view.mvp * vec4(position, -2.0, 1.0);
+        /* Unit quad; mvp carries the screen's size, place and turn. */
+        gl_Position = view.mvp * vec4(position.x * 0.5, position.y, 0.0, 1.0);
     } else {
         /* Positive Vulkan viewport height maps NDC -Y to framebuffer top. */
         gl_Position = vec4(view_ndc.x, -view_ndc.y, 0.0, 1.0);

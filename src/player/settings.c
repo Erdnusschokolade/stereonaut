@@ -54,6 +54,21 @@ bool settings_get_bool(const char *key, bool fallback)
     return result;
 }
 
+double settings_get_double(const char *key, double fallback)
+{
+    json_object *root = NULL;
+    json_object *value = lookup(key, json_type_double, &root);
+    if (!value) {
+        if (root)
+            json_object_put(root);
+        value = lookup(key, json_type_int, &root);
+    }
+    double result = value ? json_object_get_double(value) : fallback;
+    if (root)
+        json_object_put(root);
+    return result;
+}
+
 /* Takes ownership of `value`. */
 static void store(const char *key, json_object *value)
 {
@@ -104,4 +119,9 @@ void settings_set_int(const char *key, int value)
 void settings_set_bool(const char *key, bool value)
 {
     store(key, json_object_new_boolean(value));
+}
+
+void settings_set_double(const char *key, double value)
+{
+    store(key, json_object_new_double(value));
 }

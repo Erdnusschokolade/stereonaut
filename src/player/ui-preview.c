@@ -142,9 +142,15 @@ static int write_ppm(const char *path, const uint8_t *bytes, unsigned width,
     return 0;
 }
 
-static int preview_player(const char *path, int hover, bool popup)
+static int preview_player(const char *path, int hover, bool popup, int tab)
 {
     struct player_ui ui = {0};
+    float adjust[PLAYER_ADJUST_COUNT];
+    for (int i = 0; i < PLAYER_ADJUST_COUNT; ++i)
+        adjust[i] = player_adjust_info[i].standard;
+    adjust[PLAYER_ADJUST_ZOOM] = 0.2f;
+    adjust[PLAYER_ADJUST_TILT] = -25.0f;
+    adjust[PLAYER_ADJUST_HEAD_MOTION] = 0.5f;
     struct player_ui_state state = {
         .title = "Über den Wolken – Alpenflug 8K",
         .position_us = INT64_C(754000000),
@@ -157,6 +163,8 @@ static int preview_player(const char *path, int hover, bool popup)
         .preview_perspective = true,
         .preview_fov = 100,
         .video_levels = 1,
+        .popup_tab = tab,
+        .adjust = adjust,
     };
     /* Hovering the seek bar shows the scrub preview (a stand-in picture of
      * one SBS eye). */
@@ -188,11 +196,12 @@ int main(int argc, char **argv)
 {
     if (argc >= 3 && strcmp(argv[1], "--player") == 0)
         return preview_player(argv[2], argc > 3 ? atoi(argv[3]) : 0,
-                              argc > 4 && atoi(argv[4]) != 0);
+                              argc > 4 && atoi(argv[4]) != 0,
+                              argc > 5 ? atoi(argv[5]) : 0);
     if (argc < 2) {
         fprintf(stderr,
                 "usage: %s OUTPUT.ppm [HOVER_ID]\n"
-                "       %s --player OUTPUT.ppm [HOVER_ID] [POPUP]\n",
+                "       %s --player OUTPUT.ppm [HOVER_ID] [POPUP] [TAB]\n",
                 argv[0], argv[0]);
         return 2;
     }

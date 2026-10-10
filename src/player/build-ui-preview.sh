@@ -2,7 +2,7 @@
 # Builds the off-headset preview of the browser panel (any Linux host with
 # freetype2, libjpeg, libcurl and json-c):
 #   build/ui-preview out.ppm [HOVER_ID]
-#   build/ui-preview --player out.ppm [HOVER_ID] [POPUP]
+#   build/ui-preview --player out.ppm [HOVER_ID] [POPUP] [TAB]
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)

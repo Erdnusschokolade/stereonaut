@@ -79,6 +79,34 @@ static json_object *read_store(const char *path)
     return root;
 }
 
+/* Writes the store atomically; consumes `root`. */
+static int write_store(const char *path, json_object *root)
+{
+    char temporary[PATH_MAX + 8];
+    snprintf(temporary, sizeof(temporary), "%s.tmp", path);
+    int result = -1;
+    if (json_object_to_file_ext(temporary, root, JSON_C_TO_STRING_PRETTY) == 0) {
+        chmod(temporary, 0600);
+        result = rename(temporary, path);
+    }
+    if (result < 0)
+        unlink(temporary);
+    json_object_put(root);
+    return result;
+}
+
+/* The entry of `key`, created if missing. */
+static json_object *store_entry(json_object *root, const char *key)
+{
+    json_object *entry = NULL;
+    if (!json_object_object_get_ex(root, key, &entry) ||
+        !json_object_is_type(entry, json_type_object)) {
+        entry = json_object_new_object();
+        json_object_object_add(root, key, entry);
+    }
+    return entry;
+}
+
 static uint32_t lookup(const char *const *names, size_t count,
                        const char *text, uint32_t fallback)
 {
@@ -136,12 +164,7 @@ int title_settings_save(const char *key, const struct title_settings *settings)
     json_object *root = read_store(path);
     if (!root)
         return -1;
-    json_object *entry = NULL;
-    if (!json_object_object_get_ex(root, key, &entry) ||
-        !json_object_is_type(entry, json_type_object)) {
-        entry = json_object_new_object();
-        json_object_object_add(root, key, entry);
-    }
+    json_object *entry = store_entry(root, key);
     json_object_object_add(
         entry, "projection",
         json_object_new_string(projection_names[settings->projection_mode]));
@@ -153,15 +176,52 @@ int title_settings_save(const char *key, const struct title_settings *settings)
     json_object_object_add(
         entry, "levels",
         json_object_new_string(levels_names[settings->video_levels]));
-    char temporary[PATH_MAX + 8];
-    snprintf(temporary, sizeof(temporary), "%s.tmp", path);
-    int result = -1;
-    if (json_object_to_file_ext(temporary, root, JSON_C_TO_STRING_PRETTY) == 0) {
-        chmod(temporary, 0600);
-        result = rename(temporary, path);
+    return write_store(path, root);
+}
+
+int title_settings_load_numbers(const char *key, const char *group,
+                                const char *const *names, float *values,
+                                size_t count)
+{
+    char path[PATH_MAX];
+    if (store_path(path, sizeof(path), false) < 0)
+        return -1;
+    json_object *root = read_store(path);
+    if (!root)
+        return -1;
+    json_object *entry = NULL, *numbers = NULL, *value = NULL;
+    int result = 0;
+    if (json_object_object_get_ex(root, key, &entry) &&
+        json_object_is_type(entry, json_type_object) &&
+        json_object_object_get_ex(entry, group, &numbers) &&
+        json_object_is_type(numbers, json_type_object)) {
+        for (size_t i = 0; i < count; ++i)
+            if (names[i] &&
+                json_object_object_get_ex(numbers, names[i], &value) &&
+                (json_object_is_type(value, json_type_double) ||
+                 json_object_is_type(value, json_type_int)))
+                values[i] = (float)json_object_get_double(value);
+        result = 1;
     }
-    if (result < 0)
-        unlink(temporary);
     json_object_put(root);
     return result;
+}
+
+int title_settings_save_numbers(const char *key, const char *group,
+                                const char *const *names,
+                                const float *values, size_t count)
+{
+    char path[PATH_MAX];
+    if (store_path(path, sizeof(path), true) < 0)
+        return -1;
+    json_object *root = read_store(path);
+    if (!root)
+        return -1;
+    json_object *numbers = json_object_new_object();
+    for (size_t i = 0; i < count; ++i)
+        if (names[i])
+            json_object_object_add(numbers, names[i],
+                                   json_object_new_double(values[i]));
+    json_object_object_add(store_entry(root, key), group, numbers);
+    return write_store(path, root);
 }

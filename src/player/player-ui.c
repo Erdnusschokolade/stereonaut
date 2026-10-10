@@ -9,20 +9,20 @@
 
 /* Control card. */
 #define CARD_X 40
-#define CARD_Y 270
+#define CARD_Y 360
 #define CARD_W 1520
 #define CARD_H 310
 
 /* Seek bar. */
 #define BAR_X 250
 #define BAR_W 1100
-#define BAR_Y 366
+#define BAR_Y (CARD_Y + 96)
 #define BAR_H 12
-#define BAR_HIT_TOP 338
-#define BAR_HIT_BOTTOM 406
+#define BAR_HIT_TOP (CARD_Y + 68)
+#define BAR_HIT_BOTTOM (CARD_Y + 136)
 
 /* Transport row. */
-#define ROW_Y 490
+#define ROW_Y (CARD_Y + 220)
 #define BACK_X 116
 #define SKIP_BACK_X 650
 #define PLAY_X 800
@@ -38,25 +38,55 @@
 #define PREVIEW_LABEL_H 40
 #define PREVIEW_BOTTOM (CARD_Y - 12)
 
-/* View popup above the card, right-aligned, in three columns: scrub
- * preview settings, picture (levels) and the view of the video. */
+/* Settings popup above the card: a tab row and three columns of controls
+ * in up to three rows. */
 #define POPUP_X 180
 #define POPUP_Y 10
 #define POPUP_W 1380
-#define POPUP_H 252
-#define COLUMN_W (3 * CHIP_W + 2 * CHIP_GAP)
-#define PREVIEW_CHIP_X (POPUP_X + 22)
-#define LEVELS_CHIP_X (POPUP_X + 482)
-#define CHIP_X (POPUP_X + 942)
-#define CHIP_W 132
+#define POPUP_H 334
+#define COLUMN_W 416
+#define COLUMN_X(column) (POPUP_X + 22 + (column) * 460)
+#define TAB_Y (POPUP_Y + 18)
+#define TAB_W 200
+#define ROW_LABEL_Y(row) (POPUP_Y + 86 + (row) * 82)
+#define ROW_CHIP_Y(row) (ROW_LABEL_Y(row) + 32)
+#define STEPPER_Y(row) (POPUP_Y + 98 + (row) * 70)
+#define STEPPER_LABEL_W 170
+#define STEPPER_BUTTON_W 56
 #define CHIP_GAP 10
 #define CHIP_H 44
-#define CHIPS1_Y (POPUP_Y + 50)
-#define CHIPS2_Y (POPUP_Y + 132)
-#define SWAP_Y (POPUP_Y + 194)
 
 const int player_ui_preview_fovs[PLAYER_UI_PREVIEW_FOV_COUNT] = {
     60, 80, 100, 120,
+};
+
+const struct player_adjust_info player_adjust_info[PLAYER_ADJUST_COUNT] = {
+    [PLAYER_ADJUST_ZOOM] = {"Zoom", "zoom", -0.5f, 0.8f, 0.05f, 0.0f,
+                            100.0f, "%+.0f cm", false},
+    [PLAYER_ADJUST_HEIGHT] = {"Höhe", "height", -0.5f, 0.5f, 0.05f, 0.0f,
+                              100.0f, "%+.0f cm", false},
+    [PLAYER_ADJUST_SLIDE] = {"Seitlich", "slide", -0.5f, 0.5f, 0.05f, 0.0f,
+                             100.0f, "%+.0f cm", false},
+    [PLAYER_ADJUST_TILT] = {"Neigung", "tilt", -90.0f, 90.0f, 5.0f, 0.0f,
+                            1.0f, "%+.0f°", true},
+    [PLAYER_ADJUST_YAW] = {"Drehung", "yaw", -180.0f, 180.0f, 5.0f, 0.0f,
+                           1.0f, "%+.0f°", false},
+    [PLAYER_ADJUST_ROLL] = {"Kippen", "roll", -30.0f, 30.0f, 1.0f, 0.0f,
+                            1.0f, "%+.0f°", false},
+    [PLAYER_ADJUST_STEREO_X] = {"Stereo horiz.", "stereo_x", -3.0f, 3.0f,
+                                0.1f, 0.0f, 1.0f, "%+.1f°", false},
+    [PLAYER_ADJUST_STEREO_Y] = {"Stereo vert.", "stereo_y", -2.0f, 2.0f,
+                                0.1f, 0.0f, 1.0f, "%+.1f°", false},
+    [PLAYER_ADJUST_HEAD_MOTION] = {"Stärke", "head_motion", 0.0f, 1.5f,
+                                   0.1f, 0.0f, 100.0f, "%.0f %%", true},
+    [PLAYER_ADJUST_BRIGHTNESS] = {"Helligkeit", "brightness", -0.3f, 0.3f,
+                                  0.02f, 0.0f, 100.0f, "%+.0f", false},
+    [PLAYER_ADJUST_CONTRAST] = {"Kontrast", "contrast", 0.5f, 1.5f, 0.05f,
+                                1.0f, 100.0f, "%.0f %%", false},
+    [PLAYER_ADJUST_SATURATION] = {"Sättigung", "saturation", 0.0f, 2.0f,
+                                  0.1f, 1.0f, 100.0f, "%.0f %%", false},
+    [PLAYER_ADJUST_GAMMA] = {"Gamma", "gamma", 0.5f, 2.0f, 0.05f, 1.0f, 1.0f,
+                             "%.2f", false},
 };
 
 static const struct ui_color color_card = UI_RGBA(17, 18, 22, 225);
@@ -107,19 +137,209 @@ static bool in_rect(float x, float y, float rx, float ry, float rw, float rh)
     return x >= rx && x < rx + rw && y >= ry && y < ry + rh;
 }
 
-static void chip_rect(int row_y, int index, int *x, int *width)
+/* ---- popup layout -------------------------------------------------------
+ * The popup is described once as a list of widgets; drawing and hit
+ * testing both walk it. */
+
+enum widget_kind { WIDGET_CHIP, WIDGET_TEXT, WIDGET_HINT, WIDGET_VALUE };
+
+struct widget {
+    enum widget_kind kind;
+    int control; /* chips only */
+    int x, y, width;
+    bool selected;
+    char text[96];
+};
+
+#define MAX_WIDGETS 64
+
+struct popup_layout {
+    struct widget items[MAX_WIDGETS];
+    int count;
+};
+
+static struct widget *add_widget(struct popup_layout *layout,
+                                 enum widget_kind kind, int x, int y,
+                                 int width, const char *text)
 {
-    *x = CHIP_X + index * (CHIP_W + CHIP_GAP);
-    *width = CHIP_W;
-    (void)row_y;
+    if (layout->count >= MAX_WIDGETS)
+        return &layout->items[MAX_WIDGETS - 1];
+    struct widget *widget = &layout->items[layout->count++];
+    *widget = (struct widget){.kind = kind, .x = x, .y = y, .width = width};
+    snprintf(widget->text, sizeof(widget->text), "%s", text);
+    return widget;
 }
 
-/* `count` equal chips across the column starting at `column_x`. */
-static void column_chip_rect(int column_x, int count, int index, int *x,
-                             int *width)
+static void add_chip(struct popup_layout *layout, int control, int x, int y,
+                     int width, const char *text, bool selected)
 {
-    *width = (COLUMN_W - (count - 1) * CHIP_GAP) / count;
-    *x = column_x + index * (*width + CHIP_GAP);
+    struct widget *chip = add_widget(layout, WIDGET_CHIP, x, y, width, text);
+    chip->control = control;
+    chip->selected = selected;
+}
+
+/* `count` equal chips across a column. */
+static void add_chip_row(struct popup_layout *layout, int column, int row,
+                         int count, int first_control,
+                         const char *const *labels, int selected)
+{
+    int width = (COLUMN_W - (count - 1) * CHIP_GAP) / count;
+    for (int i = 0; i < count; ++i)
+        add_chip(layout, first_control + i,
+                 COLUMN_X(column) + i * (width + CHIP_GAP), ROW_CHIP_Y(row),
+                 width, labels[i], i == selected);
+}
+
+static void format_adjust(char text[32], enum player_adjust adjust,
+                          float value)
+{
+    const struct player_adjust_info *info = &player_adjust_info[adjust];
+    if (adjust == PLAYER_ADJUST_HEAD_MOTION && value <= 0.0f) {
+        snprintf(text, 32, "Aus");
+        return;
+    }
+    float shown = value * info->display_scale;
+    if (shown > -0.05f && shown < 0.05f)
+        shown = 0.0f; /* no "-0" */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+    snprintf(text, 32, info->format, shown);
+#pragma GCC diagnostic pop
+}
+
+/* Label, [-], value, [+] on one line. */
+static void add_stepper(struct popup_layout *layout,
+                        const struct player_ui_state *state, int column,
+                        int y, enum player_adjust adjust, const char *label)
+{
+    int x = COLUMN_X(column);
+    add_widget(layout, WIDGET_TEXT, x, y + 10, STEPPER_LABEL_W,
+               label ? label : player_adjust_info[adjust].label);
+    int minus_x = x + STEPPER_LABEL_W + 6;
+    int plus_x = x + COLUMN_W - STEPPER_BUTTON_W;
+    add_chip(layout, PLAYER_UI_ADJUST + 2 * (int)adjust, minus_x, y,
+             STEPPER_BUTTON_W, "−", false);
+    add_chip(layout, PLAYER_UI_ADJUST + 2 * (int)adjust + 1, plus_x, y,
+             STEPPER_BUTTON_W, "+", false);
+    char value[32];
+    format_adjust(value, adjust, state->adjust ? state->adjust[adjust]
+                                               : player_adjust_info[adjust]
+                                                     .standard);
+    int value_x = minus_x + STEPPER_BUTTON_W;
+    add_widget(layout, WIDGET_VALUE, value_x, y + 8, plus_x - value_x, value);
+}
+
+static void layout_popup(const struct player_ui_state *state,
+                         struct popup_layout *layout)
+{
+    layout->count = 0;
+    static const char *const tabs[PLAYER_UI_TAB_COUNT] = {
+        "Ansicht", "Position", "Bild",
+    };
+    for (int i = 0; i < PLAYER_UI_TAB_COUNT; ++i)
+        add_chip(layout, PLAYER_UI_TAB + i,
+                 COLUMN_X(0) + i * (TAB_W + CHIP_GAP), TAB_Y, TAB_W, tabs[i],
+                 state->popup_tab == i);
+
+    if (state->popup_tab == PLAYER_UI_TAB_VIEW) {
+        static const char *const modes[2] = {"Original", "Perspektive"};
+        static const char *const projections[3] = {"Flach", "180°", "360°"};
+        static const char *const layouts[3] = {"Mono", "SBS", "TB"};
+        const char *fovs[PLAYER_UI_PREVIEW_FOV_COUNT];
+        char fov_text[PLAYER_UI_PREVIEW_FOV_COUNT][16];
+        int fov_selected = -1;
+        for (int i = 0; i < PLAYER_UI_PREVIEW_FOV_COUNT; ++i) {
+            snprintf(fov_text[i], sizeof(fov_text[i]), "%d°",
+                     player_ui_preview_fovs[i]);
+            fovs[i] = fov_text[i];
+            if (state->preview_fov == player_ui_preview_fovs[i])
+                fov_selected = i;
+        }
+        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(0), 0,
+                   "Vorschau beim Spulen");
+        add_chip_row(layout, 0, 0, 2, PLAYER_UI_PREVIEW_MODE, modes,
+                     state->preview_perspective ? 1 : 0);
+        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(1), 0,
+                   "Sichtfeld (Perspektive)");
+        add_chip_row(layout, 0, 1, PLAYER_UI_PREVIEW_FOV_COUNT,
+                     PLAYER_UI_PREVIEW_FOV, fovs, fov_selected);
+
+        add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(0), 0,
+                   "Kopfbewegung (6DoF)");
+        add_stepper(layout, state, 1, ROW_CHIP_Y(0),
+                    PLAYER_ADJUST_HEAD_MOTION, NULL);
+        add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(1), 0,
+                   "Ausrichtung");
+        add_chip(layout, PLAYER_UI_RECENTER, COLUMN_X(1), ROW_CHIP_Y(1),
+                 COLUMN_W, "Bild auf Blick zentrieren", false);
+
+        add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(0), 0,
+                   "Projektion");
+        add_chip_row(layout, 2, 0, 3, PLAYER_UI_PROJECTION, projections,
+                     (int)state->projection_mode);
+        add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(1), 0,
+                   "Stereo");
+        add_chip_row(layout, 2, 1, 3, PLAYER_UI_STEREO, layouts,
+                     (int)state->stereo_layout);
+        add_chip(layout, PLAYER_UI_SWAP_EYES, COLUMN_X(2), ROW_CHIP_Y(2),
+                 COLUMN_W,
+                 state->swap_eyes ? "Augen getauscht" : "Augen tauschen",
+                 state->swap_eyes);
+    } else if (state->popup_tab == PLAYER_UI_TAB_POSITION) {
+        static const enum player_adjust grid[3][3] = {
+            {PLAYER_ADJUST_ZOOM, PLAYER_ADJUST_HEIGHT, PLAYER_ADJUST_SLIDE},
+            {PLAYER_ADJUST_TILT, PLAYER_ADJUST_YAW, PLAYER_ADJUST_ROLL},
+            {PLAYER_ADJUST_STEREO_X, PLAYER_ADJUST_STEREO_Y,
+             PLAYER_ADJUST_COUNT},
+        };
+        for (int column = 0; column < 3; ++column)
+            for (int row = 0; row < 3; ++row)
+                if (grid[column][row] != PLAYER_ADJUST_COUNT)
+                    add_stepper(layout, state, column, STEPPER_Y(row),
+                                grid[column][row], NULL);
+        add_chip(layout, PLAYER_UI_RESET_POSITION, COLUMN_X(2), STEPPER_Y(2),
+                 COLUMN_W, "Zurücksetzen", false);
+        add_widget(layout, WIDGET_HINT, COLUMN_X(0), STEPPER_Y(3) - 4, 0,
+                   "Neigung und Kopfbewegung gelten für alle Titel, "
+                   "alles andere je Titel.");
+    } else {
+        static const char *const levels[3] = {"Norm", "Tief", "Voll"};
+        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(0), 0,
+                   "Schwarzwert");
+        add_chip_row(layout, 0, 0, 3, PLAYER_UI_LEVELS, levels,
+                     (int)state->video_levels);
+        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(1) + 6, 0,
+                   "Norm: Schwarz 16, Weiß 235");
+        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(1) + 36, 0,
+                   "Tief: Zeichnung unter Schwarz");
+        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(1) + 66, 0,
+                   "Voll: Full Range 0–255");
+        add_stepper(layout, state, 1, STEPPER_Y(0),
+                    PLAYER_ADJUST_BRIGHTNESS, NULL);
+        add_stepper(layout, state, 1, STEPPER_Y(1), PLAYER_ADJUST_CONTRAST,
+                    NULL);
+        add_stepper(layout, state, 1, STEPPER_Y(2),
+                    PLAYER_ADJUST_SATURATION, NULL);
+        add_stepper(layout, state, 2, STEPPER_Y(0), PLAYER_ADJUST_GAMMA,
+                    NULL);
+        add_chip(layout, PLAYER_UI_RESET_PICTURE, COLUMN_X(2), STEPPER_Y(2),
+                 COLUMN_W, "Zurücksetzen", false);
+    }
+}
+
+float player_adjust_step(enum player_adjust adjust, float value,
+                         int direction)
+{
+    const struct player_adjust_info *info = &player_adjust_info[adjust];
+    /* Stay on the step grid so repeated steps do not drift. */
+    float steps = (value - info->standard) / info->step;
+    long index = (long)(steps + (steps < 0.0f ? -0.5f : 0.5f)) + direction;
+    float result = info->standard + (float)index * info->step;
+    if (result < info->minimum)
+        result = info->minimum;
+    if (result > info->maximum)
+        result = info->maximum;
+    return result;
 }
 
 /* ---- drawing ----------------------------------------------------------- */
@@ -154,68 +374,36 @@ static void draw_popup(struct player_ui *ui, struct ui_canvas *canvas,
                        UI_RGBA(17, 18, 22, 240));
     ui_stroke_round_rect(canvas, POPUP_X, POPUP_Y, POPUP_W, POPUP_H, 26, 2,
                          color_border);
-    static const char *const projections[3] = {"Flach", "180°", "360°"};
-    static const char *const layouts[3] = {"Mono", "SBS", "TB"};
-    ui_draw_text(canvas, ui->font, 22, CHIP_X, POPUP_Y + 18, 0, UI_ALIGN_LEFT,
-                 color_dim, "Projektion");
-    ui_draw_text(canvas, ui->font, 22, CHIP_X, POPUP_Y + 100, 0,
-                 UI_ALIGN_LEFT, color_dim, "Stereo");
-    for (int i = 0; i < 3; ++i) {
-        int x, width;
-        chip_rect(CHIPS1_Y, i, &x, &width);
-        draw_chip(ui, canvas, x, CHIPS1_Y, width, projections[i],
-                  state->projection_mode == (uint32_t)i,
-                  state->hover == PLAYER_UI_PROJECTION + i);
-        draw_chip(ui, canvas, x, CHIPS2_Y, width, layouts[i],
-                  state->stereo_layout == (uint32_t)i,
-                  state->hover == PLAYER_UI_STEREO + i);
-    }
-    int swap_width = 3 * CHIP_W + 2 * CHIP_GAP;
-    draw_chip(ui, canvas, CHIP_X, SWAP_Y, swap_width,
-              state->swap_eyes ? "Augen getauscht" : "Augen tauschen",
-              state->swap_eyes, state->hover == PLAYER_UI_SWAP_EYES);
-
-    ui_fill_rect(canvas, LEVELS_CHIP_X - 22, POPUP_Y + 20, 2, POPUP_H - 40,
+    ui_fill_rect(canvas, POPUP_X + 20, TAB_Y + CHIP_H + 10, POPUP_W - 40, 2,
                  color_border);
-    ui_fill_rect(canvas, CHIP_X - 22, POPUP_Y + 20, 2, POPUP_H - 40,
-                 color_border);
-    static const char *const levels[3] = {"Norm", "Tief", "Voll"};
-    ui_draw_text(canvas, ui->font, 22, LEVELS_CHIP_X, POPUP_Y + 18, 0,
-                 UI_ALIGN_LEFT, color_dim, "Schwarzwert");
-    for (int i = 0; i < 3; ++i) {
-        int x, width;
-        column_chip_rect(LEVELS_CHIP_X, 3, i, &x, &width);
-        draw_chip(ui, canvas, x, CHIPS1_Y, width, levels[i],
-                  state->video_levels == (uint32_t)i,
-                  state->hover == PLAYER_UI_LEVELS + i);
-    }
-    ui_draw_text(canvas, ui->font, 20, LEVELS_CHIP_X, POPUP_Y + 108, 0,
-                 UI_ALIGN_LEFT, color_dim, "Norm: Schwarz 16, Weiß 235");
-    ui_draw_text(canvas, ui->font, 20, LEVELS_CHIP_X, POPUP_Y + 138, 0,
-                 UI_ALIGN_LEFT, color_dim, "Tief: Zeichnung unter Schwarz");
-    ui_draw_text(canvas, ui->font, 20, LEVELS_CHIP_X, POPUP_Y + 168, 0,
-                 UI_ALIGN_LEFT, color_dim, "Voll: Full Range 0–255");
-    static const char *const modes[2] = {"Original", "Perspektive"};
-    ui_draw_text(canvas, ui->font, 22, PREVIEW_CHIP_X, POPUP_Y + 18, 0,
-                 UI_ALIGN_LEFT, color_dim, "Vorschau beim Spulen");
-    ui_draw_text(canvas, ui->font, 22, PREVIEW_CHIP_X, POPUP_Y + 100, 0,
-                 UI_ALIGN_LEFT, color_dim, "Sichtfeld (Perspektive)");
-    for (int i = 0; i < 2; ++i) {
-        int x, width;
-        column_chip_rect(PREVIEW_CHIP_X, 2, i, &x, &width);
-        draw_chip(ui, canvas, x, CHIPS1_Y, width, modes[i],
-                  state->preview_perspective == (i == 1),
-                  state->hover == PLAYER_UI_PREVIEW_MODE + i);
-    }
-    for (int i = 0; i < PLAYER_UI_PREVIEW_FOV_COUNT; ++i) {
-        int x, width;
-        column_chip_rect(PREVIEW_CHIP_X, PLAYER_UI_PREVIEW_FOV_COUNT, i, &x,
-                         &width);
-        char label[16];
-        snprintf(label, sizeof(label), "%d°", player_ui_preview_fovs[i]);
-        draw_chip(ui, canvas, x, CHIPS2_Y, width, label,
-                  state->preview_fov == player_ui_preview_fovs[i],
-                  state->hover == PLAYER_UI_PREVIEW_FOV + i);
+    for (int column = 1; column < 3; ++column)
+        ui_fill_rect(canvas, COLUMN_X(column) - 22, TAB_Y + CHIP_H + 26, 2,
+                     POPUP_H - CHIP_H - 64, color_border);
+    struct popup_layout layout;
+    layout_popup(state, &layout);
+    for (int i = 0; i < layout.count; ++i) {
+        const struct widget *widget = &layout.items[i];
+        switch (widget->kind) {
+        case WIDGET_CHIP:
+            draw_chip(ui, canvas, widget->x, widget->y, widget->width,
+                      widget->text, widget->selected,
+                      state->hover == widget->control);
+            break;
+        case WIDGET_TEXT:
+            ui_draw_text(canvas, ui->font, 24, widget->x, widget->y,
+                         widget->width, UI_ALIGN_LEFT, color_text,
+                         widget->text);
+            break;
+        case WIDGET_HINT:
+            ui_draw_text(canvas, ui->font, 22, widget->x, widget->y, 0,
+                         UI_ALIGN_LEFT, color_dim, widget->text);
+            break;
+        case WIDGET_VALUE:
+            ui_draw_text(canvas, ui->bold, 24, widget->x + widget->width / 2,
+                         widget->y, widget->width - 8, UI_ALIGN_CENTER,
+                         color_text, widget->text);
+            break;
+        }
     }
 }
 
@@ -349,34 +537,13 @@ int player_ui_hit_test(const struct player_ui_state *state, float u, float v)
     float x = u * PLAYER_UI_WIDTH, y = v * PLAYER_UI_HEIGHT;
     if (state->popup_open && in_rect(x, y, POPUP_X, POPUP_Y, POPUP_W,
                                      POPUP_H)) {
-        for (int i = 0; i < 3; ++i) {
-            int cx, width;
-            chip_rect(CHIPS1_Y, i, &cx, &width);
-            if (in_rect(x, y, cx, CHIPS1_Y, width, CHIP_H))
-                return PLAYER_UI_PROJECTION + i;
-            if (in_rect(x, y, cx, CHIPS2_Y, width, CHIP_H))
-                return PLAYER_UI_STEREO + i;
-        }
-        if (in_rect(x, y, CHIP_X, SWAP_Y, 3 * CHIP_W + 2 * CHIP_GAP, CHIP_H))
-            return PLAYER_UI_SWAP_EYES;
-        for (int i = 0; i < 2; ++i) {
-            int cx, width;
-            column_chip_rect(PREVIEW_CHIP_X, 2, i, &cx, &width);
-            if (in_rect(x, y, cx, CHIPS1_Y, width, CHIP_H))
-                return PLAYER_UI_PREVIEW_MODE + i;
-        }
-        for (int i = 0; i < PLAYER_UI_PREVIEW_FOV_COUNT; ++i) {
-            int cx, width;
-            column_chip_rect(PREVIEW_CHIP_X, PLAYER_UI_PREVIEW_FOV_COUNT, i,
-                             &cx, &width);
-            if (in_rect(x, y, cx, CHIPS2_Y, width, CHIP_H))
-                return PLAYER_UI_PREVIEW_FOV + i;
-        }
-        for (int i = 0; i < 3; ++i) {
-            int cx, width;
-            column_chip_rect(LEVELS_CHIP_X, 3, i, &cx, &width);
-            if (in_rect(x, y, cx, CHIPS1_Y, width, CHIP_H))
-                return PLAYER_UI_LEVELS + i;
+        struct popup_layout layout;
+        layout_popup(state, &layout);
+        for (int i = 0; i < layout.count; ++i) {
+            const struct widget *widget = &layout.items[i];
+            if (widget->kind == WIDGET_CHIP &&
+                in_rect(x, y, widget->x, widget->y, widget->width, CHIP_H))
+                return widget->control;
         }
         return PLAYER_UI_NONE;
     }

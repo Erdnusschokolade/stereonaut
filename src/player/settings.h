@@ -9,7 +9,9 @@
 
 int settings_get_int(const char *key, int fallback);
 bool settings_get_bool(const char *key, bool fallback);
+double settings_get_double(const char *key, double fallback);
 void settings_set_int(const char *key, int value);
 void settings_set_bool(const char *key, bool value);
+void settings_set_double(const char *key, double value);
 
 #endif

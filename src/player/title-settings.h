@@ -30,4 +30,14 @@ void title_settings_key(const char *input, char *key, size_t key_size);
 int title_settings_load(const char *key, struct title_settings *settings);
 int title_settings_save(const char *key, const struct title_settings *settings);
 
+/* Numeric values under entry[group][names[i]] (NULL names are skipped):
+ * load sets the values present and returns 1 if the group exists, 0 if
+ * not, -1 if the store is unreadable; save replaces the group. */
+int title_settings_load_numbers(const char *key, const char *group,
+                                const char *const *names, float *values,
+                                size_t count);
+int title_settings_save_numbers(const char *key, const char *group,
+                                const char *const *names,
+                                const float *values, size_t count);
+
 #endif

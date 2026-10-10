@@ -5,14 +5,55 @@
 #include <stdint.h>
 
 /* Layout and CPU rasterizer of the playback panel: a control card (title,
- * seek bar, transport buttons) and, above it, the optional view popup
- * (projection, stereo layout, eye order, levels; scrub preview style). The host owns all state and
- * passes it in; nothing here knows about OpenXR or Vulkan. */
+ * seek bar, transport buttons) and, above it, the optional settings popup
+ * with three tabs: view (scrub preview, head motion, projection, stereo
+ * layout, eye order), position (zoom, height, rotation, stereo offsets) and
+ * picture (levels, brightness, contrast, saturation, gamma). The host owns
+ * all state and passes it in; nothing here knows about OpenXR or Vulkan. */
 
 #define PLAYER_UI_WIDTH 1600U
-#define PLAYER_UI_HEIGHT 600U
+#define PLAYER_UI_HEIGHT 680U
 #define PLAYER_UI_PANEL_WIDTH_METERS 1.4f
-#define PLAYER_UI_PANEL_HEIGHT_METERS 0.525f
+#define PLAYER_UI_PANEL_HEIGHT_METERS 0.595f
+
+/* Adjustable values of the video, shown as steppers in the popup. Most are
+ * stored per title; tilt and head motion are posture/taste and global. */
+enum player_adjust {
+    PLAYER_ADJUST_ZOOM,       /* metres towards the picture */
+    PLAYER_ADJUST_HEIGHT,     /* metres the picture moves up */
+    PLAYER_ADJUST_SLIDE,      /* metres the picture moves right */
+    PLAYER_ADJUST_TILT,       /* degrees the picture tilts up (global) */
+    PLAYER_ADJUST_YAW,        /* degrees the picture turns right */
+    PLAYER_ADJUST_ROLL,       /* degrees the picture rolls clockwise */
+    PLAYER_ADJUST_STEREO_X,   /* degrees the eye pictures move apart */
+    PLAYER_ADJUST_STEREO_Y,   /* degrees the right picture moves up */
+    PLAYER_ADJUST_HEAD_MOTION, /* 6DoF: share of head translation (global) */
+    PLAYER_ADJUST_BRIGHTNESS,
+    PLAYER_ADJUST_CONTRAST,
+    PLAYER_ADJUST_SATURATION,
+    PLAYER_ADJUST_GAMMA,
+    PLAYER_ADJUST_COUNT,
+};
+
+struct player_adjust_info {
+    const char *label;
+    const char *key;      /* name in titles.json / settings.json */
+    float minimum, maximum, step, standard;
+    float display_scale;  /* shown value = value * display_scale */
+    const char *format;   /* printf format of the shown value */
+    bool global;
+};
+
+extern const struct player_adjust_info
+    player_adjust_info[PLAYER_ADJUST_COUNT];
+
+/* Popup tabs. */
+enum player_ui_tab {
+    PLAYER_UI_TAB_VIEW,
+    PLAYER_UI_TAB_POSITION,
+    PLAYER_UI_TAB_PICTURE,
+    PLAYER_UI_TAB_COUNT,
+};
 
 /* Control ids. The transport ids equal the NV12_ACTION_* values. */
 enum player_ui_control {
@@ -29,6 +70,13 @@ enum player_ui_control {
     PLAYER_UI_LEVELS = 45,       /* + enum nv12_video_levels */
     PLAYER_UI_PREVIEW_MODE = 50, /* + 0 original, + 1 perspective */
     PLAYER_UI_PREVIEW_FOV = 60,  /* + index into player_ui_preview_fovs */
+    PLAYER_UI_TAB = 70,          /* + enum player_ui_tab */
+    PLAYER_UI_RECENTER = 75,     /* centre the picture on the gaze */
+    PLAYER_UI_RESET_POSITION = 76,
+    PLAYER_UI_RESET_PICTURE = 77,
+    /* + 2 * enum player_adjust: decrease; + 1: increase. */
+    PLAYER_UI_ADJUST = 100,
+    PLAYER_UI_ADJUST_END = PLAYER_UI_ADJUST + 2 * PLAYER_ADJUST_COUNT,
 };
 
 /* Field of view choices (degrees) of the perspective scrub preview. */
@@ -44,9 +92,11 @@ struct player_ui_state {
     bool paused;
     bool grabbed;
     bool popup_open;
+    int popup_tab;     /* enum player_ui_tab */
     uint32_t projection_mode, stereo_layout;
     bool swap_eyes;
     uint32_t video_levels;
+    const float *adjust; /* PLAYER_ADJUST_COUNT values */
     int hover;         /* enum player_ui_control */
     /* Scrub preview above the seek bar (while hovered or dragged): the
      * position and, if the server has trickplay tiles, its picture. */
@@ -75,5 +125,8 @@ int player_ui_hit_test(const struct player_ui_state *state, float u, float v);
 bool player_ui_on_panel(const struct player_ui_state *state, float u, float v);
 /* Seek bar position (0..1) under u. */
 float player_ui_seek_ratio(float u);
+/* Value one step from `value` (direction -1 or +1), clamped. */
+float player_adjust_step(enum player_adjust adjust, float value,
+                         int direction);
 
 #endif
