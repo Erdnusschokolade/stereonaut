@@ -58,6 +58,9 @@ struct packet {
 };
 
 static int video_fd = -1;
+/* 32-bpp format the TP10 planes are imported as (UBWC compression depends
+ * on the format, so several are tried). */
+static VkFormat plane_format = VK_FORMAT_R8G8B8A8_UNORM;
 
 static void fail_errno(const char *what)
 {
@@ -386,7 +389,7 @@ static struct imported_plane import_plane(
         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
         .pNext = &external_info,
         .imageType = VK_IMAGE_TYPE_2D,
-        .format = VK_FORMAT_R8G8B8A8_UNORM,
+        .format = plane_format,
         .extent = {WORDS, height, 1},
         .mipLevels = 1,
         .arrayLayers = 1,
@@ -737,11 +740,18 @@ static void vulkan_readback(int dma_buf_fd, const char *output_path)
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
-    if (argc != 3) {
-        fprintf(stderr, "usage: %s MAIN10_FIXTURE.hevc tp10-readback.bin\n",
-                argv[0]);
+    if (argc != 4) {
+        fprintf(stderr, "usage: %s MAIN10_FIXTURE.hevc tp10-readback.bin"
+                " {rgba8|rgb10a2|r32ui}\n", argv[0]);
         return 2;
     }
+    if (strcmp(argv[3], "rgb10a2") == 0)
+        plane_format = VK_FORMAT_A2B10G10R10_UNORM_PACK32;
+    else if (strcmp(argv[3], "r32ui") == 0)
+        plane_format = VK_FORMAT_R32_UINT;
+    else if (strcmp(argv[3], "rgba8") != 0)
+        fail_message("unknown plane format");
+    printf("plane_format=%s vk=%d\n", argv[3], plane_format);
 
     size_t fixture_size = 0;
     struct packet packets[MAX_PACKETS];
