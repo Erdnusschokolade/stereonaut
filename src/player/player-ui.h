@@ -28,6 +28,7 @@ enum player_adjust {
     PLAYER_ADJUST_STEREO_X,   /* degrees the eye pictures move apart */
     PLAYER_ADJUST_STEREO_Y,   /* degrees the right picture moves up */
     PLAYER_ADJUST_HEAD_MOTION, /* 6DoF: share of head translation (global) */
+    PLAYER_ADJUST_AUTOFOCUS,  /* share of near disparity removed (global) */
     PLAYER_ADJUST_BRIGHTNESS,
     PLAYER_ADJUST_CONTRAST,
     PLAYER_ADJUST_SATURATION,

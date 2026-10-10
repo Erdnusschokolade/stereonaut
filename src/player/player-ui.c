@@ -79,6 +79,8 @@ const struct player_adjust_info player_adjust_info[PLAYER_ADJUST_COUNT] = {
                                 0.1f, 0.0f, 1.0f, "%+.1f°", false},
     [PLAYER_ADJUST_HEAD_MOTION] = {"Stärke", "head_motion", 0.0f, 1.5f,
                                    0.1f, 0.0f, 100.0f, "%.0f %%", true},
+    [PLAYER_ADJUST_AUTOFOCUS] = {"Autofokus", "autofocus", 0.0f, 1.0f, 0.1f,
+                                 0.0f, 100.0f, "%.0f %%", true},
     [PLAYER_ADJUST_BRIGHTNESS] = {"Helligkeit", "brightness", -0.3f, 0.3f,
                                   0.02f, 0.0f, 100.0f, "%+.0f", false},
     [PLAYER_ADJUST_CONTRAST] = {"Kontrast", "contrast", 0.5f, 1.5f, 0.05f,
@@ -194,7 +196,8 @@ static void format_adjust(char text[32], enum player_adjust adjust,
                           float value)
 {
     const struct player_adjust_info *info = &player_adjust_info[adjust];
-    if (adjust == PLAYER_ADJUST_HEAD_MOTION && value <= 0.0f) {
+    if ((adjust == PLAYER_ADJUST_HEAD_MOTION ||
+         adjust == PLAYER_ADJUST_AUTOFOCUS) && value <= 0.0f) {
         snprintf(text, 32, "Aus");
         return;
     }
@@ -272,6 +275,8 @@ static void layout_popup(const struct player_ui_state *state,
                    "Ausrichtung");
         add_chip(layout, PLAYER_UI_RECENTER, COLUMN_X(1), ROW_CHIP_Y(1),
                  COLUMN_W, "Bild auf Blick zentrieren", false);
+        add_stepper(layout, state, 1, ROW_CHIP_Y(2),
+                    PLAYER_ADJUST_AUTOFOCUS, NULL);
 
         add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(0), 0,
                    "Projektion");
@@ -300,8 +305,7 @@ static void layout_popup(const struct player_ui_state *state,
         add_chip(layout, PLAYER_UI_RESET_POSITION, COLUMN_X(2), STEPPER_Y(2),
                  COLUMN_W, "Zurücksetzen", false);
         add_widget(layout, WIDGET_HINT, COLUMN_X(0), STEPPER_Y(3) - 4, 0,
-                   "Neigung und Kopfbewegung gelten für alle Titel, "
-                   "alles andere je Titel.");
+                   "Neigung gilt für alle Titel, alles andere je Titel.");
     } else {
         static const char *const levels[3] = {"Norm", "Tief", "Voll"};
         add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(0), 0,

@@ -1,0 +1,70 @@
+#version 450
+
+/* Autofocus measurement: how far the picture at the gaze point is shifted
+ * between the left and the right eye image (disparity). A window around
+ * the left-eye position is compared with the right eye image shifted by
+ * one candidate disparity per invocation; the score is the normalized
+ * cross-correlation of the luma. Built twice: NV12 (YCbCr sampler with
+ * RGB_IDENTITY, luma in .g) and, with -DTP10, the TP10 luma plane. */
+layout(local_size_x = 128) in;
+
+#ifdef TP10
+layout(set = 0, binding = 2) uniform sampler2D luma_plane;
+#else
+layout(set = 0, binding = 1) uniform sampler2D video_frame;
+#endif
+
+layout(set = 0, binding = 4, std430) writeonly buffer Result {
+    float score[128];
+    float left_variance;
+} result;
+
+layout(push_constant) uniform Push {
+    vec4 left;   /* window centre in the left image (texture uv), step */
+    vec4 right;  /* window centre in the right image, shift per candidate,
+                    candidates below zero disparity */
+    vec4 bounds; /* u range of the right eye region, TP10 plane scale */
+} push;
+
+const int GRID_X = 24;
+const int GRID_Y = 16;
+
+float luma(vec2 uv)
+{
+#ifdef TP10
+    return textureLod(luma_plane, uv * push.bounds.zw, 0.0).r;
+#else
+    return textureLod(video_frame, uv, 0.0).g;
+#endif
+}
+
+void main()
+{
+    uint candidate = gl_LocalInvocationID.x;
+    float shift = (float(candidate) - push.right.w) * push.right.z;
+    float sum_l = 0.0, sum_r = 0.0, sum_ll = 0.0, sum_rr = 0.0, sum_lr = 0.0;
+    for (int y = 0; y < GRID_Y; ++y) {
+        for (int x = 0; x < GRID_X; ++x) {
+            vec2 offset = vec2(float(x) - 0.5 * float(GRID_X - 1),
+                               float(y) - 0.5 * float(GRID_Y - 1)) *
+                          push.left.zw;
+            float l = luma(push.left.xy + offset);
+            vec2 right_uv = push.right.xy + offset - vec2(shift, 0.0);
+            right_uv.x = clamp(right_uv.x, push.bounds.x, push.bounds.y);
+            float r = luma(right_uv);
+            sum_l += l;
+            sum_r += r;
+            sum_ll += l * l;
+            sum_rr += r * r;
+            sum_lr += l * r;
+        }
+    }
+    float n = float(GRID_X * GRID_Y);
+    float variance_l = sum_ll / n - (sum_l / n) * (sum_l / n);
+    float variance_r = sum_rr / n - (sum_r / n) * (sum_r / n);
+    float covariance = sum_lr / n - (sum_l / n) * (sum_r / n);
+    result.score[candidate] =
+        covariance / sqrt(max(variance_l * variance_r, 1e-12));
+    if (candidate == 0u)
+        result.left_variance = variance_l;
+}

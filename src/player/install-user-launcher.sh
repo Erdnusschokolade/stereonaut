@@ -9,7 +9,8 @@ applications_dir="$HOME/.local/share/applications"
 
 for file in stereonaut-launcher stereonaut-session \
             stereonaut-renderer video-projection.vert.spv \
-            nv12-projection.frag.spv tp10-projection.frag.spv; do
+            nv12-projection.frag.spv tp10-projection.frag.spv \
+            stereo-disparity.comp.spv stereo-disparity-tp10.comp.spv; do
     if [ ! -f "$build_dir/$file" ]; then
         echo "missing build artifact: $build_dir/$file" >&2
         exit 1
@@ -26,6 +27,8 @@ install -m 0644 \
     "$build_dir/video-projection.vert.spv" \
     "$build_dir/nv12-projection.frag.spv" \
     "$build_dir/tp10-projection.frag.spv" \
+    "$build_dir/stereo-disparity.comp.spv" \
+    "$build_dir/stereo-disparity-tp10.comp.spv" \
     "$install_dir/"
 
 # Optional: the Turnip build with TP10 sampling (tools/mesa-tp10), copied to

@@ -73,6 +73,24 @@ struct view_uniform {
     float picture[4];     /* brightness, contrast, saturation, gamma */
 };
 
+/* Autofocus measurement (stereo-disparity.comp). */
+#define DISPARITY_CANDIDATES 128
+#define DISPARITY_ZERO 16          /* candidates below zero disparity */
+#define DISPARITY_STEP_DEGREES 0.15f
+#define DISPARITY_WINDOW_DEGREES_X 4.0f
+#define DISPARITY_WINDOW_DEGREES_Y 3.0f
+
+struct disparity_push {
+    float left[4];   /* window centre (texture uv), sample step */
+    float right[4];  /* window centre, shift per candidate, zero index */
+    float bounds[4]; /* right eye u range, TP10 plane scale */
+};
+
+struct disparity_result {
+    float score[DISPARITY_CANDIDATES];
+    float left_variance;
+};
+
 _Static_assert(sizeof(struct view_uniform) <= UBO_STRIDE,
                "view uniform exceeds dynamic UBO stride");
 
@@ -112,6 +130,18 @@ struct app {
     VkPipelineLayout pipeline_layout;
     VkPipeline pipeline;
     VkPipeline pipeline_tp10;
+    /* Autofocus: disparity measurement (NV12 and TP10 variants) and its
+     * host-visible result (struct disparity_result). */
+    VkPipeline disparity_pipeline, disparity_pipeline_tp10;
+    VkBuffer disparity_buffer;
+    VkDeviceMemory disparity_memory;
+    void *disparity_mapping;
+    bool disparity_pending;
+    uint64_t disparity_frames;
+    double disparity_time;
+    double autofocus_log_time;
+    float autofocus_offset; /* degrees the eye pictures are moved apart */
+    bool autofocus_gaze;    /* last window followed the eye tracking */
     VkDescriptorSetLayout descriptor_layout;
     VkDescriptorPool descriptor_pool;
     VkSamplerYcbcrConversion conversion;
@@ -166,6 +196,12 @@ struct app {
     XrAction select_action;
     XrAction squeeze_action;
     XrAction stick_action;
+    /* Eye tracking (XR_EXT_eye_gaze_interaction): the gaze ray steers the
+     * autofocus measurement; without it the head's forward direction. */
+    bool has_eye_gaze_extension, has_eye_gaze;
+    XrAction gaze_action;
+    XrSpace gaze_space;
+    bool gaze_logged;
     int stick_direction[2]; /* -1 left, +1 right, 0 centred */
     bool select_down[2];
     bool has_valve_frame_controller;
@@ -421,6 +457,40 @@ static void initialize_actions(struct app *app)
                 xrCreateActionSpace(app->session, &space,
                                     &app->aim_spaces[hand]));
     }
+    if (app->has_eye_gaze) {
+        XrActionCreateInfo gaze = {
+            .type = XR_TYPE_ACTION_CREATE_INFO,
+            .actionType = XR_ACTION_TYPE_POSE_INPUT,
+        };
+        snprintf(gaze.actionName, sizeof(gaze.actionName), "gaze");
+        snprintf(gaze.localizedActionName,
+                 sizeof(gaze.localizedActionName), "Blickrichtung");
+        need_xr("xrCreateAction(gaze)",
+                xrCreateAction(app->action_set, &gaze, &app->gaze_action));
+        XrActionSuggestedBinding binding = {
+            app->gaze_action,
+            xr_path(app, "/user/eyes_ext/input/gaze_ext/pose"),
+        };
+        XrInteractionProfileSuggestedBinding suggestion = {
+            .type = XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING,
+            .interactionProfile =
+                xr_path(app, "/interaction_profiles/ext/eye_gaze_interaction"),
+            .countSuggestedBindings = 1,
+            .suggestedBindings = &binding,
+        };
+        XrResult result =
+            xrSuggestInteractionProfileBindings(app->xr, &suggestion);
+        printf("eye_gaze_binding result=%d\n", result);
+        XrActionSpaceCreateInfo space = {
+            .type = XR_TYPE_ACTION_SPACE_CREATE_INFO,
+            .action = app->gaze_action,
+            .poseInActionSpace = {{0, 0, 0, 1}, {0, 0, 0}},
+        };
+        if (XR_FAILED(result) ||
+            XR_FAILED(xrCreateActionSpace(app->session, &space,
+                                          &app->gaze_space)))
+            app->has_eye_gaze = false;
+    }
     XrSessionActionSetsAttachInfo attach = {
         .type = XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO,
         .countActionSets = 1,
@@ -629,7 +699,8 @@ static void reset_adjust(struct app *app, bool picture)
 {
     for (int i = 0; i < PLAYER_ADJUST_COUNT; ++i) {
         bool is_picture = i >= PLAYER_ADJUST_BRIGHTNESS;
-        if (is_picture != picture || i == PLAYER_ADJUST_HEAD_MOTION)
+        if (is_picture != picture || i == PLAYER_ADJUST_HEAD_MOTION ||
+            i == PLAYER_ADJUST_AUTOFOCUS)
             continue;
         app->adjust[i] = player_adjust_info[i].standard;
         save_adjust(app, i);
@@ -1012,14 +1083,20 @@ static void initialize_xr_vulkan(struct app *app)
                                                    &available_count,
                                                    available));
     for (uint32_t i = 0; i < available_count; ++i) {
+        if (strcmp(available[i].extensionName,
+                   XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME) == 0)
+            app->has_eye_gaze_extension = true;
         if (strcmp(available[i].extensionName, valve_extension) == 0)
             app->has_valve_frame_controller = true;
         if (strcmp(available[i].extensionName, generic_extension) == 0)
             app->has_generic_controller = true;
     }
     free(available);
-    const char *extensions[3] = {XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME};
+    const char *extensions[4] = {XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME};
     uint32_t extension_count = 1;
+    if (app->has_eye_gaze_extension)
+        extensions[extension_count++] =
+            XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME;
     if (app->has_valve_frame_controller)
         extensions[extension_count++] = valve_extension;
     if (app->has_generic_controller)
@@ -1038,6 +1115,19 @@ static void initialize_xr_vulkan(struct app *app)
     XrSystemGetInfo system_info = {.type = XR_TYPE_SYSTEM_GET_INFO,
                                    .formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY};
     need_xr("xrGetSystem", xrGetSystem(app->xr, &system_info, &app->system));
+    if (app->has_eye_gaze_extension) {
+        XrSystemEyeGazeInteractionPropertiesEXT eye_gaze = {
+            .type = XR_TYPE_SYSTEM_EYE_GAZE_INTERACTION_PROPERTIES_EXT,
+        };
+        XrSystemProperties properties = {
+            .type = XR_TYPE_SYSTEM_PROPERTIES, .next = &eye_gaze,
+        };
+        if (XR_SUCCEEDED(xrGetSystemProperties(app->xr, app->system,
+                                               &properties)))
+            app->has_eye_gaze = eye_gaze.supportsEyeGazeInteraction;
+    }
+    printf("eye_gaze extension=%d supported=%d\n",
+           app->has_eye_gaze_extension, app->has_eye_gaze);
 
     PFN_xrCreateVulkanInstanceKHR create_instance = NULL;
     PFN_xrGetVulkanGraphicsDevice2KHR get_device = NULL;
@@ -1492,22 +1582,35 @@ static void create_pipeline(struct app *app)
     }
     /* Binding 1 is the NV12 frame (immutable YCbCr sampler), 2 and 3 the
      * TP10 luma and chroma planes; each pipeline uses only its own. */
-    VkDescriptorSetLayoutBinding bindings[4] = {
+    /* Binding 4 is the autofocus result; the measurement (compute) reads
+     * the luma through binding 1 or 2. */
+    VkDescriptorSetLayoutBinding bindings[5] = {
         {.binding = 0, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
          .descriptorCount = 1,
          .stageFlags = VK_SHADER_STAGE_VERTEX_BIT |
                        VK_SHADER_STAGE_FRAGMENT_BIT},
         {.binding = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-         .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+         .descriptorCount = 1,
+         .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT |
+                       VK_SHADER_STAGE_COMPUTE_BIT,
          .pImmutableSamplers = &app->video_sampler},
         {.binding = 2, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-         .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT},
+         .descriptorCount = 1,
+         .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT |
+                       VK_SHADER_STAGE_COMPUTE_BIT},
         {.binding = 3, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
          .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT},
+        {.binding = 4, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+         .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT},
     };
-    VkDescriptorSetLayoutCreateInfo layout = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 4, .pBindings = bindings};
+    VkDescriptorSetLayoutCreateInfo layout = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 5, .pBindings = bindings};
     need_vk("vkCreateDescriptorSetLayout", vkCreateDescriptorSetLayout(app->device, &layout, NULL, &app->descriptor_layout));
-    VkPipelineLayoutCreateInfo pipeline_layout = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, .setLayoutCount = 1, .pSetLayouts = &app->descriptor_layout};
+    VkPushConstantRange disparity_push = {
+        .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+        .size = sizeof(struct disparity_push),
+    };
+    VkPipelineLayoutCreateInfo pipeline_layout = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, .setLayoutCount = 1, .pSetLayouts = &app->descriptor_layout,
+        .pushConstantRangeCount = 1, .pPushConstantRanges = &disparity_push};
     need_vk("vkCreatePipelineLayout", vkCreatePipelineLayout(app->device, &pipeline_layout, NULL, &app->pipeline_layout));
     VkShaderModule vert = shader(app->device, "video-projection.vert.spv"), frag = shader(app->device, "nv12-projection.frag.spv");
     VkPipelineShaderStageCreateInfo stages[2] = {{.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = vert, .pName = "main"}, {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = frag, .pName = "main"}};
@@ -1527,6 +1630,27 @@ static void create_pipeline(struct app *app)
     need_vk("vkCreateGraphicsPipelines(TP10)", vkCreateGraphicsPipelines(app->device, VK_NULL_HANDLE, 1, &pipeline, NULL, &app->pipeline_tp10));
     vkDestroyShaderModule(app->device, vert, NULL); vkDestroyShaderModule(app->device, frag, NULL);
     vkDestroyShaderModule(app->device, tp10_frag, NULL);
+    const char *const disparity_shaders[2] = {
+        "stereo-disparity.comp.spv", "stereo-disparity-tp10.comp.spv",
+    };
+    VkPipeline *disparity_pipelines[2] = {
+        &app->disparity_pipeline, &app->disparity_pipeline_tp10,
+    };
+    for (int i = 0; i < 2; ++i) {
+        VkShaderModule module = shader(app->device, disparity_shaders[i]);
+        VkComputePipelineCreateInfo compute = {
+            .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+            .stage = {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+                      .stage = VK_SHADER_STAGE_COMPUTE_BIT,
+                      .module = module, .pName = "main"},
+            .layout = app->pipeline_layout,
+        };
+        need_vk("vkCreateComputePipelines(disparity)",
+                vkCreateComputePipelines(app->device, VK_NULL_HANDLE, 1,
+                                         &compute, NULL,
+                                         disparity_pipelines[i]));
+        vkDestroyShaderModule(app->device, module, NULL);
+    }
 }
 
 static struct player_ui_state player_state(const struct app *app)
@@ -1770,7 +1894,11 @@ static void write_video_descriptor(struct app *app, VkDescriptorSet set,
         {.sampler = app->plane_sampler, .imageView = buffer->view_uv,
          .imageLayout = VK_IMAGE_LAYOUT_GENERAL},
     };
-    VkWriteDescriptorSet writes[3] = {
+    VkDescriptorBufferInfo disparity = {
+        .buffer = app->disparity_buffer, .offset = 0,
+        .range = sizeof(struct disparity_result),
+    };
+    VkWriteDescriptorSet writes[4] = {
         {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
          .dstSet = set, .dstBinding = 0, .descriptorCount = 1,
          .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
@@ -1783,7 +1911,12 @@ static void write_video_descriptor(struct app *app, VkDescriptorSet set,
          .dstSet = set, .dstBinding = 2, .descriptorCount = 2,
          .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
          .pImageInfo = planes},
+        {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         .dstSet = set, .dstBinding = 4, .descriptorCount = 1,
+         .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+         .pBufferInfo = &disparity},
     };
+    vkUpdateDescriptorSets(app->device, 1, &writes[3], 0, NULL);
     if (buffer->tp10) {
         vkUpdateDescriptorSets(app->device, 1, &writes[0], 0, NULL);
         vkUpdateDescriptorSets(app->device, 1, &writes[2], 0, NULL);
@@ -1816,18 +1949,32 @@ static void create_render_resources(struct app *app)
     need_vk("vkAllocateMemory(uniform)", vkAllocateMemory(app->device, &allocation, NULL, &app->uniform_memory));
     need_vk("vkBindBufferMemory(uniform)", vkBindBufferMemory(app->device, app->uniform_buffer, app->uniform_memory, 0));
     need_vk("vkMapMemory(uniform)", vkMapMemory(app->device, app->uniform_memory, 0, VK_WHOLE_SIZE, 0, &app->uniform_mapping));
+    VkBufferCreateInfo disparity = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = sizeof(struct disparity_result),
+        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
+    need_vk("vkCreateBuffer(disparity)", vkCreateBuffer(app->device, &disparity, NULL, &app->disparity_buffer));
+    vkGetBufferMemoryRequirements(app->device, app->disparity_buffer, &requirements);
+    allocation.allocationSize = requirements.size;
+    allocation.memoryTypeIndex = memory_type(app->physical, requirements.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    need_vk("vkAllocateMemory(disparity)", vkAllocateMemory(app->device, &allocation, NULL, &app->disparity_memory));
+    need_vk("vkBindBufferMemory(disparity)", vkBindBufferMemory(app->device, app->disparity_buffer, app->disparity_memory, 0));
+    need_vk("vkMapMemory(disparity)", vkMapMemory(app->device, app->disparity_memory, 0, VK_WHOLE_SIZE, 0, &app->disparity_mapping));
     /* A set for every possible buffer (the count varies per stream) plus
      * one extra, which keeps a frame on screen across a session restart
      * while the regular buffers are imported again. */
     const uint32_t set_count = NV12_IPC_MAX_BUFFERS + 1U;
-    VkDescriptorPoolSize sizes[2] = {
+    VkDescriptorPoolSize sizes[3] = {
         {.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
          .descriptorCount = set_count},
         {.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
          .descriptorCount = 3U * set_count},
+        {.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+         .descriptorCount = set_count},
     };
     VkDescriptorPoolCreateInfo descriptor_pool = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-        .maxSets = set_count, .poolSizeCount = 2,
+        .maxSets = set_count, .poolSizeCount = 3,
         .pPoolSizes = sizes};
     need_vk("vkCreateDescriptorPool", vkCreateDescriptorPool(app->device, &descriptor_pool, NULL, &app->descriptor_pool));
     VkDescriptorSetLayout layouts[NV12_IPC_MAX_BUFFERS + 1U];
@@ -2838,6 +2985,8 @@ static void begin_playback(struct app *app, int fd, const char *location)
     app->recenter_pending = true;
     app->recenter_yaw = false;
     app->dome_yaw = 0.0f;
+    app->autofocus_offset = 0.0f;
+    app->disparity_time = 0.0;
     app->ipc_fd = fd;
     app->playing = true;
     app->awaiting_command = false;
@@ -2961,6 +3110,147 @@ static void sync_browser_input(struct app *app, XrTime time)
         break;
     case BROWSER_UI_NONE:
         break;
+    }
+}
+
+/* ---- autofocus -------------------------------------------------------
+ * Close subjects in stereo video need strong convergence and easily split
+ * into double images. The measurement finds the disparity of the picture
+ * where the viewer looks; the eye pictures are then moved apart so that
+ * near subjects keep at most the disparity of AUTOFOCUS_TARGET_DEGREES,
+ * smoothed over AUTOFOCUS_SECONDS. */
+#define AUTOFOCUS_TARGET_DEGREES 3.6f /* about 1 m at 63 mm baseline */
+#define AUTOFOCUS_MAX_DEGREES 12.0f
+#define AUTOFOCUS_SECONDS 0.6
+#define AUTOFOCUS_MIN_SCORE 0.6f
+#define AUTOFOCUS_MIN_VARIANCE 2e-4f
+#define AUTOFOCUS_EVERY_FRAMES 3U
+
+static double monotonic_seconds(void)
+{
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (double)now.tv_sec + (double)now.tv_nsec / 1e9;
+}
+
+/* Gaze ray (eye tracking) or, without it, the head's forward ray. */
+static XrVector3f view_direction(struct app *app, XrPosef head, XrTime time,
+                                 bool *gaze)
+{
+    *gaze = false;
+    if (app->has_eye_gaze) {
+        XrSpaceLocation location = {.type = XR_TYPE_SPACE_LOCATION};
+        const XrSpaceLocationFlags tracked =
+            XR_SPACE_LOCATION_ORIENTATION_VALID_BIT |
+            XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
+        if (XR_SUCCEEDED(xrLocateSpace(app->gaze_space, app->space, time,
+                                       &location)) &&
+            (location.locationFlags & tracked) == tracked) {
+            *gaze = true;
+            if (!app->gaze_logged) {
+                printf("eye_gaze tracking=1\n");
+                app->gaze_logged = true;
+            }
+            return rotate_vector(location.pose.orientation,
+                                 (XrVector3f){0, 0, -1});
+        }
+    }
+    return rotate_vector(head.orientation, (XrVector3f){0, 0, -1});
+}
+
+/* Measurement window in both eye pictures around where the viewer looks
+ * (equirectangular projections only); false if nothing can be measured. */
+static bool disparity_window(struct app *app, XrVector3f direction,
+                             struct mat4 world_to_dome, XrVector3f eye,
+                             float stereo_x, struct disparity_push *push)
+{
+    if (app->projection_mode == NV12_PROJECTION_FLAT ||
+        app->stereo_layout == NV12_STEREO_MONO)
+        return false;
+    XrVector3f d = transform_direction(world_to_dome, direction);
+    float length = sqrtf(vector_dot(d, d));
+    if (length <= 0.0f)
+        return false;
+    d.x /= length;
+    d.y /= length;
+    d.z /= length;
+    float b = vector_dot(eye, d);
+    float t = -b + sqrtf(b * b - vector_dot(eye, eye) + 1.0f);
+    XrVector3f q = {eye.x + t * d.x, eye.y + t * d.y, eye.z + t * d.z};
+    const float degrees = PI_F / 180.0f;
+    bool full = app->projection_mode == NV12_PROJECTION_EQUIRECT_360;
+    float span = full ? 2.0f * PI_F : PI_F;
+    /* The left picture is shown moved by half the stereo offset. */
+    float longitude = atan2f(q.x, -q.z) + 0.5f * stereo_x * degrees;
+    float latitude = asinf(fmaxf(-1.0f, fminf(1.0f, q.y)));
+    float stereo_y = app->adjust[PLAYER_ADJUST_STEREO_Y] * 0.5f * degrees;
+    if (!full && fabsf(longitude) > 0.5f * PI_F - 3.0f * degrees)
+        return false;
+    float u = longitude / span + 0.5f;
+    if (full)
+        u -= floorf(u);
+    float v_left = 0.5f - (latitude + stereo_y) / PI_F;
+    float v_right = 0.5f - (latitude - stereo_y) / PI_F;
+    bool sbs = app->stereo_layout == NV12_STEREO_SBS;
+    float u_scale = sbs ? 0.5f : 1.0f, v_scale = sbs ? 1.0f : 0.5f;
+    int left_eye = app->swap_eyes ? 1 : 0, right_eye = 1 - left_eye;
+    float u_per_degree = degrees / span * u_scale;
+    float v_per_degree = degrees / PI_F * v_scale;
+    *push = (struct disparity_push){
+        .left = {sbs ? 0.5f * left_eye + u * u_scale : u,
+                 sbs ? v_left : 0.5f * left_eye + v_left * v_scale,
+                 DISPARITY_WINDOW_DEGREES_X / 24.0f * u_per_degree,
+                 DISPARITY_WINDOW_DEGREES_Y / 16.0f * v_per_degree},
+        .right = {sbs ? 0.5f * right_eye + u * u_scale : u,
+                  sbs ? v_right : 0.5f * right_eye + v_right * v_scale,
+                  DISPARITY_STEP_DEGREES * u_per_degree,
+                  (float)DISPARITY_ZERO},
+        .bounds = {sbs ? 0.5f * right_eye : 0.0f,
+                   sbs ? 0.5f * right_eye + 0.5f : 1.0f,
+                   app->coded_width ? (float)app->video_width /
+                                          (float)app->coded_width : 1.0f,
+                   app->coded_height ? (float)app->video_height /
+                                           (float)app->coded_height : 1.0f},
+    };
+    return true;
+}
+
+/* Reads the last measurement and moves the autofocus offset towards it. */
+static void update_autofocus(struct app *app)
+{
+    const struct disparity_result *result = app->disparity_mapping;
+    double now = monotonic_seconds();
+    double elapsed = app->disparity_time > 0.0 ? now - app->disparity_time
+                                               : 0.0;
+    app->disparity_time = now;
+    int best = 0;
+    for (int i = 1; i < DISPARITY_CANDIDATES; ++i)
+        if (result->score[i] > result->score[best])
+            best = i;
+    float score = result->score[best];
+    bool valid = best > 0 && best < DISPARITY_CANDIDATES - 1 &&
+                 score >= AUTOFOCUS_MIN_SCORE &&
+                 result->left_variance >= AUTOFOCUS_MIN_VARIANCE;
+    float disparity = 0.0f;
+    if (valid) {
+        /* Parabola through the peak and its neighbours. */
+        float a = result->score[best - 1], c = result->score[best + 1];
+        float curvature = a - 2.0f * score + c;
+        float refine = curvature < 0.0f ? 0.5f * (a - c) / curvature : 0.0f;
+        disparity = ((float)best + refine - (float)DISPARITY_ZERO) *
+                    DISPARITY_STEP_DEGREES;
+        float target = app->adjust[PLAYER_ADJUST_AUTOFOCUS] *
+                       fmaxf(0.0f, disparity - AUTOFOCUS_TARGET_DEGREES);
+        target = fminf(target, AUTOFOCUS_MAX_DEGREES);
+        float blend = (float)(1.0 - exp(-elapsed / AUTOFOCUS_SECONDS));
+        app->autofocus_offset += (target - app->autofocus_offset) * blend;
+    }
+    if (now - app->autofocus_log_time >= 1.0) {
+        app->autofocus_log_time = now;
+        printf("autofocus gaze=%d valid=%d disparity=%.2f score=%.2f"
+               " variance=%.5f offset=%.2f\n",
+               app->autofocus_gaze, valid, disparity, score,
+               result->left_variance, app->autofocus_offset);
     }
 }
 
@@ -3105,11 +3395,27 @@ static void render_frame(struct app *app)
     struct mat4 screen_scale = {{2.0f, 0, 0, 0, 0, screen_height, 0, 0,
                                  0, 0, 1, 0, 0, 0, 0, 1}};
     screen_model = multiply(screen_model, screen_scale);
+    /* Autofocus: measure every few frames where the viewer looks. */
+    if (app->adjust[PLAYER_ADJUST_AUTOFOCUS] <= 0.0f)
+        app->autofocus_offset = 0.0f;
+    bool gaze = false;
+    XrVector3f look = view_direction(app, center.pose,
+                                     frame_state.predictedDisplayTime, &gaze);
+    app->autofocus_gaze = gaze;
+    struct disparity_push disparity_push;
+    bool measure =
+        video && app->adjust[PLAYER_ADJUST_AUTOFOCUS] > 0.0f &&
+        ++app->disparity_frames % AUTOFOCUS_EVERY_FRAMES == 0U &&
+        disparity_window(app, look, world_to_dome, eye_position,
+                         app->adjust[PLAYER_ADJUST_STEREO_X] +
+                             app->autofocus_offset,
+                         &disparity_push);
     for (uint32_t eye = 0; eye < 2; ++eye) {
         struct mat4 projection = projection_from_fov(views[eye].fov);
         struct mat4 view = view_from_pose(views[eye].pose);
         float side = eye == 0 ? -1.0f : 1.0f;
-        float stereo_x = app->adjust[PLAYER_ADJUST_STEREO_X] * 0.5f;
+        float stereo_x = (app->adjust[PLAYER_ADJUST_STEREO_X] +
+                          app->autofocus_offset) * 0.5f;
         float stereo_y = app->adjust[PLAYER_ADJUST_STEREO_Y] * 0.5f;
         struct view_uniform uniform = {
             .mvp = multiply(projection, multiply(view, screen_model)),
@@ -3157,6 +3463,10 @@ static void render_frame(struct app *app)
     }
     need_vk("vkWaitForFences(render)", vkWaitForFences(app->device, 1, &app->fence, VK_TRUE, UINT64_C(5000000000)));
     need_vk("vkResetFences(render)", vkResetFences(app->device, 1, &app->fence));
+    if (app->disparity_pending) {
+        app->disparity_pending = false;
+        update_autofocus(app);
+    }
     need_vk("vkResetCommandPool(render)", vkResetCommandPool(app->device, app->command_pool, 0));
     VkCommandBufferBeginInfo command_begin = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     need_vk("vkBeginCommandBuffer(render)", vkBeginCommandBuffer(app->command, &command_begin));
@@ -3183,8 +3493,33 @@ static void render_frame(struct app *app)
         video_acquires[1].image = video->image_uv;
     if (video)
         vkCmdPipelineBarrier(app->command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL,
-                             0, NULL, video_images, video_acquires);
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                             0, 0, NULL, 0, NULL, video_images,
+                             video_acquires);
+    if (measure) {
+        vkCmdBindPipeline(app->command, VK_PIPELINE_BIND_POINT_COMPUTE,
+                          video->tp10 ? app->disparity_pipeline_tp10
+                                      : app->disparity_pipeline);
+        uint32_t offset = 0;
+        vkCmdBindDescriptorSets(app->command, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                app->pipeline_layout, 0, 1,
+                                &video->descriptor_set, 1, &offset);
+        vkCmdPushConstants(app->command, app->pipeline_layout,
+                           VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                           sizeof(disparity_push), &disparity_push);
+        vkCmdDispatch(app->command, 1, 1, 1);
+        VkMemoryBarrier to_host = {
+            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+            .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
+        };
+        vkCmdPipelineBarrier(app->command,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &to_host, 0,
+                             NULL, 0, NULL);
+        app->disparity_pending = true;
+    }
     for (uint32_t eye = 0; eye < 2; ++eye) {
         VkClearValue clear = {.color = {{0.005f, 0.005f, 0.008f, 1.0f}}};
         VkRenderPassBeginInfo pass = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
@@ -3211,11 +3546,15 @@ static void render_frame(struct app *app)
     if (video_images == 2U)
         video_releases[1].image = video->image_uv;
     if (video)
-        vkCmdPipelineBarrier(app->command, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        vkCmdPipelineBarrier(app->command,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                              VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, NULL,
                              0, NULL, video_images, video_releases);
     need_vk("vkEndCommandBuffer(render)", vkEndCommandBuffer(app->command));
-    VkPipelineStageFlags producer_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    VkPipelineStageFlags producer_stage =
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
     VkSubmitInfo submit = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
         .commandBufferCount = 1, .pCommandBuffers = &app->command};
     if (video && video->producer_wait_pending) {
