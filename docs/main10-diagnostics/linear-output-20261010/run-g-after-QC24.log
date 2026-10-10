@@ -1,0 +1,114 @@
+input_AUs=60 bytes=15977 requested=after-QC24
+driver=iris_driver card=iris_decoder
+OUTPUT format=HEVC width=1920 height=1088 planes=1 colorspace=0 xfer=0 ycbcr=0 quant=0
+plane=0 stride=0 sizeimage=8847360
+enumeration=after HEVC S_FMT
+enum_capture=Q08C description=QCOM Compressed 8-bit Format
+enum_capture=NV12 description=Y/UV 4:2:0
+enum_capture=NV21 description=Y/VU 4:2:0
+enum_capture=Q10C description=QCOM Compressed 10-bit Format
+enum_capture=AB24 description=32-bit RGBA 8-8-8-8
+enum_capture=QC24 description=colorformat
+enum_end errno=22
+REQBUFS type=10 count=4 capabilities=0x15
+QUERYBUF type=10 index=0 plane=0 length=8847360 mmap_offset=0
+QUERYBUF type=10 index=1 plane=0 length=8847360 mmap_offset=32768
+QUERYBUF type=10 index=2 plane=0 length=8847360 mmap_offset=65536
+QUERYBUF type=10 index=3 plane=0 length=8847360 mmap_offset=98304
+event=5 changes=0x1
+after SOURCE_CHANGE format=Q10C width=1920 height=1088 planes=1 colorspace=3 xfer=1 ycbcr=2 quant=2
+plane=0 stride=2560 sizeimage=4210688
+enumeration=after SOURCE_CHANGE
+enum_capture=Q10C description=QCOM Compressed 10-bit Format
+enum_end errno=22
+TRY_FMT after headers format=QC24 width=1920 height=1080 planes=1 colorspace=3 xfer=1 ycbcr=2 quant=2
+plane=0 stride=2560 sizeimage=4210688
+S_FMT after headers format=QC24 width=1920 height=1088 planes=1 colorspace=3 xfer=1 ycbcr=2 quant=2
+plane=0 stride=1920 sizeimage=8392704
+compose left=0 top=0 width=1920 height=1080
+REQBUFS type=9 count=12 capabilities=0x15
+QUERYBUF type=9 index=0 plane=0 length=8392704 mmap_offset=1073741824
+QUERYBUF type=9 index=1 plane=0 length=8392704 mmap_offset=1073774592
+QUERYBUF type=9 index=2 plane=0 length=8392704 mmap_offset=1073807360
+QUERYBUF type=9 index=3 plane=0 length=8392704 mmap_offset=1073840128
+QUERYBUF type=9 index=4 plane=0 length=8392704 mmap_offset=1073872896
+QUERYBUF type=9 index=5 plane=0 length=8392704 mmap_offset=1073905664
+QUERYBUF type=9 index=6 plane=0 length=8392704 mmap_offset=1073938432
+QUERYBUF type=9 index=7 plane=0 length=8392704 mmap_offset=1073971200
+QUERYBUF type=9 index=8 plane=0 length=8392704 mmap_offset=1074003968
+QUERYBUF type=9 index=9 plane=0 length=8392704 mmap_offset=1074036736
+QUERYBUF type=9 index=10 plane=0 length=8392704 mmap_offset=1074069504
+QUERYBUF type=9 index=11 plane=0 length=8392704 mmap_offset=1074102272
+EXPBUF index=0 plane=0 success fd=4 fstat=0 size=8392704
+EXPBUF index=1 plane=0 success fd=4 fstat=0 size=8392704
+EXPBUF index=2 plane=0 success fd=4 fstat=0 size=8392704
+EXPBUF index=3 plane=0 success fd=4 fstat=0 size=8392704
+EXPBUF index=4 plane=0 success fd=4 fstat=0 size=8392704
+EXPBUF index=5 plane=0 success fd=4 fstat=0 size=8392704
+EXPBUF index=6 plane=0 success fd=4 fstat=0 size=8392704
+EXPBUF index=7 plane=0 success fd=4 fstat=0 size=8392704
+EXPBUF index=8 plane=0 success fd=4 fstat=0 size=8392704
+EXPBUF index=9 plane=0 success fd=4 fstat=0 size=8392704
+EXPBUF index=10 plane=0 success fd=4 fstat=0 size=8392704
+EXPBUF index=11 plane=0 success fd=4 fstat=0 size=8392704
+frame=1 index=0 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=0.000000
+frame=2 index=1 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=0.033333
+frame=3 index=2 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=0.066666
+frame=4 index=3 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=0.100000
+frame=5 index=4 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=0.133333
+frame=6 index=5 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=0.166666
+frame=7 index=6 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=0.200000
+frame=8 index=7 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=0.233333
+frame=9 index=8 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=0.266666
+frame=10 index=9 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=0.300000
+frame=11 index=0 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=0.333333
+frame=12 index=1 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=0.366666
+frame=13 index=2 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=0.400000
+frame=14 index=3 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=0.433333
+frame=15 index=4 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=0.466666
+frame=16 index=5 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=0.500000
+frame=17 index=6 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=0.533333
+frame=18 index=7 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=0.566666
+frame=19 index=8 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=0.600000
+frame=20 index=9 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=0.633333
+frame=21 index=0 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=0.666666
+frame=22 index=1 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=0.700000
+frame=23 index=2 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=0.733333
+frame=24 index=3 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=0.766666
+frame=25 index=4 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=0.800000
+frame=26 index=5 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=0.833333
+frame=27 index=6 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=0.866666
+frame=28 index=7 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=0.900000
+frame=29 index=8 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=0.933333
+frame=30 index=9 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=0.966666
+frame=31 index=0 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=1.000000
+frame=32 index=1 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=1.033333
+frame=33 index=2 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=1.066666
+frame=34 index=3 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=1.100000
+frame=35 index=4 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=1.133333
+frame=36 index=5 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=1.166666
+frame=37 index=6 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=1.200000
+frame=38 index=7 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=1.233333
+frame=39 index=8 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=1.266666
+frame=40 index=9 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=1.300000
+frame=41 index=0 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=1.333333
+frame=42 index=1 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=1.366666
+frame=43 index=2 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=1.400000
+frame=44 index=3 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=1.433333
+frame=45 index=4 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=1.466666
+frame=46 index=5 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=1.500000
+frame=47 index=6 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=1.533333
+frame=48 index=7 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=1.566666
+frame=49 index=8 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=1.600000
+frame=50 index=9 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=1.633333
+frame=51 index=0 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=1.666666
+frame=52 index=1 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=1.700000
+frame=53 index=2 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=1.733333
+frame=54 index=3 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=1.766666
+frame=55 index=4 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=1.800000
+frame=56 index=5 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=1.833333
+frame=57 index=6 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=1.866666
+frame=58 index=7 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=1.900000
+frame=59 index=8 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=1.933333
+frame=60 index=9 sequence=0 flags=0x4001 bytesused=4210688 data_offset=0 timestamp=1.966666
+result queued=60 returned_input=60 frames=60 errors=0 exported_planes=12 eos=0 last=1

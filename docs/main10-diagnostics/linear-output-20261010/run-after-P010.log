@@ -1,0 +1,29 @@
+input_AUs=60 bytes=3795855 requested=after-P010
+driver=iris_driver card=iris_decoder
+OUTPUT format=HEVC width=1920 height=1088 planes=1 colorspace=0 xfer=0 ycbcr=0 quant=0
+plane=0 stride=0 sizeimage=8847360
+enumeration=after HEVC S_FMT
+enum_capture=Q08C description=QCOM Compressed 8-bit Format
+enum_capture=NV12 description=Y/UV 4:2:0
+enum_capture=NV21 description=Y/VU 4:2:0
+enum_capture=Q10C description=QCOM Compressed 10-bit Format
+enum_capture=AB24 description=32-bit RGBA 8-8-8-8
+enum_capture=QC24 description=colorformat
+enum_end errno=22
+REQBUFS type=10 count=4 capabilities=0x15
+QUERYBUF type=10 index=0 plane=0 length=8847360 mmap_offset=0
+QUERYBUF type=10 index=1 plane=0 length=8847360 mmap_offset=32768
+QUERYBUF type=10 index=2 plane=0 length=8847360 mmap_offset=65536
+QUERYBUF type=10 index=3 plane=0 length=8847360 mmap_offset=98304
+event=5 changes=0x1
+after SOURCE_CHANGE format=Q10C width=1920 height=1088 planes=1 colorspace=0 xfer=0 ycbcr=2 quant=2
+plane=0 stride=2560 sizeimage=4210688
+enumeration=after SOURCE_CHANGE
+enum_capture=Q10C description=QCOM Compressed 10-bit Format
+enum_end errno=22
+TRY_FMT after headers format=Q10C width=1920 height=1080 planes=1 colorspace=0 xfer=0 ycbcr=0 quant=0
+plane=0 stride=2560 sizeimage=4210688
+S_FMT after headers format=Q10C width=1920 height=1088 planes=1 colorspace=0 xfer=0 ycbcr=2 quant=2
+plane=0 stride=2560 sizeimage=4210688
+requested format substituted after headers
+result queued=4 returned_input=0 frames=0 errors=1 exported_planes=0 eos=0 last=0
