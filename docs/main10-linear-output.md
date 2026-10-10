@@ -97,3 +97,49 @@ jeweils nicht begonnen:
 2. Kerneltreiber: P010 freischalten oder 10→8-Bit-Wandlung konfigurieren
    (Systemeingriff, Rücksprache).
 3. Jellyfin-Transkodierung nach HEVC Main 8 (vorhanden, ≤ 4096 px).
+
+## Durchbruch: Q10C über gepatchten Turnip mit TP10-Hardwareformat (2026-10-10)
+
+Die Adreno-Registerbeschreibung (`a6xx_enums.xml` im Kernel) enthält
+`FMT6_TP10` (0x9d), `FMT6_TP10_Y` (0x9e) und `FMT6_TP10_UV` (0x9f), mit dem
+Hinweis, dass Tiling/UBWC dieser Medienformate von äquivalenten Farbformaten
+abweicht. Turnip nutzt sie nicht – deshalb lieferten alle Standardformate
+falsche Werte.
+
+**Aufbau** (Freigabe Option 1, nur Userspace, kein Systemeingriff):
+
+- Mesa `main` (`tools/mesa-tp10/MESA_COMMIT`, Quellen unter
+  `third_party/mesa`, per `.gitignore` ausgenommen) wird auf dem
+  Entwicklungsrechner mit clang/lld gegen einen vom Frame kopierten Sysroot
+  cross-kompiliert, nur Turnip (`tools/mesa-tp10/build-turnip.sh`,
+  675 Build-Schritte, wenige Minuten). Geladen wird die Bibliothek
+  ausschließlich über `VK_ICD_FILENAMES` im eigenen Prozess.
+- Gegencheck ohne Patch: Der Player läuft mit diesem Turnip unverändert
+  (8K-HEVC, 300 Frames, 0 Drops, [Log](main10-diagnostics/tp10-turnip-20261010/player-custom-turnip.log)).
+- Patch `tools/mesa-tp10/tp10-view.patch` (17 Zeilen in
+  `fdl6_view_init`): Ist `STEREONAUT_TP10` gesetzt, werden UBWC-Views im
+  Format RGBA8 bzw. RGB10A2 auf `FMT6_TP10_Y` bzw. `FMT6_TP10_UV` umgestellt
+  (Swap WZYX, Breite ×3 bzw. ×3/2). Das 32-bpp-UBWC-Layout passt exakt zur
+  Iris-Allokation (siehe oben), es wird also nur das Texturformat getauscht.
+- Probe `tools/vulkan-q10c-probe/v4l2-vulkan-tp10-sample.c` + `tp10-sample.comp`:
+  Q10C-Frame → DMA-BUF → zwei Views → `texelFetch` im Compute-Shader →
+  `round(x·1023)` → Vergleich `analyze-tp10-sample.py`.
+
+**Ergebnis** (Turnip-Build SHA-256 `269e64ea…`):
+
+| Lauf | Y | U | V |
+| --- | --- | --- | --- |
+| gradient10, `STEREONAUT_TP10=1` | 0 / 2.073.600 | 0 / 518.400 | 0 / 518.400 |
+| main10 (testsrc2), `STEREONAUT_TP10=1` | 0 / 2.073.600 | 0 / 518.400 | 0 / 518.400 |
+| gradient10, ohne Schalter (Kontrolle) | 2.072.331 falsch | 518.212 falsch | 517.860 falsch |
+
+Iris-Main10 wird damit **bitgenau in 10 Bit** auf der GPU gelesen, ohne
+Kopie und ohne Kerneländerung. Belege:
+[tp10-turnip-20261010](main10-diagnostics/tp10-turnip-20261010/).
+
+**Offen für den Player:** saubere Aktivierung statt Umgebungsvariable und
+Formattrick, Sampler im Projektionsshader (zwei Ebenen statt
+YCbCr-Sampler, Farbmatrix im Shader), Session wählt Q10C für Main10,
+OpenXR/SteamVR mit eigenem Turnip im Renderer, Leistung bei 8K60,
+Höhen/Breiten außerhalb 1920×1088 (UBWC-Layout muss für jede Größe zur
+Iris-Allokation passen), Auslieferung der eigenen Bibliothek.

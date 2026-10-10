@@ -1,0 +1,20 @@
+{
+  "y": {
+    "mismatch": 0,
+    "samples": 2073600,
+    "max_abs": 0,
+    "first": null
+  },
+  "u": {
+    "mismatch": 0,
+    "samples": 518400,
+    "max_abs": 0,
+    "first": null
+  },
+  "v": {
+    "mismatch": 0,
+    "samples": 518400,
+    "max_abs": 0,
+    "first": null
+  }
+}

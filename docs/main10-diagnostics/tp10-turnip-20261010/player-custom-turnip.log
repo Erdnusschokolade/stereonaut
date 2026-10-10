@@ -1,0 +1,151 @@
+fdm_injection: XR layer loaded
+openxr_vulkan_requirements min=281474976710656 max=281483566645248
+[Vulkan Loader] DRIVER:         Searching for driver manifest files
+[Vulkan Loader] DRIVER:            In following locations:
+[Vulkan Loader] DRIVER:               /home/steamos/stereonaut-mvp-011/mesa-tp10/icd.json
+[Vulkan Loader] DRIVER:            Found the following files:
+[Vulkan Loader] DRIVER:               /home/steamos/stereonaut-mvp-011/mesa-tp10/icd.json
+[Vulkan Loader] DRIVER:         Found ICD manifest file /home/steamos/stereonaut-mvp-011/mesa-tp10/icd.json, version 1.0.1
+[Vulkan Loader] DEBUG | DRIVER: Searching for ICD drivers named /home/steamos/stereonaut-mvp-011/mesa-tp10/libvulkan_freedreno.so
+[Vulkan Loader] DRIVER:         Searching for driver manifest files
+[Vulkan Loader] DRIVER:            In following locations:
+[Vulkan Loader] DRIVER:               /home/steamos/stereonaut-mvp-011/mesa-tp10/icd.json
+[Vulkan Loader] DRIVER:            Found the following files:
+[Vulkan Loader] DRIVER:               /home/steamos/stereonaut-mvp-011/mesa-tp10/icd.json
+[Vulkan Loader] DRIVER:         Found ICD manifest file /home/steamos/stereonaut-mvp-011/mesa-tp10/icd.json, version 1.0.1
+[Vulkan Loader] DEBUG | DRIVER: Searching for ICD drivers named /home/steamos/stereonaut-mvp-011/mesa-tp10/libvulkan_freedreno.so
+[Vulkan Loader] DRIVER:         Searching for driver manifest files
+[Vulkan Loader] DRIVER:            In following locations:
+[Vulkan Loader] DRIVER:               /home/steamos/stereonaut-mvp-011/mesa-tp10/icd.json
+[Vulkan Loader] DRIVER:            Found the following files:
+[Vulkan Loader] DRIVER:               /home/steamos/stereonaut-mvp-011/mesa-tp10/icd.json
+[Vulkan Loader] DRIVER:         Found ICD manifest file /home/steamos/stereonaut-mvp-011/mesa-tp10/icd.json, version 1.0.1
+[Vulkan Loader] DEBUG | DRIVER: Searching for ICD drivers named /home/steamos/stereonaut-mvp-011/mesa-tp10/libvulkan_freedreno.so
+[Vulkan Loader] DRIVER:         Searching for driver manifest files
+[Vulkan Loader] DRIVER:            In following locations:
+[Vulkan Loader] DRIVER:               /home/steamos/stereonaut-mvp-011/mesa-tp10/icd.json
+[Vulkan Loader] DRIVER:            Found the following files:
+[Vulkan Loader] DRIVER:               /home/steamos/stereonaut-mvp-011/mesa-tp10/icd.json
+[Vulkan Loader] DRIVER:         Found ICD manifest file /home/steamos/stereonaut-mvp-011/mesa-tp10/icd.json, version 1.0.1
+[Vulkan Loader] DEBUG | DRIVER: Searching for ICD drivers named /home/steamos/stereonaut-mvp-011/mesa-tp10/libvulkan_freedreno.so
+[Vulkan Loader] DRIVER:         Searching for driver manifest files
+[Vulkan Loader] DRIVER:            In following locations:
+[Vulkan Loader] DRIVER:               /home/steamos/stereonaut-mvp-011/mesa-tp10/icd.json
+[Vulkan Loader] DRIVER:            Found the following files:
+[Vulkan Loader] DRIVER:               /home/steamos/stereonaut-mvp-011/mesa-tp10/icd.json
+[Vulkan Loader] DRIVER:         Found ICD manifest file /home/steamos/stereonaut-mvp-011/mesa-tp10/icd.json, version 1.0.1
+[Vulkan Loader] DEBUG | DRIVER: Searching for ICD drivers named /home/steamos/stereonaut-mvp-011/mesa-tp10/libvulkan_freedreno.so
+[Vulkan Loader] DRIVER:         Searching for driver manifest files
+[Vulkan Loader] DRIVER:            In following locations:
+[Vulkan Loader] DRIVER:               /home/steamos/stereonaut-mvp-011/mesa-tp10/icd.json
+[Vulkan Loader] DRIVER:            Found the following files:
+[Vulkan Loader] DRIVER:               /home/steamos/stereonaut-mvp-011/mesa-tp10/icd.json
+[Vulkan Loader] DRIVER:         Found ICD manifest file /home/steamos/stereonaut-mvp-011/mesa-tp10/icd.json, version 1.0.1
+[Vulkan Loader] DEBUG | DRIVER: Searching for ICD drivers named /home/steamos/stereonaut-mvp-011/mesa-tp10/libvulkan_freedreno.so
+[Vulkan Loader] DRIVER:         Searching for driver manifest files
+[Vulkan Loader] DRIVER:            In following locations:
+[Vulkan Loader] DRIVER:               /home/steamos/stereonaut-mvp-011/mesa-tp10/icd.json
+[Vulkan Loader] DRIVER:            Found the following files:
+[Vulkan Loader] DRIVER:               /home/steamos/stereonaut-mvp-011/mesa-tp10/icd.json
+[Vulkan Loader] DRIVER:         Found ICD manifest file /home/steamos/stereonaut-mvp-011/mesa-tp10/icd.json, version 1.0.1
+[Vulkan Loader] DEBUG | DRIVER: Searching for ICD drivers named /home/steamos/stereonaut-mvp-011/mesa-tp10/libvulkan_freedreno.so
+[Vulkan Loader] INFO | DRIVER:  linux_read_sorted_physical_devices:
+[Vulkan Loader] INFO | DRIVER:       Original order:
+[Vulkan Loader] INFO | DRIVER:             [0] Turnip Adreno (TM) 750
+[Vulkan Loader] INFO | DRIVER:       Sorted order:
+[Vulkan Loader] INFO | DRIVER:             [0] Turnip Adreno (TM) 750  
+[Vulkan Loader] INFO | DRIVER:  linux_read_sorted_physical_devices:
+[Vulkan Loader] INFO | DRIVER:       Original order:
+[Vulkan Loader] INFO | DRIVER:             [0] Turnip Adreno (TM) 750
+[Vulkan Loader] INFO | DRIVER:       Sorted order:
+[Vulkan Loader] INFO | DRIVER:             [0] Turnip Adreno (TM) 750  
+[Vulkan Loader] DEBUG | DRIVER: Copying old device 0 into new device 0
+[Vulkan Loader] DRIVER:         vkCreateDevice layer callstack setup to:
+[Vulkan Loader] DRIVER:            <Application>
+[Vulkan Loader] DRIVER:              ||
+[Vulkan Loader] DRIVER:            <Loader>
+[Vulkan Loader] DRIVER:              ||
+[Vulkan Loader] DRIVER:            <Device>
+[Vulkan Loader] DRIVER:                Using "Turnip Adreno (TM) 750" with driver: "/home/steamos/stereonaut-mvp-011/mesa-tp10/libvulkan_freedreno.so"
+openxr_vulkan_device=Turnip Adreno (TM) 750 queue_family=0
+controller_bindings profile=/interaction_profiles/valve/frame_controller result=0
+controller_bindings profile=/interaction_profiles/khr/generic_controller result=0
+controller_bindings profile=/interaction_profiles/valve/index_controller result=0
+controller_bindings profile=/interaction_profiles/khr/simple_controller result=0
+openxr_session_state=1 time=805215668234
+openxr_session_state=2 time=805215676307
+fdm_injection: added swapchain size 1728 (1 total sizes)
+openxr_swapchain format=50 dimensions=1728x1728 images=3
+ui_swapchain format=43 dimensions=1600x600 images=3
+nv12_sampler format=1000156003 ycbcr_709=1 range=narrow chroma_location=midpoint
+fdm_injection: added swapchain size 1024 (2 total sizes)
+host_ready
+playback_attached
+browser_listing generation=2 path=Start entries=2 error=none
+source width=8192 visible_height=4096 fps=60000/1001 duration_s=5.005000
+playback_config projection=1 stereo=1 swap_eyes=0 frame_limit=300
+v4l2_device=/dev/video-dec0 driver=iris_driver card=iris_decoder bus=platform:iris_bus
+output_format fourcc=HEVC width=8192 height=4096 sizeimage=16588800
+output_buffers=6 requested=6
+openxr_view_geometry left_pose=(-0.034961235,0.000000000,0.000000000;0.000000000,0.000000000,0.000000000,1.000000000) left_fov=(-1.030864120,0.880296826,-1.048369765,0.862055421) right_pose=(0.034961235,0.000000000,0.000000000;0.000000000,0.000000000,0.000000000,1.000000000) right_fov=(-0.875010729,1.035462737,-1.040709853,0.869157493) center_pose=(0.000000000,0.000000000,0.000000000;0.000000000,0.000000000,0.000000000,1.000000000)
+openxr_session_state=3 time=805363820474
+capture_format fourcc=NV12 width=8192 height=4096 planes=1 stride=8192 sizeimage=50331648 colorspace=3 xfer=1 ycbcr=2 quant=2
+visible_rect left=0 top=0 width=8192 height=4096
+nv12_contract modifier=DRM_FORMAT_MOD_LINEAR memory_planes=2 v4l2_memory_planes=1 y_offset=0 uv_offset=33554432 row_pitch=8192 required_bytes=50331648
+min_buffers_control=unavailable errno=22
+capture_allocation index=0 length=50331648
+dmabuf_export index=0 fd=29 size=50331648
+capture_allocation index=1 length=50331648
+dmabuf_export index=1 fd=30 size=50331648
+capture_allocation index=2 length=50331648
+dmabuf_export index=2 fd=31 size=50331648
+capture_allocation index=3 length=50331648
+dmabuf_export index=3 fd=32 size=50331648
+capture_allocation index=4 length=50331648
+dmabuf_export index=4 fd=33 size=50331648
+capture_allocation index=5 length=50331648
+dmabuf_export index=5 fd=34 size=50331648
+capture_allocation index=6 length=50331648
+dmabuf_export index=6 fd=35 size=50331648
+capture_allocation index=7 length=50331648
+dmabuf_export index=7 fd=36 size=50331648
+capture_allocation index=8 length=50331648
+dmabuf_export index=8 fd=37 size=50331648
+capture_allocation index=9 length=50331648
+dmabuf_export index=9 fd=38 size=50331648
+capture_allocation index=10 length=50331648
+dmabuf_export index=10 fd=39 size=50331648
+capture_allocation index=11 length=50331648
+dmabuf_export index=11 fd=40 size=50331648
+capture_buffers=12 exported_dmabufs=12 cpu_mapped=0
+renderer_adopted pid=0 fd=6
+renderer_started pid=0 buffers=12 ipc=seqpacket state=initializing
+render_config projection=1 stereo=1 swap_eyes=0 view0=left view1=right
+nv12_import index=0 memory_type=0
+nv12_import index=1 memory_type=0
+nv12_import index=2 memory_type=0
+nv12_import index=3 memory_type=0
+nv12_import index=4 memory_type=0
+nv12_import index=5 memory_type=0
+nv12_import index=6 memory_type=0
+nv12_import index=7 memory_type=0
+nv12_import index=8 memory_type=0
+nv12_import index=9 memory_type=0
+nv12_import index=10 memory_type=0
+nv12_import index=11 memory_type=0
+video_reinit buffers=12
+renderer_ready pid=0 buffers=12 projection=1 stereo=1 swap_eyes=0
+source_change event=1 phase=initial changes=0x1
+playback_started paced=1 maximum_runtime_factor=3 deadline_margin_s=30 stall_timeout_s=10
+audio_started first_video_pts_us=0
+frame=0 capture_index=0 sequence=0 bytesused=50331648 timestamp=0.000000 audio_clock_us=-9223372036854775808 action=handoff-renderer
+decoder_drain_sent queued_access_units=300
+frame=299 capture_index=9 sequence=0 bytesused=50331648 timestamp=4.988000 audio_clock_us=4978066 action=handoff-renderer
+capture_flag=LAST frames=300 reason=end-of-stream bytesused=0
+summary access_units=300 output_returned=295 frames=300 sequence_drops=0 late_video_drops=0 seek_preroll_drops=0 count_difference=0 errors=0 source_changes=1 capture_reconfigurations=0 eos_event=0 last_buffer=1
+timing source_fps=59.940060 achieved_fps=59.557800 elapsed_s=5.037124 source_duration_s=5.005000 realtime_ratio=0.993623 maximum_feed_lateness_ms=0.000000
+decode_timing samples=180 mean_ms=104.351372 max_ms=213.483285
+renderer_exit=success
+openxr_summary xr_frames=370 rendered_frames=1 received_frames=300 unique_video_frames=0 repeated_video_frames=0 hidden_video_frames=299 pipeline_skipped_frames=0 released_frames=299 session_changes=3
+playback_ended
+result=success scheduler_drops=0
