@@ -1,0 +1,19 @@
+fixture_bytes=776876 access_units=5
+v4l2_driver=iris_driver card=iris_decoder
+output_buffers=4
+capture_format fourcc=Q10C width=3840 height=1920 planes=1 stride=5120 sizeimage=14839808
+tp10_layout words=1280 y_meta=61440 y_data=9830400 uv_offset=9891840 uv_meta=32768 uv_data=4915200 computed_total=14839808 sizeimage=14839808
+visible_rect left=0 top=0 width=3840 height=1920
+capture_buffers=12 cpu_mapped=no
+capture_dequeued index=0 sequence=0 bytesused=14839808 flags=0x4000 queued_access_units=5
+dmabuf_export index=0 fd=4 size=14839808
+vulkan_device=Turnip Adreno (TM) 750 driver_version=0x6802063
+tp10_override_env=set
+plane=y offset=0 extent=1280x1920 memory size=9891840 alignment=4096 dedicated_required=1
+plane=y layout_end_matches=1 expected_end=9891840
+plane=uv offset=9891840 extent=1280x960 memory size=14839808 alignment=4096 dedicated_required=1
+plane=uv layout_end_matches=1 expected_end=14839808
+gpu_fence=signaled
+samples_written=samples-3840x1920.bin words=11059200
+capture_requeued_after_fence index=0
+result=success frames=1 dma_buf_exports=1 gpu_readbacks=1

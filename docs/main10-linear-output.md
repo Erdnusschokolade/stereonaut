@@ -143,3 +143,24 @@ YCbCr-Sampler, Farbmatrix im Shader), Session wählt Q10C für Main10,
 OpenXR/SteamVR mit eigenem Turnip im Renderer, Leistung bei 8K60,
 Höhen/Breiten außerhalb 1920×1088 (UBWC-Layout muss für jede Größe zur
 Iris-Allokation passen), Auslieferung der eigenen Bibliothek.
+
+### Größen bis 8K (2026-10-10)
+
+Die Probe liest die Geometrie jetzt aus dem SOURCE_CHANGE und berechnet die
+Ebenenoffsets nach den Venus/Iris-TP10-UBWC-Formeln (Y-Metadaten,
+Y-Daten, UV-Metadaten, UV-Daten, je 4-KiB-ausgerichtet). Iris polstert die
+Breite auf ganze 192-Pixel-Kacheln (4096 → 4224, 8192 → 8256); Wörter je
+Zeile und Metadaten-Pitch folgen der gepolsterten Breite, gesampelt wird die
+sichtbare. Testclips: libx265 Main10, testsrc2, je erstes Bild gegen
+FFmpeg-Softwaredecode.
+
+| Größe | Iris-CAPTURE (Breite, Stride, Größe) | Formel = sizeimage | Turnip-Layout passt | Y / U / V falsch |
+| --- | --- | --- | --- | --- |
+| 1920×1080 | 1920, 2560, 4.210.688 | ja | ja | 0 / 0 / 0 |
+| 3840×1920 | 3840, 5120, 14.839.808 | ja | ja | 0 / 0 / 0 |
+| 4096×2048 | 4224, 5632, 17.399.808 | ja | ja | 0 / 0 / 0 |
+| 5760×2880 | 5760, 7680, 33.320.960 | ja | ja | 0 / 0 / 0 |
+| 7680×3840 | 7680, 10240, 59.260.928 | ja | ja | 0 / 0 / 0 |
+| 8192×4096 | 8256, 11008, 67.928.064 | ja | ja | 0 / 0 / 0 |
+
+Logs: `main10-diagnostics/tp10-turnip-20261010/run-size-*.log`.
