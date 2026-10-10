@@ -57,6 +57,14 @@ enum player_ui_tab {
     PLAYER_UI_TAB_COUNT,
 };
 
+/* What happens when a title has played to its end (global setting). */
+enum player_end_action {
+    PLAYER_END_STOP,    /* back to the browser */
+    PLAYER_END_REPEAT,  /* the same title again */
+    PLAYER_END_NEXT,    /* the next title of the folder */
+    PLAYER_END_COUNT,
+};
+
 /* Control ids. The transport ids equal the NV12_ACTION_* values. */
 enum player_ui_control {
     PLAYER_UI_NONE = 0,
@@ -79,6 +87,7 @@ enum player_ui_control {
     PLAYER_UI_GAZE_DEBUG = 78,   /* show the gaze and autofocus values */
     PLAYER_UI_VOLUME_DOWN = 90,
     PLAYER_UI_VOLUME_UP = 91,
+    PLAYER_UI_END_ACTION = 92,   /* cycles enum player_end_action */
     /* + 2 * enum player_adjust: decrease; + 1: increase. */
     PLAYER_UI_ADJUST = 100,
     PLAYER_UI_ADJUST_END = PLAYER_UI_ADJUST + 2 * PLAYER_ADJUST_COUNT,
@@ -103,6 +112,7 @@ struct player_ui_state {
     uint32_t video_levels;
     uint32_t format_source; /* enum nv12_format_source */
     float volume;      /* linear output gain, 0 to 1.5 */
+    int end_action;    /* enum player_end_action */
     /* Jellyfin description of the title (chapters, information) or NULL. */
     const struct jf_details *details;
     const float *adjust; /* PLAYER_ADJUST_COUNT values */

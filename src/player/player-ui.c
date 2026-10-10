@@ -33,6 +33,9 @@
 #define VOLUME_DOWN_X 1160
 #define VOLUME_UP_X 1350
 #define VOLUME_R 30
+#define END_X 196
+#define END_W 300
+#define END_H 48
 #define SMALL_R 38
 #define SKIP_R 42
 #define PLAY_R 54
@@ -617,6 +620,23 @@ void player_ui_render(struct player_ui *ui, const struct player_ui_state *state,
                  play_hover ? UI_RGBA(255, 255, 255, 255)
                             : UI_RGBA(20, 22, 28, 255));
 
+    static const char *const end_labels[PLAYER_END_COUNT] = {
+        "Am Ende: Stopp", "Am Ende: Wiederholen", "Am Ende: Nächster",
+    };
+    int end_action = state->end_action >= 0 &&
+                             state->end_action < PLAYER_END_COUNT
+                         ? state->end_action
+                         : PLAYER_END_STOP;
+    ui_fill_round_rect(&canvas, END_X, ROW_Y - END_H / 2.0f, END_W, END_H,
+                       END_H / 2.0f,
+                       hover == PLAYER_UI_END_ACTION ? color_button_hover
+                                                     : color_button);
+    ui_draw_text(&canvas, end_action == PLAYER_END_STOP ? ui->font : ui->bold,
+                 22, END_X + END_W / 2, ROW_Y - 15, END_W - 24,
+                 UI_ALIGN_CENTER,
+                 end_action == PLAYER_END_STOP ? color_dim : color_accent,
+                 end_labels[end_action]);
+
     round_button(&canvas, VOLUME_DOWN_X, VOLUME_R,
                  hover == PLAYER_UI_VOLUME_DOWN, false);
     ui_draw_text(&canvas, ui->bold, 28, VOLUME_DOWN_X, ROW_Y - 20, 0,
@@ -684,6 +704,8 @@ int player_ui_hit_test(const struct player_ui_state *state, float u, float v)
         return PLAYER_UI_SEEK_FORWARD;
     if (in_circle(x, y, VIEW_X, ROW_Y, SMALL_R + 6))
         return PLAYER_UI_VIEW_POPUP;
+    if (in_rect(x, y, END_X, ROW_Y - END_H / 2.0f, END_W, END_H))
+        return PLAYER_UI_END_ACTION;
     if (in_circle(x, y, VOLUME_DOWN_X, ROW_Y, VOLUME_R + 6))
         return PLAYER_UI_VOLUME_DOWN;
     if (in_circle(x, y, VOLUME_UP_X, ROW_Y, VOLUME_R + 6))

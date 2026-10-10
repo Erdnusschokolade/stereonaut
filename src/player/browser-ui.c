@@ -1023,6 +1023,29 @@ enum browser_ui_action browser_ui_activate(struct browser_ui *ui, char *path,
     return BROWSER_UI_NONE;
 }
 
+bool browser_ui_following_title(struct browser_ui *ui, const char *path,
+                                char *next, size_t next_size)
+{
+    bool found = false;
+    for (size_t position = 0; position < ui->grid_count; ++position) {
+        const struct file_browser_entry *entry =
+            &ui->listing.entries[ui->grid[position]];
+        if (!found) {
+            found = strcmp(entry->path, path) == 0;
+            continue;
+        }
+        if (entry->kind != FILE_BROWSER_MEDIA)
+            continue;
+        ui->selected_page = position / PAGE_ENTRIES;
+        ui->selected_start_us = 0;
+        snprintf(ui->selected_title, sizeof(ui->selected_title), "%s",
+                 entry->name);
+        snprintf(next, next_size, "%s", entry->path);
+        return true;
+    }
+    return false;
+}
+
 /* ---- model ------------------------------------------------------------- */
 
 static void free_thumbnails(struct browser_ui *ui)

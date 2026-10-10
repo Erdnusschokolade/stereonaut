@@ -36,6 +36,7 @@ enum nv12_format_source {
 
 enum nv12_ipc_type {
     NV12_IPC_INIT = 1,
+    /* (EOS: index 1 = the title played to its end, 0 = stopped.) */
     NV12_IPC_FRAME = 2,
     NV12_IPC_RELEASE = 3,
     NV12_IPC_FLUSH = 4,

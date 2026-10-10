@@ -850,9 +850,11 @@ static void hold_renderer(struct capture_buffer buffers[MAX_CAPTURE_BUFFERS],
     printf("renderer_held pid=%ld\n", (long)renderer_pid);
 }
 
-static void wait_renderer(void)
+/* `finished`: the title played to its end (the renderer may continue with
+ * the next one), otherwise it was stopped. */
+static void wait_renderer(bool finished)
 {
-    send_renderer_message(NV12_IPC_EOS, 0, 0);
+    send_renderer_message(NV12_IPC_EOS, finished ? 1U : 0U, 0);
     int flags = fcntl(renderer_fd, F_GETFL);
     if (flags >= 0)
         fcntl(renderer_fd, F_SETFL, flags & ~O_NONBLOCK);
@@ -2843,7 +2845,7 @@ int main(int argc, char **argv)
             return 2;
         }
         if (requested_control == NV12_ACTION_BACK || !capture_started)
-            wait_renderer();
+            wait_renderer(false);
         else
             hold_renderer(captures, capture_count);
         if (capture_started) {
@@ -2976,7 +2978,7 @@ int main(int argc, char **argv)
            decode_stats.count,
            decode_stats.count ? decode_stats.sum_ms / decode_stats.count : 0,
            decode_stats.maximum_ms);
-    wait_renderer();
+    wait_renderer(options.frame_limit == 0); /* test runs stop after N */
 
     type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
     must_ioctl(VIDIOC_STREAMOFF, &type, "VIDIOC_STREAMOFF CAPTURE");

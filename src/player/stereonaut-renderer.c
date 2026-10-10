@@ -194,6 +194,9 @@ struct app {
     VkFence browser_fence;
     int ipc_fd;
     bool eos_received;
+    bool title_finished;  /* EOS after the last frame, not "back" */
+    char location[PLAYER_UI_PATH_MAX]; /* what the session plays */
+    int end_action;       /* enum player_end_action (settings.json) */
     PFN_vkImportSemaphoreFdKHR import_semaphore_fd;
     PFN_vkGetMemoryFdPropertiesKHR get_memory_fd_properties;
     PFN_vkGetImageDrmFormatModifierPropertiesEXT get_modifier_properties;
@@ -784,6 +787,10 @@ static void load_preview_settings(struct app *app)
     for (int i = 0; i < PLAYER_UI_PREVIEW_FOV_COUNT; ++i)
         if (player_ui_preview_fovs[i] == fov)
             app->preview_fov = fov;
+    int end_action = settings_get_int("end_action", PLAYER_END_STOP);
+    app->end_action = end_action >= 0 && end_action < PLAYER_END_COUNT
+                          ? end_action
+                          : PLAYER_END_STOP;
     double volume = settings_get_double("volume", 1.0);
     app->volume = volume < 0.0 ? 0.0f : volume > 1.5 ? 1.5f : (float)volume;
 }
@@ -877,6 +884,7 @@ static void receive_frame_messages(struct app *app)
                    app->format_source);
         } else if (message.type == NV12_IPC_EOS) {
             app->eos_received = true;
+            app->title_finished = message.index == 1;
         } else if (message.type == NV12_IPC_STATUS) {
             /* Redraw only for a visible change: the shown second, the
              * seek bar knob (whole pixels) or the play state. */
@@ -1732,6 +1740,7 @@ static struct player_ui_state player_state(const struct app *app)
         .video_levels = app->video_levels,
         .format_source = app->format_source,
         .volume = app->volume,
+        .end_action = app->end_action,
         .details = app->details_valid ? &app->details : NULL,
         .hover = app->ui_hover,
         .preview_visible = app->preview_visible,
@@ -2514,6 +2523,10 @@ static void sync_player_input(struct app *app, XrTime time)
                    action < PLAYER_UI_TAB + PLAYER_UI_TAB_COUNT) {
             app->popup_tab = action - PLAYER_UI_TAB;
             app->ui_dirty = true;
+        } else if (action == PLAYER_UI_END_ACTION) {
+            app->end_action = (app->end_action + 1) % PLAYER_END_COUNT;
+            settings_set_int("end_action", app->end_action);
+            app->ui_dirty = true;
         } else if (action == PLAYER_UI_VOLUME_DOWN ||
                    action == PLAYER_UI_VOLUME_UP) {
             change_volume(app, action == PLAYER_UI_VOLUME_UP ? 1 : -1);
@@ -3039,6 +3052,8 @@ static void begin_playback(struct app *app, int fd, const char *location)
 {
     if (app->playing)
         end_playback(app);
+    snprintf(app->location, sizeof(app->location), "%s", location);
+    app->title_finished = false;
     if (strncmp(location, "jf:item:", 8) == 0) {
         char item[64] = "";
         size_t length = strcspn(location + 8, ":");
@@ -3101,10 +3116,35 @@ static void handle_control(struct app *app)
                 begin_playback(app, fd, command.path);
             }
         } else if (command.type == PLAYER_UI_BROWSE) {
+            bool finished = app->playing && app->title_finished;
             if (app->playing)
                 end_playback(app);
             command.path[sizeof(command.path) - 1] = '\0';
             command.message[sizeof(command.message) - 1] = '\0';
+            /* A title that played to its end may lead straight into the
+             * next one (or itself) without showing the browser. */
+            char next[PLAYER_UI_PATH_MAX];
+            bool follow = false;
+            if (finished && !command.message[0] &&
+                app->end_action == PLAYER_END_REPEAT) {
+                snprintf(next, sizeof(next), "%s", app->location);
+                follow = next[0] != '\0';
+            } else if (finished && !command.message[0] &&
+                       app->end_action == PLAYER_END_NEXT) {
+                follow = browser_ui_following_title(&app->browser,
+                                                    app->location, next,
+                                                    sizeof(next));
+                if (follow)
+                    snprintf(app->title, sizeof(app->title), "%s",
+                             app->browser.selected_title);
+            }
+            if (follow) {
+                printf("player_end_action=%d next=%s\n", app->end_action,
+                       next);
+                app->awaiting_command = true;
+                send_control(app, PLAYER_UI_FILE_SELECTED, next, 0);
+                continue;
+            }
             browser_ui_navigate(&app->browser, command.path, command.message);
             app->awaiting_command = false;
         }
