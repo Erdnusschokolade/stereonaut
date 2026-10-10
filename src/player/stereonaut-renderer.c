@@ -24,6 +24,7 @@
 #include <openxr/openxr_platform.h>
 
 #include "browser-ui.h"
+#include "jellyfin.h"
 #include "player-ui.h"
 #include "settings.h"
 #include "title-settings.h"
@@ -274,6 +275,9 @@ struct app {
     /* Seek bar preview: trickplay pictures of the playing Jellyfin item. */
     struct trickplay *trickplay;
     struct ui_image *preview;
+    /* Jellyfin description of the playing title (chapters, info tab). */
+    struct jf_details details;
+    bool details_valid;
     bool preview_visible;
     int64_t preview_us;
     bool preview_perspective; /* straighten 180/360 degree previews */
@@ -1728,6 +1732,7 @@ static struct player_ui_state player_state(const struct app *app)
         .video_levels = app->video_levels,
         .format_source = app->format_source,
         .volume = app->volume,
+        .details = app->details_valid ? &app->details : NULL,
         .hover = app->ui_hover,
         .preview_visible = app->preview_visible,
         .preview_us = app->preview_us,
@@ -3019,6 +3024,7 @@ static void end_playback(struct app *app)
      * land on "Beenden" and close the program). */
     app->select_down[0] = app->select_down[1] = true;
     trickplay_open(app->trickplay, NULL);
+    app->details_valid = false;
     ui_image_free(app->preview);
     app->preview = NULL;
     app->preview_visible = false;
@@ -3867,6 +3873,10 @@ int main(int argc, char **argv)
                 app.preview = preview;
                 if (app.preview_visible)
                     app.ui_dirty = true;
+            }
+            if (trickplay_details(app.trickplay, &app.details)) {
+                app.details_valid = true;
+                app.ui_dirty = true;
             }
         }
         browser_ui_update(&app.browser);

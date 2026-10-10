@@ -29,6 +29,9 @@ struct trickplay {
     int want_fov;
     /* Newest finished picture, taken by trickplay_poll. */
     struct ui_image *result;
+    /* Description of the current item, taken by trickplay_details. */
+    struct jf_details details;
+    bool details_ready;
 };
 
 /* Worker-only state of the current item. */
@@ -70,13 +73,28 @@ static int thumbnail_index(const struct item_state *state, int64_t position_us)
     return (int)index;
 }
 
-static void load_info(struct item_state *state)
+static void load_info(struct trickplay *trickplay, struct item_state *state)
 {
     char error[256];
     state->info_state = -1;
     if (jf_config_load(&state->config, error, sizeof(error)) < 0 ||
-        !jf_config_has_token(&state->config) ||
-        jf_trickplay_info(&state->config, state->item, &state->info) < 0) {
+        !jf_config_has_token(&state->config))
+        return;
+    struct jf_details *details = malloc(sizeof(*details));
+    if (details &&
+        jf_item_details(&state->config, state->item, details) == 0) {
+        printf("item_details item=%s chapters=%d overview=%zu\n",
+               state->item, details->chapter_count,
+               strlen(details->overview));
+        pthread_mutex_lock(&trickplay->mutex);
+        if (state->generation == trickplay->generation) {
+            trickplay->details = *details;
+            trickplay->details_ready = true;
+        }
+        pthread_mutex_unlock(&trickplay->mutex);
+    }
+    free(details);
+    if (jf_trickplay_info(&state->config, state->item, &state->info) < 0) {
         printf("trickplay item=%s available=0\n", state->item);
         return;
     }
@@ -245,7 +263,7 @@ static void *worker(void *argument)
         pthread_mutex_unlock(&trickplay->mutex);
         struct ui_image *image = NULL;
         if (index < 0)
-            load_info(&state);
+            load_info(trickplay, &state);
         else
             image = make_thumbnail(&state, index, layout, projection, fov);
         pthread_mutex_lock(&trickplay->mutex);
@@ -309,6 +327,7 @@ void trickplay_open(struct trickplay *trickplay, const char *item_id)
     snprintf(trickplay->item, sizeof(trickplay->item), "%s",
              item_id ? item_id : "");
     trickplay->want_valid = false;
+    trickplay->details_ready = false;
     ui_image_free(trickplay->result);
     trickplay->result = NULL;
     pthread_cond_signal(&trickplay->changed);
@@ -334,6 +353,20 @@ void trickplay_request(struct trickplay *trickplay, int64_t position_us,
         pthread_cond_signal(&trickplay->changed);
     }
     pthread_mutex_unlock(&trickplay->mutex);
+}
+
+bool trickplay_details(struct trickplay *trickplay,
+                       struct jf_details *details)
+{
+    if (!trickplay)
+        return false;
+    pthread_mutex_lock(&trickplay->mutex);
+    bool ready = trickplay->details_ready;
+    if (ready)
+        *details = trickplay->details;
+    trickplay->details_ready = false;
+    pthread_mutex_unlock(&trickplay->mutex);
+    return ready;
 }
 
 bool trickplay_poll(struct trickplay *trickplay, struct ui_image **image)

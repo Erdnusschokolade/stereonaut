@@ -1,11 +1,13 @@
 #define _POSIX_C_SOURCE 200809L
 #include "player-ui.h"
 
+#include "jellyfin.h"
 #include "nv12-playback-ipc.h"
 #include "ui-draw.h"
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 /* Control card. */
 #define CARD_X 40
@@ -426,8 +428,21 @@ static void draw_popup(struct player_ui *ui, struct ui_canvas *canvas,
     }
 }
 
-/* Picture (if any) with the time below it; without a picture just the
- * time. */
+/* Name of the chapter `position_us` lies in, or NULL. */
+static const char *chapter_at(const struct player_ui_state *state,
+                              int64_t position_us)
+{
+    const struct jf_details *details = state->details;
+    const char *name = NULL;
+    for (int i = 0; details && i < details->chapter_count; ++i)
+        if (details->chapter_us[i] <= position_us &&
+            details->chapter_names[i][0])
+            name = details->chapter_names[i];
+    return name;
+}
+
+/* Picture (if any) with the time (and chapter) below it; without a
+ * picture just the label. */
 static void draw_preview(struct player_ui *ui, struct ui_canvas *canvas,
                          const struct player_ui_state *state)
 {
@@ -439,7 +454,16 @@ static void draw_preview(struct player_ui *ui, struct ui_canvas *canvas,
         if (image_w > 2 * PREVIEW_IMAGE_H)
             image_w = 2 * PREVIEW_IMAGE_H;
     }
+    char text[96];
+    format_time(text, state->preview_us);
+    const char *chapter = chapter_at(state, state->preview_us);
+    if (chapter) {
+        size_t used = strlen(text);
+        snprintf(text + used, sizeof(text) - used, " · %s", chapter);
+    }
     int width = image_w ? image_w + 2 * PREVIEW_PAD : 140;
+    if (chapter && width < 360)
+        width = 360;
     int height = (image_h ? image_h + PREVIEW_PAD : 0) + PREVIEW_LABEL_H;
     float center = BAR_X + BAR_W * time_ratio(state, state->preview_us);
     float x = center - width / 2.0f;
@@ -454,10 +478,8 @@ static void draw_preview(struct player_ui *ui, struct ui_canvas *canvas,
                        UI_RGBA(17, 18, 22, 240));
     ui_stroke_round_rect(canvas, x, y, width, height, 18, 2, color_border);
     if (image_w)
-        ui_draw_image(canvas, image, x + PREVIEW_PAD, y + PREVIEW_PAD,
-                      image_w, image_h, 12, 0.0f);
-    char text[32];
-    format_time(text, state->preview_us);
+        ui_draw_image(canvas, image, x + (width - image_w) / 2.0f,
+                      y + PREVIEW_PAD, image_w, image_h, 12, 0.0f);
     ui_draw_text(canvas, ui->bold, 26, (int)(x + width / 2.0f),
                  (int)(y + height - PREVIEW_LABEL_H + 5), width - 12,
                  UI_ALIGN_CENTER, color_text, text);
@@ -507,6 +529,13 @@ void player_ui_render(struct player_ui *ui, const struct player_ui_state *state,
     if (ratio > 0.0f)
         ui_fill_round_rect(&canvas, BAR_X, BAR_Y, BAR_W * ratio, BAR_H,
                            BAR_H / 2.0f, color_accent);
+    for (int i = 0; state->details && i < state->details->chapter_count;
+         ++i) {
+        float mark = time_ratio(state, state->details->chapter_us[i]);
+        if (mark > 0.0f && mark < 1.0f)
+            ui_fill_rect(&canvas, BAR_X + BAR_W * mark - 2, BAR_Y - 6, 4,
+                         BAR_H + 12, UI_RGBA(255, 255, 255, 170));
+    }
     float knob_x = BAR_X + BAR_W * ratio;
     ui_fill_circle(&canvas, knob_x, BAR_Y + BAR_H / 2.0f, bar_hot ? 20 : 15,
                    UI_RGBA(0, 0, 0, 80));

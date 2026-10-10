@@ -887,6 +887,82 @@ int jf_trickplay_info(const struct jf_config *config, const char *item_id,
     return result;
 }
 
+/* Appends the "Name" of each array element (or the strings themselves),
+ * separated by ", ", as far as they fit. */
+static void join_names(json_object *array, char *out, size_t size)
+{
+    out[0] = '\0';
+    if (!array || !json_object_is_type(array, json_type_array))
+        return;
+    size_t used = 0;
+    for (size_t i = 0; i < json_object_array_length(array); ++i) {
+        json_object *entry = json_object_array_get_idx(array, i);
+        const char *name = json_object_is_type(entry, json_type_string)
+                               ? json_object_get_string(entry)
+                               : json_string(entry, "Name");
+        if (!name || !name[0])
+            continue;
+        size_t length = strlen(name);
+        if (used + (used ? 2U : 0U) + length + 1U > size)
+            break;
+        if (used) {
+            memcpy(out + used, ", ", 2);
+            used += 2;
+        }
+        memcpy(out + used, name, length);
+        used += length;
+        out[used] = '\0';
+    }
+}
+
+int jf_item_details(const struct jf_config *config, const char *item_id,
+                    struct jf_details *details)
+{
+    memset(details, 0, sizeof(*details));
+    char path[256];
+    snprintf(path, sizeof(path),
+             "/Items/%s?userId=%s&Fields=Chapters,Overview,People,Studios,"
+             "Genres,Tags",
+             item_id, config->user_id);
+    json_object *root = NULL;
+    if (json_call(config, "GET", path, NULL, &root, NULL, 0) < 0)
+        return -1;
+    copy_string(details->overview, sizeof(details->overview),
+                json_string(root, "Overview"));
+    json_object *value = NULL;
+    if (json_object_object_get_ex(root, "People", &value))
+        join_names(value, details->people, sizeof(details->people));
+    if (json_object_object_get_ex(root, "Studios", &value))
+        join_names(value, details->studios, sizeof(details->studios));
+    if (json_object_object_get_ex(root, "Genres", &value))
+        join_names(value, details->genres, sizeof(details->genres));
+    if (json_object_object_get_ex(root, "Tags", &value))
+        join_names(value, details->tags, sizeof(details->tags));
+    if (json_object_object_get_ex(root, "CommunityRating", &value))
+        details->community_rating = (float)json_object_get_double(value);
+    details->year = json_int(root, "ProductionYear");
+    json_object *chapters = NULL;
+    if (json_object_object_get_ex(root, "Chapters", &chapters) &&
+        json_object_is_type(chapters, json_type_array)) {
+        for (size_t i = 0; i < json_object_array_length(chapters) &&
+                           details->chapter_count < JF_MAX_CHAPTERS;
+             ++i) {
+            json_object *chapter = json_object_array_get_idx(chapters, i);
+            json_object *start = NULL;
+            if (!json_object_object_get_ex(chapter, "StartPositionTicks",
+                                           &start))
+                continue;
+            int n = details->chapter_count++;
+            details->chapter_us[n] = json_object_get_int64(start) / 10;
+            copy_string(details->chapter_names[n],
+                        sizeof(details->chapter_names[n]),
+                        json_string(chapter, "Name"));
+        }
+    }
+    json_object_put(root);
+    return 0;
+}
+
 int jf_fetch_trickplay_tile(const struct jf_config *config,
                             const char *item_id,
                             const struct jf_trickplay *info, int tile,

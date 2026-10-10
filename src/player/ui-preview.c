@@ -7,6 +7,7 @@
  * (binary P6). Without them synthetic gradients are used. */
 #define _POSIX_C_SOURCE 200809L
 #include "browser-ui.h"
+#include "jellyfin.h"
 #include "player-ui.h"
 #include "ui-draw.h"
 
@@ -151,7 +152,23 @@ static int preview_player(const char *path, int hover, bool popup, int tab)
     adjust[PLAYER_ADJUST_ZOOM] = 0.2f;
     adjust[PLAYER_ADJUST_TILT] = -25.0f;
     adjust[PLAYER_ADJUST_HEAD_MOTION] = 0.5f;
+    static struct jf_details details = {
+        .overview = "Ein Flug über die Alpen bei Sonnenaufgang, aufgenommen "
+                    "mit einer 8K-Stereokamera unter einem Segelflugzeug. "
+                    "Gipfel, Gletscher und Täler ziehen in ruhigen Bögen "
+                    "vorbei.",
+        .people = "Anna Beispiel, Max Muster",
+        .studios = "Alpenfilm",
+        .genres = "Natur, Reise, 8K",
+        .year = 2023,
+        .community_rating = 8.1f,
+        .chapter_count = 4,
+        .chapter_us = {0, INT64_C(600000000), INT64_C(1500000000),
+                       INT64_C(2700000000)},
+        .chapter_names = {"Start", "Gletscher", "Matterhorn", "Landung"},
+    };
     struct player_ui_state state = {
+        .details = &details,
         .title = "Über den Wolken – Alpenflug 8K",
         .volume = 0.8f,
         .position_us = INT64_C(754000000),

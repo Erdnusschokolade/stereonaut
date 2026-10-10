@@ -13,6 +13,7 @@
 
 struct ui_image;
 struct trickplay;
+struct jf_details;
 
 struct trickplay *trickplay_create(void);
 void trickplay_destroy(struct trickplay *trickplay);
@@ -28,5 +29,9 @@ void trickplay_request(struct trickplay *trickplay, int64_t position_us,
                        int fov_degrees);
 /* Takes the newest finished picture (owned by the caller). */
 bool trickplay_poll(struct trickplay *trickplay, struct ui_image **image);
+/* The worker also loads the item's description (chapters, overview,
+ * people); true once when it has arrived for the current item. */
+bool trickplay_details(struct trickplay *trickplay,
+                       struct jf_details *details);
 
 #endif

@@ -102,6 +102,8 @@ struct player_ui_state {
     uint32_t video_levels;
     uint32_t format_source; /* enum nv12_format_source */
     float volume;      /* linear output gain, 0 to 1.5 */
+    /* Jellyfin description of the title (chapters, information) or NULL. */
+    const struct jf_details *details;
     const float *adjust; /* PLAYER_ADJUST_COUNT values */
     bool gaze_debug;
     const char *debug_text; /* line at the bottom of the card, or NULL */
@@ -118,6 +120,7 @@ struct player_ui_state {
 
 struct ui_font;
 struct ui_image;
+struct jf_details;
 
 struct player_ui {
     struct ui_font *font, *bold;

@@ -70,6 +70,22 @@ struct jf_trickplay {
     int interval_ms;
 };
 
+/* Description of a title for the player: chapters (seek bar marks) and the
+ * information tab. Lists are comma separated, cut to fit. */
+#define JF_MAX_CHAPTERS 64
+struct jf_details {
+    char overview[1536];
+    char people[256];
+    char studios[160];
+    char genres[160];
+    char tags[256];
+    float community_rating; /* 0 if unknown */
+    int year;               /* 0 if unknown */
+    int chapter_count;
+    int64_t chapter_us[JF_MAX_CHAPTERS];
+    char chapter_names[JF_MAX_CHAPTERS][48];
+};
+
 /* Reads $XDG_CONFIG_HOME/stereonaut/jellyfin.json. Returns 0 if a server is
  * configured (token may still be empty), -1 otherwise. */
 int jf_config_load(struct jf_config *config, char *error, size_t error_size);
@@ -137,6 +153,8 @@ int jf_report_playback(const struct jf_config *config,
  * server has none. */
 int jf_trickplay_info(const struct jf_config *config, const char *item_id,
                       struct jf_trickplay *info);
+int jf_item_details(const struct jf_config *config, const char *item_id,
+                    struct jf_details *details);
 /* Downloads tile image `tile` (JPEG); *data is malloc'd. */
 int jf_fetch_trickplay_tile(const struct jf_config *config,
                             const char *item_id,
