@@ -204,6 +204,7 @@ struct app {
     bool swap_eyes;
     uint32_t video_levels; /* enum nv12_video_levels */
     uint32_t format_source; /* enum nv12_format_source, shown on the panel */
+    float volume;           /* output gain (settings.json "volume") */
     XrActionSet action_set;
     XrAction aim_action;
     XrAction select_action;
@@ -606,6 +607,25 @@ static void send_ipc(struct app *app, uint32_t type, uint32_t index)
     send_message(app, &message);
 }
 
+static void send_volume(struct app *app)
+{
+    struct nv12_ipc_message message = {
+        .type = NV12_IPC_VOLUME, .volume = app->volume,
+    };
+    send_message(app, &message);
+}
+
+/* Steps of 10 %; above 100 % the samples are amplified (may clip). */
+static void change_volume(struct app *app, int direction)
+{
+    float volume = roundf((app->volume + 0.1f * (float)direction) * 10.0f) /
+                   10.0f;
+    app->volume = volume < 0.0f ? 0.0f : volume > 1.5f ? 1.5f : volume;
+    settings_set_double("volume", app->volume);
+    send_volume(app);
+    app->ui_dirty = true;
+}
+
 static void send_seek_to(struct app *app, int64_t target_us)
 {
     struct nv12_ipc_message message = {
@@ -760,6 +780,8 @@ static void load_preview_settings(struct app *app)
     for (int i = 0; i < PLAYER_UI_PREVIEW_FOV_COUNT; ++i)
         if (player_ui_preview_fovs[i] == fov)
             app->preview_fov = fov;
+    double volume = settings_get_double("volume", 1.0);
+    app->volume = volume < 0.0 ? 0.0f : volume > 1.5 ? 1.5f : (float)volume;
 }
 
 static void send_panel_state(struct app *app)
@@ -1705,6 +1727,7 @@ static struct player_ui_state player_state(const struct app *app)
         .swap_eyes = app->swap_eyes,
         .video_levels = app->video_levels,
         .format_source = app->format_source,
+        .volume = app->volume,
         .hover = app->ui_hover,
         .preview_visible = app->preview_visible,
         .preview_us = app->preview_us,
@@ -2099,6 +2122,7 @@ static void reinitialize_video(struct app *app,
     app->current_video_index = -1;
     app->eos_received = false;
     send_ipc(app, NV12_IPC_READY, 0);
+    send_volume(app);
     printf("video_reinit buffers=%u\n", app->video_buffer_count);
 }
 
@@ -2485,6 +2509,9 @@ static void sync_player_input(struct app *app, XrTime time)
                    action < PLAYER_UI_TAB + PLAYER_UI_TAB_COUNT) {
             app->popup_tab = action - PLAYER_UI_TAB;
             app->ui_dirty = true;
+        } else if (action == PLAYER_UI_VOLUME_DOWN ||
+                   action == PLAYER_UI_VOLUME_UP) {
+            change_volume(app, action == PLAYER_UI_VOLUME_UP ? 1 : -1);
         } else if (action == PLAYER_UI_GAZE_DEBUG) {
             app->gaze_debug = !app->gaze_debug;
             app->debug_text[0] = '\0';

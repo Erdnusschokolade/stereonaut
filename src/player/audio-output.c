@@ -4,6 +4,7 @@
 #include <alsa/asoundlib.h>
 #include <errno.h>
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,6 +35,7 @@ struct audio_output {
     uint64_t decoded_frames;
     uint64_t output_samples;
     uint64_t recoveries;
+    atomic_int volume_permille; /* set by the UI, read by the audio worker */
 };
 
 static int64_t monotonic_us(void)
@@ -142,6 +144,7 @@ int audio_output_open(struct audio_output **result,
                   strerror(errno));
         return -1;
     }
+    atomic_init(&audio->volume_permille, 1000);
     audio->base_pts_us = AV_NOPTS_VALUE;
     audio->wall_start_us = AV_NOPTS_VALUE;
     audio->pause_started_us = AV_NOPTS_VALUE;
@@ -281,6 +284,16 @@ static int consume_frames(struct audio_output *audio,
                     av_rescale(skipped_samples, AV_TIME_BASE, OUTPUT_RATE);
             audio->base_valid = true;
         }
+        int volume = atomic_load(&audio->volume_permille);
+        if (volume != 1000) {
+            int16_t *samples = (int16_t *)output;
+            for (int i = 0; i < result * OUTPUT_CHANNELS; ++i) {
+                int value = samples[i] * volume / 1000;
+                samples[i] = (int16_t)(value > 32767    ? 32767
+                                       : value < -32768 ? -32768
+                                                        : value);
+            }
+        }
         int write_result = write_samples(
             audio, output + skipped_samples * OUTPUT_CHANNELS * sizeof(int16_t),
             result - skipped_samples,
@@ -400,6 +413,17 @@ int audio_output_reset(struct audio_output *audio, int64_t target_us,
     audio->wall_start_us = AV_NOPTS_VALUE;
     audio->pause_started_us = AV_NOPTS_VALUE;
     return 0;
+}
+
+void audio_output_set_volume(struct audio_output *audio, float volume)
+{
+    if (!audio)
+        return;
+    if (volume < 0.0f)
+        volume = 0.0f;
+    if (volume > 1.5f)
+        volume = 1.5f;
+    atomic_store(&audio->volume_permille, (int)(volume * 1000.0f + 0.5f));
 }
 
 int64_t audio_output_clock_us(struct audio_output *audio)

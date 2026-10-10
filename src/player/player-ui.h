@@ -76,6 +76,8 @@ enum player_ui_control {
     PLAYER_UI_RESET_POSITION = 76,
     PLAYER_UI_RESET_PICTURE = 77,
     PLAYER_UI_GAZE_DEBUG = 78,   /* show the gaze and autofocus values */
+    PLAYER_UI_VOLUME_DOWN = 90,
+    PLAYER_UI_VOLUME_UP = 91,
     /* + 2 * enum player_adjust: decrease; + 1: increase. */
     PLAYER_UI_ADJUST = 100,
     PLAYER_UI_ADJUST_END = PLAYER_UI_ADJUST + 2 * PLAYER_ADJUST_COUNT,
@@ -99,6 +101,7 @@ struct player_ui_state {
     bool swap_eyes;
     uint32_t video_levels;
     uint32_t format_source; /* enum nv12_format_source */
+    float volume;      /* linear output gain, 0 to 1.5 */
     const float *adjust; /* PLAYER_ADJUST_COUNT values */
     bool gaze_debug;
     const char *debug_text; /* line at the bottom of the card, or NULL */

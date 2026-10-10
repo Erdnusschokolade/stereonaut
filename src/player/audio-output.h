@@ -31,6 +31,8 @@ int audio_output_pause(struct audio_output *audio, bool paused,
 int audio_output_reset(struct audio_output *audio, int64_t target_us,
                        char *error, size_t error_size);
 int64_t audio_output_clock_us(struct audio_output *audio);
+/* Linear gain applied to the decoded samples (0 to 1.5); any thread. */
+void audio_output_set_volume(struct audio_output *audio, float volume);
 void audio_output_get_stats(struct audio_output *audio,
                             struct audio_output_stats *stats);
 void audio_output_close(struct audio_output **audio);

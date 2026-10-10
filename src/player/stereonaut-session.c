@@ -168,6 +168,8 @@ static char title_key[TITLE_KEY_SIZE];
 static struct title_settings view_state;
 static bool view_state_valid;
 static bool renderer_held;
+/* Pipeline whose output volume the renderer sets. */
+static struct media_pipeline *volume_pipeline;
 
 /* Exit codes understood by the launcher. */
 #define EXIT_UNSUPPORTED_FORMAT 3
@@ -782,6 +784,9 @@ static bool process_renderer_messages(
                    " levels=%u key=%s\n",
                    view_state.projection_mode, view_state.stereo_layout,
                    view_state.swap_eyes, view_state.video_levels, title_key);
+        } else if (message.type == NV12_IPC_VOLUME) {
+            media_pipeline_set_volume(volume_pipeline, message.volume);
+            printf("volume=%.2f\n", message.volume);
         } else if (message.type == NV12_IPC_HELD) {
             renderer_held = true;
         } else if (message.type == NV12_IPC_PANEL) {
@@ -2211,6 +2216,7 @@ int main(int argc, char **argv)
             return EXIT_UNSUPPORTED_FORMAT;
         return strncmp(input, "http", 4) == 0 ? EXIT_SOURCE_FAILED : 2;
     }
+    volume_pipeline = pipeline;
     const struct media_stream_info *info = media_pipeline_info(pipeline);
     uint32_t expected_width = (uint32_t)info->width;
     uint32_t expected_height = (uint32_t)info->height;
@@ -2845,6 +2851,7 @@ int main(int argc, char **argv)
                 close(captures[i].dma_buf_fd) < 0)
                 fail_errno("close CAPTURE DMA-BUF control");
         media_packet_unref(&next_packet);
+        volume_pipeline = NULL;
         media_pipeline_close(&pipeline);
         if (requested_control == NV12_ACTION_BACK)
             return 0;
@@ -2971,6 +2978,7 @@ int main(int argc, char **argv)
             fail_errno("close CAPTURE DMA-BUF");
     }
     media_packet_unref(&next_packet);
+    volume_pipeline = NULL;
     media_pipeline_close(&pipeline);
     bool success = frames + capture_error_drops == queued_access_units &&
                    sequence_drops == 0 &&

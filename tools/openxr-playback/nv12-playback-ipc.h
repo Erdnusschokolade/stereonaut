@@ -57,6 +57,9 @@ enum nv12_ipc_type {
     /* Session -> renderer: the format was detected from the first frames
      * (projection_mode, stereo_layout, format_source). */
     NV12_IPC_FORMAT = 14,
+    /* Renderer -> session: output volume (volume, 1 = unchanged), sent after
+     * READY and on every change. */
+    NV12_IPC_VOLUME = 15,
 };
 
 /* INIT pixel_format: how the decoder buffers are laid out. */
@@ -113,6 +116,8 @@ struct nv12_ipc_message {
     uint32_t video_levels;
     /* INIT and FORMAT: enum nv12_format_source. */
     uint32_t format_source;
+    /* VOLUME: linear gain, 0 to 1.5. */
+    float volume;
 };
 
 #endif

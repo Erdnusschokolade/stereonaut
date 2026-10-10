@@ -23,6 +23,8 @@ int media_pipeline_pause(struct media_pipeline *pipeline, bool paused,
                          char *error, size_t error_size);
 int media_pipeline_seek(struct media_pipeline *pipeline, int64_t target_us,
                         bool paused, char *error, size_t error_size);
+/* Output volume (linear gain 0 to 1.5); no effect without audio. */
+void media_pipeline_set_volume(struct media_pipeline *pipeline, float volume);
 void media_pipeline_close(struct media_pipeline **pipeline);
 
 #endif

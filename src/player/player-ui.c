@@ -28,6 +28,9 @@
 #define PLAY_X 800
 #define SKIP_FORWARD_X 950
 #define VIEW_X 1484
+#define VOLUME_DOWN_X 1160
+#define VOLUME_UP_X 1350
+#define VOLUME_R 30
 #define SMALL_R 38
 #define SKIP_R 42
 #define PLAY_R 54
@@ -531,6 +534,24 @@ void player_ui_render(struct player_ui *ui, const struct player_ui_state *state,
                  play_hover ? UI_RGBA(255, 255, 255, 255)
                             : UI_RGBA(20, 22, 28, 255));
 
+    round_button(&canvas, VOLUME_DOWN_X, VOLUME_R,
+                 hover == PLAYER_UI_VOLUME_DOWN, false);
+    ui_draw_text(&canvas, ui->bold, 28, VOLUME_DOWN_X, ROW_Y - 20, 0,
+                 UI_ALIGN_CENTER, color_text, "−");
+    round_button(&canvas, VOLUME_UP_X, VOLUME_R, hover == PLAYER_UI_VOLUME_UP,
+                 false);
+    ui_draw_text(&canvas, ui->bold, 28, VOLUME_UP_X, ROW_Y - 20, 0,
+                 UI_ALIGN_CENTER, color_text, "+");
+    char volume[24];
+    snprintf(volume, sizeof(volume), "%d %%",
+             (int)(state->volume * 100.0f + 0.5f));
+    ui_draw_text(&canvas, ui->font, 20, (VOLUME_DOWN_X + VOLUME_UP_X) / 2,
+                 ROW_Y - 34, 0, UI_ALIGN_CENTER, color_dim, "Lautstärke");
+    ui_draw_text(&canvas, ui->bold, 26, (VOLUME_DOWN_X + VOLUME_UP_X) / 2,
+                 ROW_Y - 8, 0, UI_ALIGN_CENTER,
+                 state->volume <= 0.0f ? color_dim : color_text,
+                 state->volume <= 0.0f ? "Stumm" : volume);
+
     round_button(&canvas, VIEW_X, SMALL_R, hover == PLAYER_UI_VIEW_POPUP,
                  state->popup_open);
     ui_draw_icon(&canvas, UI_ICON_CUBE, VIEW_X, ROW_Y, 38, color_text);
@@ -580,6 +601,10 @@ int player_ui_hit_test(const struct player_ui_state *state, float u, float v)
         return PLAYER_UI_SEEK_FORWARD;
     if (in_circle(x, y, VIEW_X, ROW_Y, SMALL_R + 6))
         return PLAYER_UI_VIEW_POPUP;
+    if (in_circle(x, y, VOLUME_DOWN_X, ROW_Y, VOLUME_R + 6))
+        return PLAYER_UI_VOLUME_DOWN;
+    if (in_circle(x, y, VOLUME_UP_X, ROW_Y, VOLUME_R + 6))
+        return PLAYER_UI_VOLUME_UP;
     return PLAYER_UI_NONE;
 }
 

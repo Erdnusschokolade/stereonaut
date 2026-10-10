@@ -153,6 +153,7 @@ static int preview_player(const char *path, int hover, bool popup, int tab)
     adjust[PLAYER_ADJUST_HEAD_MOTION] = 0.5f;
     struct player_ui_state state = {
         .title = "Über den Wolken – Alpenflug 8K",
+        .volume = 0.8f,
         .position_us = INT64_C(754000000),
         .duration_us = INT64_C(3165000000),
         .paused = hover == 99,

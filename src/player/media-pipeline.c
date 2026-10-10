@@ -422,6 +422,12 @@ int media_pipeline_seek(struct media_pipeline *pipeline, int64_t target_us,
     return 0;
 }
 
+void media_pipeline_set_volume(struct media_pipeline *pipeline, float volume)
+{
+    if (pipeline)
+        audio_output_set_volume(pipeline->audio, volume);
+}
+
 void media_pipeline_close(struct media_pipeline **pointer)
 {
     if (!pointer || !*pointer)
