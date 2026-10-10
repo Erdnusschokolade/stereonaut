@@ -615,16 +615,17 @@ void browser_ui_render(struct browser_ui *ui, uint32_t *pixels, bool bgra)
 
 /* ---- input ------------------------------------------------------------- */
 
-int browser_ui_hit_test(float u, float v)
+/* The stateless hit test cannot know whether the sort menu is open; it
+ * reports ID_SORT_AREA over the menu rectangle (which overlaps the grid) and
+ * set_pointer re-tests with the menu ignored when the menu is closed. */
+static int hit_test(int x, int y, bool with_menu)
 {
-    int x = (int)(u * BROWSER_UI_WIDTH);
-    int y = (int)(v * BROWSER_UI_HEIGHT);
     if (x >= SORT_X && x < SORT_X + SORT_W && y >= SORT_Y &&
         y < SORT_Y + SORT_H)
         return ID_SORT;
-    if (x >= MENU_X && x < MENU_X + MENU_W && y >= MENU_Y &&
+    if (with_menu && x >= MENU_X && x < MENU_X + MENU_W && y >= MENU_Y &&
         y < MENU_Y + MENU_H)
-        return ID_SORT_AREA; /* only counts while the menu is open */
+        return ID_SORT_AREA;
     for (int slot = 0; slot < (int)PAGE_ENTRIES; ++slot) {
         int tx, ty;
         tile_rect(slot, &tx, &ty);
@@ -650,6 +651,12 @@ int browser_ui_hit_test(float u, float v)
         return ID_PAGE_AREA;
     }
     return -1;
+}
+
+int browser_ui_hit_test(float u, float v)
+{
+    return hit_test((int)(u * BROWSER_UI_WIDTH), (int)(v * BROWSER_UI_HEIGHT),
+                    true);
 }
 
 /* Page buttons depend on the page count, which the stateless hit test does
@@ -679,7 +686,7 @@ void browser_ui_set_pointer(struct browser_ui *ui, bool visible, int x, int y,
             int row = (y - MENU_Y - 8) / MENU_ITEM_H;
             hover = row >= 0 && row < JF_SORT_COUNT ? ID_SORT_ITEM + row : -1;
         } else {
-            hover = -1;
+            hover = hit_test(x, y, false);
         }
     } else if (ui->sort_menu_open) {
         /* Clicks outside the menu only close it. */
@@ -713,7 +720,8 @@ void browser_ui_set_pointer(struct browser_ui *ui, bool visible, int x, int y,
 static void request(struct browser_ui *ui, const char *location)
 {
     char error[256] = {0};
-    snprintf(ui->location, sizeof(ui->location), "%s", location);
+    if (location != ui->location) /* snprintf must not overlap its source */
+        snprintf(ui->location, sizeof(ui->location), "%s", location);
     if (file_browser_request(ui->browser, location, error,
                              sizeof(error)) < 0) {
         snprintf(ui->listing.error, sizeof(ui->listing.error), "%s", error);
