@@ -12,8 +12,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Horizontal field of view of the straightened 180/360 degree preview. */
-#define FORWARD_FOV_DEGREES 100.0
 #define PI 3.14159265358979323846
 
 struct trickplay {
@@ -28,6 +26,7 @@ struct trickplay {
     bool want_valid;
     int64_t want_us;
     uint32_t want_layout, want_projection;
+    int want_fov;
     /* Newest finished picture, taken by trickplay_poll. */
     struct ui_image *result;
 };
@@ -46,6 +45,7 @@ struct item_state {
     struct ui_image *decoded;
     int done_index;
     uint32_t done_layout, done_projection;
+    int done_fov;
 };
 
 static void reset_item(struct item_state *state)
@@ -150,13 +150,13 @@ static void sample(const struct ui_image *image, double x, double y,
 /* Perspective view straight ahead (4:3) out of an equirectangular eye,
  * with the same mapping as the projection shader. */
 static struct ui_image *straighten(const struct ui_image *eye,
-                                   uint32_t projection)
+                                   uint32_t projection, int fov_degrees)
 {
     int height = eye->height, width = eye->height * 4 / 3;
     struct ui_image *view = ui_image_create(width, height);
     if (!view)
         return NULL;
-    double half_x = tan(FORWARD_FOV_DEGREES * PI / 360.0);
+    double half_x = tan(fov_degrees * PI / 360.0);
     double half_y = half_x * height / width;
     double span = projection == NV12_PROJECTION_EQUIRECT_360 ? 2.0 * PI : PI;
     for (int y = 0; y < height; ++y) {
@@ -175,7 +175,8 @@ static struct ui_image *straighten(const struct ui_image *eye,
 }
 
 static struct ui_image *make_thumbnail(struct item_state *state, int index,
-                                       uint32_t layout, uint32_t projection)
+                                       uint32_t layout, uint32_t projection,
+                                       int fov)
 {
     int tile = index / (state->info.columns * state->info.rows);
     if (tile >= state->tile_count)
@@ -196,10 +197,11 @@ static struct ui_image *make_thumbnail(struct item_state *state, int index,
             return NULL;
     }
     struct ui_image *eye = cut_thumbnail(state, index, layout);
-    if (!eye || (projection != NV12_PROJECTION_EQUIRECT_180 &&
-                 projection != NV12_PROJECTION_EQUIRECT_360))
+    if (!eye || fov <= 0 || fov >= 180 ||
+        (projection != NV12_PROJECTION_EQUIRECT_180 &&
+         projection != NV12_PROJECTION_EQUIRECT_360))
         return eye;
-    struct ui_image *view = straighten(eye, projection);
+    struct ui_image *view = straighten(eye, projection, fov);
     ui_image_free(eye);
     return view;
 }
@@ -221,7 +223,8 @@ static void *worker(void *argument)
                 index = thumbnail_index(&state, trickplay->want_us);
                 if (index != state.done_index ||
                     trickplay->want_layout != state.done_layout ||
-                    trickplay->want_projection != state.done_projection)
+                    trickplay->want_projection != state.done_projection ||
+                    trickplay->want_fov != state.done_fov)
                     break;
             }
             index = -1;
@@ -238,17 +241,19 @@ static void *worker(void *argument)
         uint64_t generation = state.generation;
         uint32_t layout = trickplay->want_layout;
         uint32_t projection = trickplay->want_projection;
+        int fov = trickplay->want_fov;
         pthread_mutex_unlock(&trickplay->mutex);
         struct ui_image *image = NULL;
         if (index < 0)
             load_info(&state);
         else
-            image = make_thumbnail(&state, index, layout, projection);
+            image = make_thumbnail(&state, index, layout, projection, fov);
         pthread_mutex_lock(&trickplay->mutex);
         if (index >= 0) {
             state.done_index = index;
             state.done_layout = layout;
             state.done_projection = projection;
+            state.done_fov = fov;
         }
         if (image && generation == trickplay->generation) {
             ui_image_free(trickplay->result);
@@ -311,18 +316,21 @@ void trickplay_open(struct trickplay *trickplay, const char *item_id)
 }
 
 void trickplay_request(struct trickplay *trickplay, int64_t position_us,
-                       uint32_t stereo_layout, uint32_t projection_mode)
+                       uint32_t stereo_layout, uint32_t projection_mode,
+                       int fov_degrees)
 {
     if (!trickplay)
         return;
     pthread_mutex_lock(&trickplay->mutex);
     if (!trickplay->want_valid || trickplay->want_us != position_us ||
         trickplay->want_layout != stereo_layout ||
-        trickplay->want_projection != projection_mode) {
+        trickplay->want_projection != projection_mode ||
+        trickplay->want_fov != fov_degrees) {
         trickplay->want_valid = true;
         trickplay->want_us = position_us;
         trickplay->want_layout = stereo_layout;
         trickplay->want_projection = projection_mode;
+        trickplay->want_fov = fov_degrees;
         pthread_cond_signal(&trickplay->changed);
     }
     pthread_mutex_unlock(&trickplay->mutex);

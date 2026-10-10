@@ -6,7 +6,7 @@
 
 /* Layout and CPU rasterizer of the playback panel: a control card (title,
  * seek bar, transport buttons) and, above it, the optional view popup
- * (projection, stereo layout, eye order). The host owns all state and
+ * (projection, stereo layout, eye order; scrub preview style). The host owns all state and
  * passes it in; nothing here knows about OpenXR or Vulkan. */
 
 #define PLAYER_UI_WIDTH 1600U
@@ -26,7 +26,13 @@ enum player_ui_control {
     PLAYER_UI_PROJECTION = 20, /* + enum nv12_projection_mode */
     PLAYER_UI_STEREO = 30,     /* + enum nv12_stereo_layout */
     PLAYER_UI_SWAP_EYES = 40,
+    PLAYER_UI_PREVIEW_MODE = 50, /* + 0 original, + 1 perspective */
+    PLAYER_UI_PREVIEW_FOV = 60,  /* + index into player_ui_preview_fovs */
 };
+
+/* Field of view choices (degrees) of the perspective scrub preview. */
+#define PLAYER_UI_PREVIEW_FOV_COUNT 4
+extern const int player_ui_preview_fovs[PLAYER_UI_PREVIEW_FOV_COUNT];
 
 struct player_ui_state {
     const char *title;
@@ -45,6 +51,9 @@ struct player_ui_state {
     bool preview_visible;
     int64_t preview_us;
     const struct ui_image *preview;
+    /* Preview settings shown in the view popup. */
+    bool preview_perspective;
+    int preview_fov; /* degrees */
 };
 
 struct ui_font;

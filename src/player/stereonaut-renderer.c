@@ -25,6 +25,7 @@
 
 #include "browser-ui.h"
 #include "player-ui.h"
+#include "settings.h"
 #include "trickplay.h"
 #include "ui-draw.h"
 #include "nv12-playback-ipc.h"
@@ -205,6 +206,8 @@ struct app {
     struct ui_image *preview;
     bool preview_visible;
     int64_t preview_us;
+    bool preview_perspective; /* straighten 180/360 degree previews */
+    int preview_fov;          /* degrees, one of player_ui_preview_fovs */
     VkCommandBuffer ui_command;
     VkFence ui_fence;
     uint64_t xr_frames, rendered_frames, session_changes;
@@ -525,6 +528,40 @@ static void change_view(struct app *app, int control)
     send_message(app, &message);
     printf("player_view projection=%u stereo=%u swap_eyes=%u\n",
            app->projection_mode, app->stereo_layout, app->swap_eyes);
+}
+
+/* Scrub preview settings from the view popup; global, kept in
+ * settings.json. */
+static void change_preview(struct app *app, int control)
+{
+    if (control == PLAYER_UI_PREVIEW_MODE ||
+        control == PLAYER_UI_PREVIEW_MODE + 1) {
+        app->preview_perspective = control == PLAYER_UI_PREVIEW_MODE + 1;
+        settings_set_bool("trickplay_perspective", app->preview_perspective);
+    } else if (control >= PLAYER_UI_PREVIEW_FOV &&
+               control < PLAYER_UI_PREVIEW_FOV + PLAYER_UI_PREVIEW_FOV_COUNT) {
+        app->preview_fov =
+            player_ui_preview_fovs[control - PLAYER_UI_PREVIEW_FOV];
+        app->preview_perspective = true;
+        settings_set_bool("trickplay_perspective", true);
+        settings_set_int("trickplay_fov", app->preview_fov);
+    } else {
+        return;
+    }
+    app->ui_dirty = true;
+    printf("player_preview perspective=%d fov=%d\n",
+           app->preview_perspective, app->preview_fov);
+}
+
+static void load_preview_settings(struct app *app)
+{
+    app->preview_perspective = settings_get_bool("trickplay_perspective",
+                                                 true);
+    int fov = settings_get_int("trickplay_fov", 100);
+    app->preview_fov = 100;
+    for (int i = 0; i < PLAYER_UI_PREVIEW_FOV_COUNT; ++i)
+        if (player_ui_preview_fovs[i] == fov)
+            app->preview_fov = fov;
 }
 
 static void send_panel_state(struct app *app)
@@ -1366,6 +1403,8 @@ static struct player_ui_state player_state(const struct app *app)
         .preview_visible = app->preview_visible,
         .preview_us = app->preview_us,
         .preview = app->preview,
+        .preview_perspective = app->preview_perspective,
+        .preview_fov = app->preview_fov,
     };
 }
 
@@ -1981,7 +2020,8 @@ static void update_preview(struct app *app, int64_t position_us)
         return;
     app->preview_us = position_us;
     trickplay_request(app->trickplay, position_us, app->stereo_layout,
-                      app->projection_mode);
+                      app->projection_mode,
+                      app->preview_perspective ? app->preview_fov : 0);
 }
 
 static void sync_player_input(struct app *app, XrTime time)
@@ -2109,6 +2149,8 @@ static void sync_player_input(struct app *app, XrTime time)
         } else if (action == PLAYER_UI_VIEW_POPUP) {
             app->popup_open = !app->popup_open;
             app->ui_dirty = true;
+        } else if (action >= PLAYER_UI_PREVIEW_MODE) {
+            change_preview(app, action);
         } else if (action >= PLAYER_UI_PROJECTION) {
             change_view(app, action);
         } else if (action) {
@@ -3017,6 +3059,7 @@ int main(int argc, char **argv)
         return 2;
     }
     app.trickplay = trickplay_create();
+    load_preview_settings(&app);
     initialize_xr_vulkan(&app);
     XrGraphicsBindingVulkan2KHR binding = {.type = XR_TYPE_GRAPHICS_BINDING_VULKAN2_KHR,
         .instance = app.instance, .physicalDevice = app.physical, .device = app.device, .queueFamilyIndex = app.queue_family, .queueIndex = 0};

@@ -38,18 +38,25 @@
 #define PREVIEW_LABEL_H 40
 #define PREVIEW_BOTTOM (CARD_Y - 12)
 
-/* View popup above the card, right-aligned. */
-#define POPUP_X 1100
+/* View popup above the card, right-aligned: scrub preview settings on the
+ * left, the view of the video on the right. */
+#define POPUP_X 640
 #define POPUP_Y 10
-#define POPUP_W 460
+#define POPUP_W 920
 #define POPUP_H 252
-#define CHIP_X (POPUP_X + 22)
+#define PREVIEW_CHIP_X (POPUP_X + 22)
+#define PREVIEW_COLUMN_W (3 * CHIP_W + 2 * CHIP_GAP)
+#define CHIP_X (POPUP_X + 482)
 #define CHIP_W 132
 #define CHIP_GAP 10
 #define CHIP_H 44
 #define CHIPS1_Y (POPUP_Y + 50)
 #define CHIPS2_Y (POPUP_Y + 132)
 #define SWAP_Y (POPUP_Y + 194)
+
+const int player_ui_preview_fovs[PLAYER_UI_PREVIEW_FOV_COUNT] = {
+    60, 80, 100, 120,
+};
 
 static const struct ui_color color_card = UI_RGBA(17, 18, 22, 225);
 static const struct ui_color color_border = UI_RGBA(255, 255, 255, 18);
@@ -106,6 +113,13 @@ static void chip_rect(int row_y, int index, int *x, int *width)
     (void)row_y;
 }
 
+/* `count` equal chips across the preview column. */
+static void preview_chip_rect(int count, int index, int *x, int *width)
+{
+    *width = (PREVIEW_COLUMN_W - (count - 1) * CHIP_GAP) / count;
+    *x = PREVIEW_CHIP_X + index * (*width + CHIP_GAP);
+}
+
 /* ---- drawing ----------------------------------------------------------- */
 
 static void round_button(struct ui_canvas *canvas, float cx, float r,
@@ -158,6 +172,30 @@ static void draw_popup(struct player_ui *ui, struct ui_canvas *canvas,
     draw_chip(ui, canvas, CHIP_X, SWAP_Y, swap_width,
               state->swap_eyes ? "Augen getauscht" : "Augen tauschen",
               state->swap_eyes, state->hover == PLAYER_UI_SWAP_EYES);
+
+    ui_fill_rect(canvas, CHIP_X - 22, POPUP_Y + 20, 2, POPUP_H - 40,
+                 color_border);
+    static const char *const modes[2] = {"Original", "Perspektive"};
+    ui_draw_text(canvas, ui->font, 22, PREVIEW_CHIP_X, POPUP_Y + 18, 0,
+                 UI_ALIGN_LEFT, color_dim, "Vorschau beim Spulen");
+    ui_draw_text(canvas, ui->font, 22, PREVIEW_CHIP_X, POPUP_Y + 100, 0,
+                 UI_ALIGN_LEFT, color_dim, "Sichtfeld (Perspektive)");
+    for (int i = 0; i < 2; ++i) {
+        int x, width;
+        preview_chip_rect(2, i, &x, &width);
+        draw_chip(ui, canvas, x, CHIPS1_Y, width, modes[i],
+                  state->preview_perspective == (i == 1),
+                  state->hover == PLAYER_UI_PREVIEW_MODE + i);
+    }
+    for (int i = 0; i < PLAYER_UI_PREVIEW_FOV_COUNT; ++i) {
+        int x, width;
+        preview_chip_rect(PLAYER_UI_PREVIEW_FOV_COUNT, i, &x, &width);
+        char label[16];
+        snprintf(label, sizeof(label), "%d°", player_ui_preview_fovs[i]);
+        draw_chip(ui, canvas, x, CHIPS2_Y, width, label,
+                  state->preview_fov == player_ui_preview_fovs[i],
+                  state->hover == PLAYER_UI_PREVIEW_FOV + i);
+    }
 }
 
 /* Picture (if any) with the time below it; without a picture just the
@@ -300,6 +338,18 @@ int player_ui_hit_test(const struct player_ui_state *state, float u, float v)
         }
         if (in_rect(x, y, CHIP_X, SWAP_Y, 3 * CHIP_W + 2 * CHIP_GAP, CHIP_H))
             return PLAYER_UI_SWAP_EYES;
+        for (int i = 0; i < 2; ++i) {
+            int cx, width;
+            preview_chip_rect(2, i, &cx, &width);
+            if (in_rect(x, y, cx, CHIPS1_Y, width, CHIP_H))
+                return PLAYER_UI_PREVIEW_MODE + i;
+        }
+        for (int i = 0; i < PLAYER_UI_PREVIEW_FOV_COUNT; ++i) {
+            int cx, width;
+            preview_chip_rect(PLAYER_UI_PREVIEW_FOV_COUNT, i, &cx, &width);
+            if (in_rect(x, y, cx, CHIPS2_Y, width, CHIP_H))
+                return PLAYER_UI_PREVIEW_FOV + i;
+        }
         return PLAYER_UI_NONE;
     }
     if (state->duration_us > 0 && y >= BAR_HIT_TOP && y < BAR_HIT_BOTTOM &&

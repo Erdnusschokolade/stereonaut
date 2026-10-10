@@ -154,6 +154,8 @@ static int preview_player(const char *path, int hover, bool popup)
         .projection_mode = 1,
         .stereo_layout = 1,
         .hover = hover == 99 ? 0 : hover,
+        .preview_perspective = true,
+        .preview_fov = 100,
     };
     /* Hovering the seek bar shows the scrub preview (a stand-in picture of
      * one SBS eye). */

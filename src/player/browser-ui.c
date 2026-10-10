@@ -2,11 +2,11 @@
 #include "browser-ui.h"
 
 #include "jellyfin.h"
+#include "settings.h"
 #include "thumbnails.h"
 #include "ui-draw.h"
 
 #include <inttypes.h>
-#include <json-c/json.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -767,80 +767,17 @@ static void request_thumbnails(struct browser_ui *ui)
 
 /* ---- persisted sort choice -------------------------------------------- */
 
-static bool settings_path(char *path, size_t size)
-{
-    const char *base = getenv("XDG_CONFIG_HOME");
-    const char *home = getenv("HOME");
-    if (base && base[0])
-        return snprintf(path, size, "%s/stereonaut/settings.json", base) <
-               (int)size;
-    if (home && home[0])
-        return snprintf(path, size, "%s/.config/stereonaut/settings.json",
-                        home) < (int)size;
-    return false;
-}
-
 static void load_sort(struct browser_ui *ui)
 {
-    ui->sort = JF_SORT_NAME;
-    ui->sort_descending = false;
-    char path[4200];
-    if (!settings_path(path, sizeof(path)))
-        return;
-    json_object *root = json_object_from_file(path);
-    json_object *value = NULL;
-    if (!root)
-        return;
-    if (json_object_object_get_ex(root, "sort", &value) &&
-        json_object_is_type(value, json_type_int)) {
-        int sort = json_object_get_int(value);
-        if (sort >= 0 && sort < JF_SORT_COUNT)
-            ui->sort = sort;
-    }
-    if (json_object_object_get_ex(root, "sort_descending", &value) &&
-        json_object_is_type(value, json_type_boolean))
-        ui->sort_descending = json_object_get_boolean(value);
-    json_object_put(root);
+    int sort = settings_get_int("sort", JF_SORT_NAME);
+    ui->sort = sort >= 0 && sort < JF_SORT_COUNT ? sort : JF_SORT_NAME;
+    ui->sort_descending = settings_get_bool("sort_descending", false);
 }
 
-/* Keeps other keys of the settings file; failure to save is not fatal. */
 static void save_sort(const struct browser_ui *ui)
 {
-    char path[4200];
-    if (!settings_path(path, sizeof(path)))
-        return;
-    json_object *root = access(path, F_OK) == 0
-                            ? json_object_from_file(path) : NULL;
-    if (!root || !json_object_is_type(root, json_type_object)) {
-        if (root)
-            json_object_put(root);
-        if (access(path, F_OK) == 0)
-            return; /* unreadable: do not overwrite */
-        root = json_object_new_object();
-    }
-    json_object_object_add(root, "sort", json_object_new_int(ui->sort));
-    json_object_object_add(root, "sort_descending",
-                           json_object_new_boolean(ui->sort_descending));
-    char directory[4200];
-    snprintf(directory, sizeof(directory), "%s", path);
-    char *slash = strrchr(directory, '/');
-    if (slash) {
-        *slash = '\0';
-        char parent[4200];
-        snprintf(parent, sizeof(parent), "%s", directory);
-        char *parent_slash = strrchr(parent, '/');
-        if (parent_slash) {
-            *parent_slash = '\0';
-            mkdir(parent, 0700);
-        }
-        mkdir(directory, 0700);
-    }
-    char temporary[4300];
-    snprintf(temporary, sizeof(temporary), "%s.tmp", path);
-    if (json_object_to_file_ext(temporary, root, JSON_C_TO_STRING_PRETTY) == 0)
-        chmod(temporary, 0600),
-        rename(temporary, path);
-    json_object_put(root);
+    settings_set_int("sort", ui->sort);
+    settings_set_bool("sort_descending", ui->sort_descending);
 }
 
 /* Chooses a criterion; choosing the current one flips the direction. */
