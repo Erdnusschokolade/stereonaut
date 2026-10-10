@@ -232,6 +232,9 @@ struct app {
     int ui_pointer_x;
     int ui_pointer_y;
     bool ui_visible;
+    int autohide;            /* seconds without input, 0 = never */
+    double last_input_time;  /* monotonic seconds */
+    bool auto_hidden;        /* hidden by the timer, any trigger shows it */
     bool ui_dirty;
     /* Panel placement in the local reference space. The panel is world-fixed
      * and upright; only the yaw rotates it towards the viewer. */
@@ -804,6 +807,11 @@ static void load_preview_settings(struct app *app)
     for (int i = 0; i < PLAYER_UI_PREVIEW_FOV_COUNT; ++i)
         if (player_ui_preview_fovs[i] == fov)
             app->preview_fov = fov;
+    int autohide = settings_get_int("panel_autohide", 5);
+    app->autohide = 0;
+    for (int i = 0; i < PLAYER_UI_AUTOHIDE_COUNT; ++i)
+        if (player_ui_autohide[i] == autohide)
+            app->autohide = autohide;
     int end_action = settings_get_int("end_action", PLAYER_END_STOP);
     app->end_action = end_action >= 0 && end_action < PLAYER_END_COUNT
                           ? end_action
@@ -1761,6 +1769,7 @@ static struct player_ui_state player_state(const struct app *app)
         .fisheye_fov = app->fisheye_fov,
         .volume = app->volume,
         .end_action = app->end_action,
+        .autohide = app->autohide,
         .details = app->details_valid ? &app->details : NULL,
         .hover = app->ui_hover,
         .preview_visible = app->preview_visible,
@@ -2364,10 +2373,13 @@ static bool held(const XrActionStateBoolean *state)
 
 /* Show the panel again. If it is far outside the gaze cone it is moved in
  * front of the viewer, otherwise it keeps its world position. */
+static double monotonic_seconds(void);
+
 static void show_panel(struct app *app, const XrSpaceLocation *head,
                        bool head_valid)
 {
     app->ui_visible = true;
+    app->last_input_time = monotonic_seconds();
     if (head_valid) {
         XrVector3f gaze = rotate_vector(head->pose.orientation,
                                         (XrVector3f){0, 0, -1});
@@ -2459,6 +2471,34 @@ static void sync_player_input(struct app *app, XrTime time)
                                : NV12_ACTION_SEEK_BACK);
     }
 
+    /* Auto-hide: any trigger, grip or stick, or pointing at the panel,
+     * counts as input; a trigger brings a hidden panel back without
+     * pressing whatever lies under the pointer. */
+    double now = monotonic_seconds();
+    bool consumed_select = false;
+    for (unsigned hand = 0; hand < 2; ++hand) {
+        bool pointing = app->ui_visible && hands[hand].aim_valid &&
+                        on_player_panel(app, &hands[hand].hit);
+        if (hands[hand].select_edge || pressed_edge(&hands[hand].squeeze) ||
+            pointing)
+            app->last_input_time = now;
+        if (app->auto_hidden && !app->ui_visible &&
+            hands[hand].select_edge) {
+            show_panel(app, &head, head_valid);
+            app->auto_hidden = false;
+            consumed_select = true;
+        }
+    }
+    if (app->ui_visible && app->autohide > 0 &&
+        app->player_state == NV12_PLAYER_PLAYING && !app->popup_open &&
+        !app->awaiting_frame && app->grab_hand < 0 && app->scrub_hand < 0 &&
+        now - app->last_input_time > app->autohide) {
+        app->ui_visible = false;
+        app->auto_hidden = true;
+        send_panel_state(app);
+        printf("player_panel=auto-hidden after_s=%d\n", app->autohide);
+    }
+
     /* Grip: grab the panel, or show/hide it when pressed on empty space. */
     if (app->grab_hand >= 0 &&
         !held(&hands[app->grab_hand].squeeze)) {
@@ -2485,10 +2525,12 @@ static void sync_player_input(struct app *app, XrTime time)
             printf("player_panel=grabbed hand=%u\n", hand);
         } else if (app->ui_visible) {
             app->ui_visible = false;
+            app->auto_hidden = false;
             send_panel_state(app);
             printf("player_panel=hidden\n");
         } else {
             show_panel(app, &head, head_valid);
+            app->auto_hidden = false;
         }
     }
     if (app->grab_hand >= 0 && hands[app->grab_hand].aim_valid) {
@@ -2521,7 +2563,7 @@ static void sync_player_input(struct app *app, XrTime time)
         }
     }
     for (unsigned hand = 0; hand < 2; ++hand) {
-        if (!app->ui_visible || app->grab_hand >= 0 ||
+        if (!app->ui_visible || consumed_select || app->grab_hand >= 0 ||
             app->scrub_hand >= 0 || app->seek_pending ||
             !hands[hand].select_edge || !hands[hand].aim_valid ||
             !on_player_panel(app, &hands[hand].hit))
@@ -2542,6 +2584,11 @@ static void sync_player_input(struct app *app, XrTime time)
         } else if (action >= PLAYER_UI_TAB &&
                    action < PLAYER_UI_TAB + PLAYER_UI_TAB_COUNT) {
             app->popup_tab = action - PLAYER_UI_TAB;
+            app->ui_dirty = true;
+        } else if (action >= PLAYER_UI_AUTOHIDE &&
+                   action < PLAYER_UI_AUTOHIDE + PLAYER_UI_AUTOHIDE_COUNT) {
+            app->autohide = player_ui_autohide[action - PLAYER_UI_AUTOHIDE];
+            settings_set_int("panel_autohide", app->autohide);
             app->ui_dirty = true;
         } else if (action == PLAYER_UI_END_ACTION) {
             app->end_action = (app->end_action + 1) % PLAYER_END_COUNT;
@@ -3074,6 +3121,8 @@ static void begin_playback(struct app *app, int fd, const char *location)
         end_playback(app);
     snprintf(app->location, sizeof(app->location), "%s", location);
     app->title_finished = false;
+    app->last_input_time = monotonic_seconds();
+    app->auto_hidden = false;
     if (strncmp(location, "jf:item:", 8) == 0) {
         char item[64] = "";
         size_t length = strcspn(location + 8, ":");

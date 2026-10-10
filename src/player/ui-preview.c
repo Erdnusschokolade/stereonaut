@@ -172,6 +172,7 @@ static int preview_player(const char *path, int hover, bool popup, int tab)
         .title = "Über den Wolken – Alpenflug 8K",
         .volume = 0.8f,
         .end_action = 2,
+        .autohide = 5,
         .fisheye_fov = 200,
         .position_us = INT64_C(754000000),
         .duration_us = INT64_C(3165000000),

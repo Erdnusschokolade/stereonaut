@@ -68,6 +68,8 @@ const int player_ui_preview_fovs[PLAYER_UI_PREVIEW_FOV_COUNT] = {
     60, 80, 100, 120,
 };
 
+const int player_ui_autohide[PLAYER_UI_AUTOHIDE_COUNT] = {0, 5, 15};
+
 const struct player_adjust_info player_adjust_info[PLAYER_ADJUST_COUNT] = {
     [PLAYER_ADJUST_ZOOM] = {"Zoom", "zoom", -0.5f, 0.8f, 0.05f, 0.0f,
                             100.0f, "%+.0f cm", false},
@@ -275,6 +277,17 @@ static void layout_popup(const struct player_ui_state *state,
                    "Sichtfeld (Perspektive)");
         add_chip_row(layout, 0, 1, PLAYER_UI_PREVIEW_FOV_COUNT,
                      PLAYER_UI_PREVIEW_FOV, fovs, fov_selected);
+        static const char *const autohide[PLAYER_UI_AUTOHIDE_COUNT] = {
+            "Nie", "nach 5 s", "nach 15 s",
+        };
+        int autohide_selected = 0;
+        for (int i = 0; i < PLAYER_UI_AUTOHIDE_COUNT; ++i)
+            if (player_ui_autohide[i] == state->autohide)
+                autohide_selected = i;
+        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(2), 0,
+                   "Panel ausblenden (Wiedergabe)");
+        add_chip_row(layout, 0, 2, PLAYER_UI_AUTOHIDE_COUNT,
+                     PLAYER_UI_AUTOHIDE, autohide, autohide_selected);
 
         add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(0), 0,
                    "Kopfbewegung (6DoF)");

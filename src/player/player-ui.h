@@ -88,10 +88,16 @@ enum player_ui_control {
     PLAYER_UI_VOLUME_DOWN = 90,
     PLAYER_UI_VOLUME_UP = 91,
     PLAYER_UI_END_ACTION = 92,   /* cycles enum player_end_action */
+    PLAYER_UI_AUTOHIDE = 93,     /* + index into player_ui_autohide */
     /* + 2 * enum player_adjust: decrease; + 1: increase. */
     PLAYER_UI_ADJUST = 100,
     PLAYER_UI_ADJUST_END = PLAYER_UI_ADJUST + 2 * PLAYER_ADJUST_COUNT,
 };
+
+/* Seconds without input after which the panel hides during playback
+ * (0 = never). */
+#define PLAYER_UI_AUTOHIDE_COUNT 3
+extern const int player_ui_autohide[PLAYER_UI_AUTOHIDE_COUNT];
 
 /* Field of view choices (degrees) of the perspective scrub preview. */
 #define PLAYER_UI_PREVIEW_FOV_COUNT 4
@@ -114,6 +120,7 @@ struct player_ui_state {
     uint32_t fisheye_fov;   /* degrees, shown for fisheye titles */
     float volume;      /* linear output gain, 0 to 1.5 */
     int end_action;    /* enum player_end_action */
+    int autohide;      /* seconds, see player_ui_autohide */
     /* Jellyfin description of the title (chapters, information) or NULL. */
     const struct jf_details *details;
     const float *adjust; /* PLAYER_ADJUST_COUNT values */
