@@ -959,16 +959,18 @@ int main(int argc, char **argv)
                    capture_format.fmt.pix_mp.plane_fmt[0].bytesperline,
                    capture_format.fmt.pix_mp.plane_fmt[0].sizeimage);
             if (capture_format.fmt.pix_mp.pixelformat != Q10C_FOURCC ||
-                capture_format.fmt.pix_mp.width != g_width ||
+                capture_format.fmt.pix_mp.width < g_width ||
                 capture_format.fmt.pix_mp.num_planes != 1)
                 fail_message("SOURCE_CHANGE format is not single-plane Q10C");
             g_coded_height = capture_format.fmt.pix_mp.height;
             g_stride = capture_format.fmt.pix_mp.plane_fmt[0].bytesperline;
             g_size = capture_format.fmt.pix_mp.plane_fmt[0].sizeimage;
-            g_words = (g_width + 2) / 3;
+            /* Iris pads the width to whole 192-pixel tiles (4096 -> 4224). */
+            uint32_t coded_width = capture_format.fmt.pix_mp.width;
+            g_words = (coded_width + 2) / 3;
             /* Venus/Iris TP10 UBWC layout: Y metadata, Y data, UV metadata,
              * UV data, each 4 KiB aligned (msm_media_info). */
-            uint32_t y_meta_pitch = align_up((g_width + 47) / 48, 64);
+            uint32_t y_meta_pitch = align_up((coded_width + 47) / 48, 64);
             uint32_t y_meta_rows = align_up((g_coded_height + 3) / 4, 16);
             uint64_t y_meta = align_up64((uint64_t)y_meta_pitch * y_meta_rows, 4096);
             uint64_t y_data = align_up64((uint64_t)g_stride *
