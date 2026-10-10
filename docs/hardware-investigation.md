@@ -206,6 +206,38 @@ Die initiale Control-Liste ist H.264-lastig und enthält auch Encoder-artige Con
 
 Quelle für SoC-Angaben: [Qualcomm Snapdragon 8 Gen 3 Product Brief](https://docs.qualcomm.com/bundle/publicresource/87-71408-1_REV_D_Snapdragon_8_gen_3_Mobile_Platform_Product_Brief.pdf). Dessen Angaben zu 8K-Aufnahme beziehungsweise externen Displays sind **keine** Decoder-Durchsatzgarantie. Der Inhalt des abgerufenen PDFs trägt Rev G, obwohl sein URL-Dateiname REV_D enthält.
 
+### AV1-Nachprüfung (2026-10-10)
+
+Nur lesende Abfragen auf dem Frame, kein Decode-Versuch:
+
+- `/dev/video-dec0` meldet weiterhin nur `H264`, `HEVC` und `VP90` als
+  OUTPUT-Formate.
+- Das Modul `iris.ko` (`kernel/drivers/media/platform/qcom/vcodec/iris`,
+  Kernel `6.18.0-gfbdbca41fd45`, Aliase `qcom,sm8550-iris` und
+  `qcom,sm8650-iris`) enthält Symbole für HEVC, VP9 und H.264, aber keine
+  AV1-Strings.
+- Die Firmware `/lib/firmware/qcom/vpu/vpu33_4v.mbn` enthält dagegen
+  AV1-Decoderlogik (43 Strings, u. a. `HFI_PROP_AV1_FILM_GRAIN_PRESENT`,
+  `HFI_PROP_AV1_OP_POINT`, `HFI_PROP_AV1_DRAP_CONFIG`, „AV1 ERROR code").
+
+Upstream hat Qualcomm die Serie „Enable support for AV1 stateful decoder"
+(v1 2025-10-01, v10 2025-12-10,
+<https://lkml.iu.edu/hypermail/linux/kernel/2512.1/03167.html>) für den
+Iris-Treiber eingereicht: neues `V4L2_PIX_FMT_AV1` (stateful, getrennt von
+`V4L2_PIX_FMT_AV1_FRAME`), Gen1-/Gen2-Plattformdaten; getestet nur auf SM8550,
+Fluster 135/242 über GStreamer (v7). Laut Phoronix
+(<https://www.phoronix.com/news/Linux-7.0-Media>) ist AV1 für Iris in Linux 7.0
+aufgenommen; ein konkreter Commit wurde nicht geprüft.
+
+Bewertung: Die Hardware/Firmware kann AV1 wahrscheinlich decodieren, der
+ausgelieferte SteamOS-Kernel stellt es nicht bereit. Nutzbar erst mit einem
+Kernel ≥ 7.0 bzw. mit zurückportierter Serie (Kernel-Eingriff, nur nach
+Rücksprache gemäß `AGENTS.md`); ob es auf SM8650 mit `vpu33_4v.mbn`
+fehlerfrei läuft, ist offen. Bis dahin bleibt AV1 auf die
+Jellyfin-Transkodierung nach HEVC angewiesen. Für die Session wäre der
+Aufwand später klein (OUTPUT-FourCC und Demuxer-Freigabe, kein
+Bitstreamfilter nötig).
+
 ### Auflösung und Framerate
 
 `VIDIOC_ENUM_FRAMESIZES` meldet für H264/HEVC/VP90 sowie die enumerierten CAPTURE-Formate jeweils `128x128 – 8192x8192`, Schritt `1/1`. Das ist eine gemeldete Breiten-/Höhenhülle, kein erfolgreicher 8192²-Test und keine Zusage für alle Kombinationen, Profile oder Bildraten. Pixel-/Makroblockbudget, Alignment, Referenzbilder, Bitrate und thermische Grenzen können enger sein.
