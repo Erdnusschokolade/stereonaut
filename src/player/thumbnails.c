@@ -16,7 +16,7 @@
 #include <unistd.h>
 
 #define WORKERS 2
-#define DOWNLOAD_WIDTH 320
+#define DOWNLOAD_WIDTH 480
 
 struct job {
     uint64_t generation;
@@ -172,6 +172,20 @@ struct ui_image *thumbnail_decode_jpeg(const char *data, size_t size)
     return image;
 }
 
+/* Copy of a rectangle of `image`; NULL on allocation failure. */
+static struct ui_image *crop(const struct ui_image *image, int x, int y,
+                             int width, int height)
+{
+    struct ui_image *result = ui_image_create(width, height);
+    if (result)
+        for (int row = 0; row < height; ++row)
+            memcpy(result->rgba + (size_t)row * (size_t)width * 4U,
+                   image->rgba + ((size_t)(y + row) * (size_t)image->width +
+                                  (size_t)x) * 4U,
+                   (size_t)width * 4U);
+    return result;
+}
+
 static bool near(const uint8_t *a, const uint8_t *b)
 {
     for (int c = 0; c < 3; ++c)
@@ -190,10 +204,11 @@ static bool uniform_line(const struct ui_image *image, const uint8_t *color,
     return true;
 }
 
-/* Some server images are a small picture centred on a plain (white)
- * square. Cut such uniform borders; if almost nothing is left the image is a
- * placeholder and the tile keeps its icon instead (NULL). */
-static struct ui_image *trim_border(struct ui_image *image)
+/* Some server backdrops are a small picture centred on a plain (white)
+ * square. Cut uniform borders; *small is set if less than half of the image
+ * is left, NULL if almost nothing is (a placeholder: the tile keeps its
+ * icon). */
+static struct ui_image *trim_border(struct ui_image *image, bool *small)
 {
     const uint8_t *corner = image->rgba;
     int left = 0, right = image->width, top = 0, bottom = image->height;
@@ -210,67 +225,47 @@ static struct ui_image *trim_border(struct ui_image *image)
            uniform_line(image, corner, right - 1, top, 0, 1, bottom - top))
         --right;
     int width = right - left, height = bottom - top;
+    long area = (long)image->width * image->height;
+    *small = (long)width * height * 2 < area;
     if (width == image->width && height == image->height)
         return image;
     struct ui_image *result = NULL;
-    if ((long)width * height * 5 >= (long)image->width * image->height &&
-        (result = ui_image_create(width, height)))
-        for (int y = 0; y < height; ++y)
-            memcpy(result->rgba + (size_t)y * (size_t)width * 4U,
-                   image->rgba + ((size_t)(top + y) * (size_t)image->width +
-                                  (size_t)left) * 4U,
-                   (size_t)width * 4U);
+    if ((long)width * height * 5 >= area)
+        result = crop(image, left, top, width, height);
     ui_image_free(image);
     return result;
 }
 
-/* Side-by-side frames (about 2:1 and wider) show both eyes; keep the left. */
+/* Side-by-side frames (about 2:1 and wider) show both eyes; keep the left.
+ * Portrait images (posters) keep their top 16:9 part, where the faces
+ * usually are; the tile would otherwise show the middle. */
 static struct ui_image *prepare(struct ui_image *decoded)
 {
-    decoded = trim_border(decoded);
-    if (!decoded)
-        return NULL;
-    struct ui_image *source = decoded;
-    struct ui_image *eye = NULL;
-    if (decoded->width >= decoded->height * 195 / 100) {
-        eye = ui_image_create(decoded->width / 2, decoded->height);
-        if (eye) {
-            for (int y = 0; y < decoded->height; ++y)
-                memcpy(eye->rgba + (size_t)y * (size_t)eye->width * 4U,
-                       decoded->rgba + (size_t)y * (size_t)decoded->width * 4U,
-                       (size_t)eye->width * 4U);
-            source = eye;
-        }
-    }
-    struct ui_image *result = source;
-    if (source->width > THUMBNAIL_WIDTH) {
-        int height = source->height * THUMBNAIL_WIDTH / source->width;
-        result = ui_image_scaled(source, THUMBNAIL_WIDTH,
-                                 height > 0 ? height : 1);
-    }
-    if (result != decoded)
+    struct ui_image *part = NULL;
+    if (decoded->width >= decoded->height * 195 / 100)
+        part = crop(decoded, 0, 0, decoded->width / 2, decoded->height);
+    else if (decoded->height > decoded->width)
+        part = crop(decoded, 0, 0, decoded->width, decoded->width * 9 / 16);
+    if (part) {
         ui_image_free(decoded);
-    if (eye && result != eye)
-        ui_image_free(eye);
+        decoded = part;
+    }
+    if (decoded->width <= THUMBNAIL_WIDTH)
+        return decoded;
+    int height = decoded->height * THUMBNAIL_WIDTH / decoded->width;
+    struct ui_image *result =
+        ui_image_scaled(decoded, THUMBNAIL_WIDTH, height > 0 ? height : 1);
+    ui_image_free(decoded);
     return result;
 }
 
-/* `config` is NULL if Jellyfin is not configured; *stale is set when a
- * download failed and the configuration should be reloaded. */
-static struct ui_image *load(const struct jf_config *config,
-                             const char *source, bool *stale)
+/* Cached or downloaded and decoded image `image` of `item`. `config` is
+ * NULL if Jellyfin is not configured; *stale is set when a download failed
+ * and the configuration should be reloaded. */
+static struct ui_image *fetch(const struct jf_config *config,
+                              const char *item, const char *image,
+                              bool *stale)
 {
-    const char *separator = strchr(source, '|');
-    if (!separator)
-        return NULL;
-    char item[JF_ID_SIZE];
-    size_t length = (size_t)(separator - source);
-    if (length >= sizeof(item))
-        return NULL;
-    memcpy(item, source, length);
-    item[length] = '\0';
-    const char *image = separator + 1;
-
     char path[PATH_MAX];
     bool cacheable = cache_path(item, image, path, sizeof(path));
     size_t size = 0;
@@ -289,7 +284,42 @@ static struct ui_image *load(const struct jf_config *config,
     }
     struct ui_image *decoded = thumbnail_decode_jpeg(data, size);
     free(data);
-    return decoded ? prepare(decoded) : NULL;
+    return decoded;
+}
+
+/* `source` is "ITEM|IMAGE[|FALLBACK]"; the fallback (the poster) replaces
+ * images that are missing or mostly border. */
+static struct ui_image *load(const struct jf_config *config,
+                             const char *source, bool *stale)
+{
+    const char *separator = strchr(source, '|');
+    if (!separator)
+        return NULL;
+    char item[JF_ID_SIZE], image[160];
+    size_t length = (size_t)(separator - source);
+    if (length >= sizeof(item))
+        return NULL;
+    memcpy(item, source, length);
+    item[length] = '\0';
+    snprintf(image, sizeof(image), "%s", separator + 1);
+    char *fallback = strchr(image, '|');
+    if (fallback)
+        *fallback++ = '\0';
+
+    bool small = false;
+    struct ui_image *picture = fetch(config, item, image, stale);
+    if (picture)
+        picture = trim_border(picture, &small);
+    if ((!picture || small) && fallback) {
+        struct ui_image *poster = fetch(config, item, fallback, stale);
+        if (poster)
+            poster = trim_border(poster, &small);
+        if (poster) {
+            ui_image_free(picture);
+            picture = poster;
+        }
+    }
+    return picture ? prepare(picture) : NULL;
 }
 
 /* ---- queue ------------------------------------------------------------- */

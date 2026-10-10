@@ -15,8 +15,8 @@
 
 /* Layout of the 2048 x 1024 panel: navigation card (left), grid card
  * (centre) with a pager below, detail card (right). */
-#define GRID_COLUMNS 6U
-#define GRID_ROWS 2U
+#define GRID_COLUMNS 4U
+#define GRID_ROWS 3U
 #define PAGE_ENTRIES (GRID_COLUMNS * GRID_ROWS)
 
 #define RAIL_X 24
@@ -29,14 +29,15 @@
 
 #define GRID_X 452
 #define GRID_Y 196
-/* Poster tiles (2:3, Jellyfin primary images) with a two-line title. */
-#define TILE_W 168
-#define THUMB_H 252
-#define LABEL_SIZE 22
-#define LABEL_LINE 28
-#define TILE_H (THUMB_H + 8 + 2 * LABEL_LINE)
-#define TILE_GAP_X 28
-#define TILE_GAP_Y 20
+/* Landscape tiles (Jellyfin backdrops, else the top of the poster) with a
+ * one-line title. */
+#define TILE_W 270
+#define THUMB_H 160
+#define LABEL_SIZE 24
+#define LABEL_LINE 32
+#define TILE_H (THUMB_H + 6 + LABEL_LINE)
+#define TILE_GAP_X 24
+#define TILE_GAP_Y 18
 
 #define PAGER_Y 940
 #define PAGER_H 60
@@ -291,7 +292,7 @@ static void draw_tile(struct browser_ui *ui, struct ui_canvas *canvas,
         ui_stroke_round_rect(canvas, x - 5, y - 5, TILE_W + 10, THUMB_H + 10,
                              18, 4, color_accent);
     ui_draw_text_wrapped(canvas, hover ? ui->bold : ui->font, LABEL_SIZE,
-                         x - 4, y + THUMB_H + 6, TILE_W + 8, LABEL_LINE, 2,
+                         x - 4, y + THUMB_H + 6, TILE_W + 8, LABEL_LINE, 1,
                          UI_ALIGN_CENTER, hover ? color_text : color_label,
                          entry->name);
 }
@@ -515,24 +516,23 @@ static void draw_detail(struct browser_ui *ui, struct ui_canvas *canvas)
     }
     const struct file_browser_entry *entry = &ui->listing.entries[index];
     const struct ui_image *thumb = ui->thumbs ? ui->thumbs[index] : NULL;
-    const int poster_w = 216, poster_h = 324;
-    const int poster_x = x + (width - poster_w) / 2, poster_y = 92;
+    const int image_y = 92, image_h = width * 9 / 16;
     if (thumb) {
-        ui_draw_image(canvas, thumb, poster_x, poster_y, poster_w, poster_h,
-                      16, 0.0f);
+        ui_draw_image(canvas, thumb, x, image_y, width, image_h, 16, 0.0f);
     } else {
-        ui_fill_round_rect(canvas, poster_x, poster_y, poster_w, poster_h, 16,
+        ui_fill_round_rect(canvas, x, image_y, width, image_h, 16,
                            color_tile);
         ui_draw_icon(canvas,
                      entry->kind == FILE_BROWSER_MEDIA ? UI_ICON_VIDEO
                                                        : UI_ICON_FOLDER,
-                     poster_x + poster_w / 2.0f, poster_y + poster_h / 2.0f,
-                     96, color_dim);
+                     x + width / 2.0f, image_y + image_h / 2.0f, 96,
+                     color_dim);
     }
-    int lines = ui_draw_text_wrapped(canvas, ui->bold, 30, x, 440, width, 40,
-                                     3, UI_ALIGN_LEFT, color_text,
+    const int title_y = image_y + image_h + 28;
+    int lines = ui_draw_text_wrapped(canvas, ui->bold, 30, x, title_y, width,
+                                     40, 4, UI_ALIGN_LEFT, color_text,
                                      entry->name);
-    int y = 440 + lines * 40 + 24;
+    int y = title_y + lines * 40 + 24;
     bool jellyfin = strncmp(entry->path, "jf:", 3) == 0;
     char badge[8], duration[16], year[16] = "", size[40] = "";
     if (entry->year > 0)

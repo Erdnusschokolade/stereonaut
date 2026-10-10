@@ -24,9 +24,11 @@ struct jf_item {
     char id[JF_ID_SIZE];
     char name[256];
     bool is_folder;
-    /* Image path below /Items/ID/Images/ for tiles: the primary image
-     * (poster), otherwise a backdrop ("" if neither). */
-    char image[96];
+    /* Image path below /Items/ID/Images/ for landscape tiles: the backdrop,
+     * then "|" and the primary image (poster) as fallback for backdrops
+     * that are a small picture on a plain square; one of them alone if the
+     * other is missing, "" if neither exists. */
+    char image[160];
     int64_t runtime_ticks; /* 0 if unknown; 10 000 000 ticks per second */
     int year;              /* 0 if unknown */
     char codec[32];        /* first video stream, e.g. "HEVC Main 10" ("" if unknown) */

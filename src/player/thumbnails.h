@@ -6,11 +6,12 @@
 #include <stdint.h>
 
 /* Background thumbnail loader for browser tiles. Sources are Jellyfin images
- * ("ITEM_ID|IMAGE", see jf_fetch_image); downloads are cached in
+ * ("ITEM_ID|IMAGE[|FALLBACK]", see jf_item); downloads are cached in
  * $XDG_CACHE_HOME/stereonaut/thumbs. Results are decoded, side-by-side frames
- * reduced to the left eye, and scaled to THUMBNAIL_WIDTH. */
+ * reduced to the left eye, posters to their top 16:9 part, and scaled to
+ * THUMBNAIL_WIDTH. */
 
-#define THUMBNAIL_WIDTH 216
+#define THUMBNAIL_WIDTH 324
 
 struct ui_image;
 struct thumbnail_loader;

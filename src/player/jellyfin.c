@@ -480,22 +480,26 @@ static int collect_items(json_object *root, bool filter_views,
         }
         json_object *folder = NULL, *value = NULL, *tags = NULL;
         copy_string(list[used].id, sizeof(list[used].id), id);
-        const char *primary = NULL;
+        const char *primary = NULL, *backdrop = NULL;
         if (json_object_object_get_ex(entry, "ImageTags", &tags))
             primary = json_string(tags, "Primary");
-        if (primary)
+        if (json_object_object_get_ex(entry, "BackdropImageTags", &tags) &&
+            json_object_is_type(tags, json_type_array) &&
+            json_object_array_length(tags) > 0 &&
+            json_object_is_type(json_object_array_get_idx(tags, 0),
+                                json_type_string))
+            backdrop = json_object_get_string(
+                json_object_array_get_idx(tags, 0));
+        if (backdrop && primary)
+            snprintf(list[used].image, sizeof(list[used].image),
+                     "Backdrop/0?tag=%.48s|Primary?tag=%.48s", backdrop,
+                     primary);
+        else if (backdrop)
+            snprintf(list[used].image, sizeof(list[used].image),
+                     "Backdrop/0?tag=%.48s", backdrop);
+        else if (primary)
             snprintf(list[used].image, sizeof(list[used].image),
                      "Primary?tag=%.48s", primary);
-        else if (json_object_object_get_ex(entry, "BackdropImageTags",
-                                           &tags) &&
-                 json_object_is_type(tags, json_type_array) &&
-                 json_object_array_length(tags) > 0 &&
-                 json_object_is_type(json_object_array_get_idx(tags, 0),
-                                     json_type_string))
-            snprintf(list[used].image, sizeof(list[used].image),
-                     "Backdrop/0?tag=%.48s",
-                     json_object_get_string(
-                         json_object_array_get_idx(tags, 0)));
         if (json_object_object_get_ex(entry, "RunTimeTicks", &value))
             list[used].runtime_ticks = json_object_get_int64(value);
         if (json_object_object_get_ex(entry, "ProductionYear", &value))
