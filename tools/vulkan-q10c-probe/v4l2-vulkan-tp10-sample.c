@@ -299,25 +299,6 @@ static int has_device_extension(VkPhysicalDevice physical, const char *name)
     return found;
 }
 
-static uint32_t find_transfer_queue(VkPhysicalDevice physical)
-{
-    uint32_t count = 0;
-    vkGetPhysicalDeviceQueueFamilyProperties(physical, &count, NULL);
-    VkQueueFamilyProperties *properties = calloc(count, sizeof(*properties));
-    if (!properties)
-        fail_errno("allocate queue properties");
-    vkGetPhysicalDeviceQueueFamilyProperties(physical, &count, properties);
-    for (uint32_t i = 0; i < count; i++) {
-        if (properties[i].queueFlags & VK_QUEUE_TRANSFER_BIT) {
-            free(properties);
-            return i;
-        }
-    }
-    free(properties);
-    fail_message("no Vulkan transfer queue family");
-    return 0;
-}
-
 static uint32_t choose_memory_type(VkPhysicalDevice physical,
                                    uint32_t allowed_bits,
                                    VkMemoryPropertyFlags required,
