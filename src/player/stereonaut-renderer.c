@@ -43,8 +43,8 @@
 #define GRAB_RECENTER_COS 0.5f
 /* The select action is analog so the press point can be lower than the
  * trigger's full click travel. */
-#define SELECT_PRESS_THRESHOLD 0.30f
-#define SELECT_RELEASE_THRESHOLD 0.15f
+#define SELECT_PRESS_THRESHOLD 0.50f
+#define SELECT_RELEASE_THRESHOLD 0.03f
 /* Thumbstick left/right: same low threshold as the trigger, one action per
  * deflection. */
 #define STICK_PRESS_THRESHOLD 0.30f
@@ -2568,7 +2568,10 @@ static void end_playback(struct app *app)
     app->position_us = 0;
     app->duration_us = 0;
     app->video_width = app->video_height = 0;
-    app->select_down[0] = app->select_down[1] = false;
+    /* The trigger that pressed "back" is usually still held: treat it as
+     * held so the browser only reacts after a release (it could otherwise
+     * land on "Beenden" and close the program). */
+    app->select_down[0] = app->select_down[1] = true;
     app->ui_dirty = true;
     app->browser.dirty = true;
     printf("playback_ended\n");
@@ -2583,7 +2586,7 @@ static void begin_playback(struct app *app, int fd)
     app->awaiting_command = false;
     app->eos_received = false;
     app->ui_dirty = true;
-    app->select_down[0] = app->select_down[1] = false;
+    app->select_down[0] = app->select_down[1] = true; /* see end_playback */
     printf("playback_attached\n");
 }
 
