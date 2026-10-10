@@ -1,0 +1,26 @@
+#version 450
+// Reads both TP10 planes through the patched Turnip view (FMT6_TP10_Y /
+// FMT6_TP10_UV) and writes 10-bit planar Y, U, V for offline comparison.
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(binding = 0) uniform sampler2D y_plane;
+layout(binding = 1) uniform sampler2D uv_plane;
+layout(std430, binding = 2) buffer Samples { uint samples[]; };
+
+const int WIDTH = 1920;
+const int HEIGHT = 1080;
+
+void main()
+{
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x < WIDTH && p.y < HEIGHT)
+        samples[p.y * WIDTH + p.x] =
+            uint(round(texelFetch(y_plane, p, 0).r * 1023.0));
+    if (p.x < WIDTH / 2 && p.y < HEIGHT / 2) {
+        vec2 uv = texelFetch(uv_plane, p, 0).rg;
+        int base = WIDTH * HEIGHT;
+        int chroma = (WIDTH / 2) * (HEIGHT / 2);
+        samples[base + p.y * (WIDTH / 2) + p.x] = uint(round(uv.r * 1023.0));
+        samples[base + chroma + p.y * (WIDTH / 2) + p.x] =
+            uint(round(uv.g * 1023.0));
+    }
+}

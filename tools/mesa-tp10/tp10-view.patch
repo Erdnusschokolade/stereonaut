@@ -1,0 +1,28 @@
+diff --git a/src/freedreno/fdl/fd6_view.cc b/src/freedreno/fdl/fd6_view.cc
+index df6abfc..1af01e6 100644
+--- a/src/freedreno/fdl/fd6_view.cc
++++ b/src/freedreno/fdl/fd6_view.cc
+@@ -370,6 +370,23 @@ fdl6_view_init(struct fdl6_view *view, const struct fdl_layout **layouts,
+          view->descriptor[3] |=
+             A6XX_TEX_MEMOBJ_3_MIN_LAYERSZ(layout->slices[layout->mip_levels - 1].size0);
+       }
++
++      static int tp10_override = -1;
++      if (tp10_override < 0)
++         tp10_override = getenv("STEREONAUT_TP10") != NULL;
++      if (tp10_override && ubwc_enabled &&
++          (args->format == PIPE_FORMAT_R8G8B8A8_UNORM ||
++           args->format == PIPE_FORMAT_R10G10B10A2_UNORM)) {
++         bool luma = args->format == PIPE_FORMAT_R8G8B8A8_UNORM;
++         view->descriptor[0] &= ~(A6XX_TEX_MEMOBJ_0_FMT__MASK |
++                                  A6XX_TEX_MEMOBJ_0_SWAP__MASK);
++         view->descriptor[0] |=
++            A6XX_TEX_MEMOBJ_0_FMT(luma ? FMT6_TP10_Y : FMT6_TP10_UV) |
++            A6XX_TEX_MEMOBJ_0_SWAP(WZYX);
++         view->descriptor[1] &= ~A6XX_TEX_MEMOBJ_1_WIDTH__MASK;
++         view->descriptor[1] |=
++            A6XX_TEX_MEMOBJ_1_WIDTH(luma ? width * 3 : width * 3 / 2);
++      }
+    } else if (CHIP >= A8XX) {
+       uint32_t *descriptor = view->descriptor;
+ 

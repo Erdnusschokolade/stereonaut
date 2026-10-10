@@ -43,3 +43,6 @@ __pycache__/
 .ssh/
 *.pem
 *.key
+
+# External sources (Mesa for the TP10 experiment); our changes live as patches
+/third_party/
