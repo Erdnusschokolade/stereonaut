@@ -1,0 +1,20 @@
+#version 450
+layout(local_size_x = 16, local_size_y = 8) in;
+layout(set = 0, binding = 0) uniform sampler2D p010_image;
+layout(set = 0, binding = 1, std430) writeonly buffer Result { uint pairs[]; } output_data;
+uint p010(float v) { return uint(round(clamp(v, 0.0, 1.0) * 1023.0)) << 6; }
+vec4 read_pixel(ivec2 p) {
+    return textureLod(p010_image, (vec2(p) + vec2(0.5)) / vec2(1920, 1088), 0.0);
+}
+void main() {
+    ivec2 p = ivec2(gl_GlobalInvocationID.xy);
+    if (p.x >= 960 || p.y >= 1088) return;
+    // RGB_IDENTITY returns unexpanded (V, Y, U, A).
+    uint a = p010(read_pixel(ivec2(2*p.x, p.y)).g);
+    uint b = p010(read_pixel(ivec2(2*p.x+1, p.y)).g);
+    output_data.pairs[p.y*960+p.x] = a | (b << 16);
+    if (p.y < 544) {
+        vec4 yuv = read_pixel(ivec2(2*p.x, 2*p.y));
+        output_data.pairs[1044480+p.y*960+p.x] = p010(yuv.b) | (p010(yuv.r) << 16);
+    }
+}

@@ -1,6 +1,7 @@
 /*
  * Decoder-free P010 baseline with driver-selected QCOM layout.
- * copy: transfer roundtrip; sample: per-plane texelFetch into a storage buffer.
+ * copy: transfer roundtrip; sample-identity: joint YCbCr identity sampler into a storage buffer.
+ * buffer/linear: controls isolating image/UBWC processing.
  * No explicit producer offsets or pitches are accepted.
  * No V4L2, DMA-BUF, external memory, or foreign queue ownership is used.
  */
@@ -24,6 +25,9 @@
 #define MEMORY_PLANE_COUNT 2U
 
 static int sample_mode;
+static int buffer_only;
+static uint64_t selected_modifier;
+static uint32_t sampler_descriptors;
 static VkImageUsageFlags test_usage;
 static VkImageCreateFlags test_flags;
 
@@ -151,7 +155,7 @@ static VkFormatFeatureFlags find_modifier_features(
     VkFormatFeatureFlags features = 0;
     *memory_planes = 0;
     for (uint32_t i = 0; i < modifier_list.drmFormatModifierCount; i++) {
-        if (modifiers[i].drmFormatModifier == QCOM_COMPRESSED) {
+        if (modifiers[i].drmFormatModifier == selected_modifier) {
             features = modifiers[i].drmFormatModifierTilingFeatures;
             *memory_planes = modifiers[i].drmFormatModifierPlaneCount;
             break;
@@ -178,31 +182,20 @@ static void capability_preflight(VkPhysicalDevice physical, VkFormat format,
     printf("capability_modifier=0x%016" PRIx64
            " memory_planes=%u features=0x%x"
            " transfer_src=%u transfer_dst=%u\n",
-           QCOM_COMPRESSED, memory_planes, features,
+           selected_modifier, memory_planes, features,
            !!(features & VK_FORMAT_FEATURE_TRANSFER_SRC_BIT),
            !!(features & VK_FORMAT_FEATURE_TRANSFER_DST_BIT));
     if (memory_planes != MEMORY_PLANE_COUNT ||
         (features & required) != required)
         fail_message("QCOM modifier lacks required planes or transfer features");
 
-    if (sample_mode) {
-        const VkFormat plane_formats[] = {VK_FORMAT_R10X6_UNORM_PACK16,
-                                          VK_FORMAT_R10X6G10X6_UNORM_2PACK16};
-        for (unsigned i = 0; i < 2; ++i) {
-            uint32_t count = 0;
-            VkFormatFeatureFlags plane_features =
-                find_modifier_features(physical, plane_formats[i], &count);
-            printf("sampling_plane=%u format=%d features=0x%x memory_planes=%u\n",
-                   i, plane_formats[i], plane_features, count);
-            if (!(plane_features & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT))
-                fail_message("compatible plane lacks QCOM sampling capability");
-        }
-    }
+    if (sample_mode && !(features & VK_FORMAT_FEATURE_MIDPOINT_CHROMA_SAMPLES_BIT))
+        fail_message("midpoint chroma sampling unsupported");
 
     VkPhysicalDeviceImageDrmFormatModifierInfoEXT modifier_info = {
         .sType =
             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_IMAGE_DRM_FORMAT_MODIFIER_INFO_EXT,
-        .drmFormatModifier = QCOM_COMPRESSED,
+        .drmFormatModifier = selected_modifier,
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
         .queueFamilyIndexCount = 1,
         .pQueueFamilyIndices = &queue_family,
@@ -216,8 +209,12 @@ static void capability_preflight(VkPhysicalDevice physical, VkFormat format,
         .usage = test_usage,
         .flags = test_flags,
     };
+    VkSamplerYcbcrConversionImageFormatProperties conversion_properties = {
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_IMAGE_FORMAT_PROPERTIES,
+    };
     VkImageFormatProperties2 image_properties = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_PROPERTIES_2,
+        .pNext = &conversion_properties,
     };
     VkResult result = vkGetPhysicalDeviceImageFormatProperties2(
         physical, &image_info, &image_properties);
@@ -234,6 +231,9 @@ static void capability_preflight(VkPhysicalDevice physical, VkFormat format,
         image_properties.imageFormatProperties.maxMipLevels < 1 ||
         image_properties.imageFormatProperties.maxArrayLayers < 1)
         fail_message("requested usage/flags unsupported");
+    sampler_descriptors = conversion_properties.combinedImageSamplerDescriptorCount;
+    if (sample_mode && !sampler_descriptors) fail_message("invalid YCbCr descriptor count");
+    printf("sampler_descriptors=%u\n", sampler_descriptors);
     printf("capability_preflight=supported gpu_work_not_started_yet\n");
 }
 
@@ -326,7 +326,8 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL validation_message(
 }
 
 struct sample_resources {
-    VkImageView views[2];
+    VkImageView view;
+    VkSamplerYcbcrConversion conversion;
     VkSampler sampler;
     VkDescriptorSetLayout set_layout;
     VkDescriptorPool pool;
@@ -343,26 +344,31 @@ static struct sample_resources create_sampling(VkDevice device, VkImage image,
                                                 VkBuffer output)
 {
     struct sample_resources s = {0};
-    const VkFormat formats[] = {VK_FORMAT_R10X6_UNORM_PACK16,
-                               VK_FORMAT_R10X6G10X6_UNORM_2PACK16};
-    for (unsigned i = 0; i < 2; ++i) {
-        VkImageViewUsageCreateInfo usage = {
-            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_USAGE_CREATE_INFO,
-            .usage = VK_IMAGE_USAGE_SAMPLED_BIT,
-        };
-        VkImageViewCreateInfo view = {
-            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .pNext = &usage,
-            .image = image, .viewType = VK_IMAGE_VIEW_TYPE_2D,
-            .format = formats[i],
-            .subresourceRange = {
-                .aspectMask = i ? VK_IMAGE_ASPECT_PLANE_1_BIT : VK_IMAGE_ASPECT_PLANE_0_BIT,
-                .levelCount = 1, .layerCount = 1,
-            },
-        };
-        CHECK(vkCreateImageView(device, &view, NULL, &s.views[i]));
-    }
+    VkSamplerYcbcrConversionCreateInfo conversion = {
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_CREATE_INFO,
+        .format = VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16,
+        .ycbcrModel = VK_SAMPLER_YCBCR_MODEL_CONVERSION_RGB_IDENTITY,
+        .ycbcrRange = VK_SAMPLER_YCBCR_RANGE_ITU_FULL,
+        .xChromaOffset = VK_CHROMA_LOCATION_MIDPOINT,
+        .yChromaOffset = VK_CHROMA_LOCATION_MIDPOINT,
+        .chromaFilter = VK_FILTER_NEAREST,
+    };
+    CHECK(vkCreateSamplerYcbcrConversion(device, &conversion, NULL, &s.conversion));
+    VkSamplerYcbcrConversionInfo conversion_info = {
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_INFO,
+        .conversion = s.conversion,
+    };
+    VkImageViewCreateInfo view = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .pNext = &conversion_info,
+        .image = image, .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = conversion.format,
+        .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                             .levelCount = 1, .layerCount = 1},
+    };
+    CHECK(vkCreateImageView(device, &view, NULL, &s.view));
     VkSamplerCreateInfo sampler = {
         .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .pNext = &conversion_info,
         .magFilter = VK_FILTER_NEAREST, .minFilter = VK_FILTER_NEAREST,
         .mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST,
         .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
@@ -371,21 +377,20 @@ static struct sample_resources create_sampling(VkDevice device, VkImage image,
         .maxLod = 0,
     };
     CHECK(vkCreateSampler(device, &sampler, NULL, &s.sampler));
-    VkDescriptorSetLayoutBinding bindings[3] = {
+    VkDescriptorSetLayoutBinding bindings[2] = {
         {.binding = 0, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-         .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT},
-        {.binding = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-         .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT},
-        {.binding = 2, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+         .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
+         .pImmutableSamplers = &s.sampler},
+        {.binding = 1, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
          .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT},
     };
     VkDescriptorSetLayoutCreateInfo layout = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        .bindingCount = 3, .pBindings = bindings,
+        .bindingCount = 2, .pBindings = bindings,
     };
     CHECK(vkCreateDescriptorSetLayout(device, &layout, NULL, &s.set_layout));
     VkDescriptorPoolSize sizes[2] = {
-        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2},
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, sampler_descriptors},
         {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1},
     };
     VkDescriptorPoolCreateInfo pool = {
@@ -398,26 +403,23 @@ static struct sample_resources create_sampling(VkDevice device, VkImage image,
         .descriptorPool = s.pool, .descriptorSetCount = 1, .pSetLayouts = &s.set_layout,
     };
     CHECK(vkAllocateDescriptorSets(device, &allocate, &s.set));
-    VkDescriptorImageInfo images[2] = {
-        {s.sampler, s.views[0], VK_IMAGE_LAYOUT_GENERAL},
-        {s.sampler, s.views[1], VK_IMAGE_LAYOUT_GENERAL},
-    };
+    VkDescriptorImageInfo sampled_image = {s.sampler, s.view, VK_IMAGE_LAYOUT_GENERAL};
     VkDescriptorBufferInfo buffer = {output, 0, P010_SIZE};
-    VkWriteDescriptorSet writes[3] = {0};
-    for (unsigned i = 0; i < 3; ++i) {
-        writes[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        writes[i].dstSet = s.set; writes[i].dstBinding = i;
-        writes[i].descriptorCount = 1; writes[i].descriptorType = bindings[i].descriptorType;
-        if (i < 2) writes[i].pImageInfo = &images[i];
-        else writes[i].pBufferInfo = &buffer;
-    }
-    vkUpdateDescriptorSets(device, 3, writes, 0, NULL);
+    VkWriteDescriptorSet writes[2] = {
+        {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = s.set,
+         .dstBinding = 0, .descriptorCount = 1,
+         .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, .pImageInfo = &sampled_image},
+        {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = s.set,
+         .dstBinding = 1, .descriptorCount = 1,
+         .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .pBufferInfo = &buffer},
+    };
+    vkUpdateDescriptorSets(device, 2, writes, 0, NULL);
     VkPipelineLayoutCreateInfo pipeline_layout = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
         .setLayoutCount = 1, .pSetLayouts = &s.set_layout,
     };
     CHECK(vkCreatePipelineLayout(device, &pipeline_layout, NULL, &s.pipeline_layout));
-    FILE *file = fopen("p010-planes.comp.spv", "rb");
+    FILE *file = fopen("p010-identity.comp.spv", "rb");
     if (!file) fail_errno("open compute shader");
     if (fseek(file, 0, SEEK_END)) fail_errno("seek shader");
     long length = ftell(file);
@@ -451,28 +453,32 @@ static void destroy_sampling(VkDevice device, struct sample_resources *s)
     vkDestroyDescriptorPool(device, s->pool, NULL);
     vkDestroyDescriptorSetLayout(device, s->set_layout, NULL);
     vkDestroySampler(device, s->sampler, NULL);
-    for (unsigned i = 0; i < 2; ++i) vkDestroyImageView(device, s->views[i], NULL);
+    vkDestroyImageView(device, s->view, NULL);
+    vkDestroySamplerYcbcrConversion(device, s->conversion, NULL);
 }
 
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
-    if (argc != 5 || (strcmp(argv[1], "copy") && strcmp(argv[1], "sample"))) {
+    if (argc != 5 || (strcmp(argv[1], "copy") && strcmp(argv[1], "sample-identity") &&
+                     strcmp(argv[1], "buffer") && strcmp(argv[1], "linear"))) {
         fprintf(stderr,
-                "usage: %s copy|sample source-before.bin readback.bin source-after.bin\n",
+                "usage: %s copy|sample-identity|buffer|linear source-before.bin readback.bin source-after.bin\n",
                 argv[0]);
         return 2;
     }
 
     const VkFormat format =
         VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16;
-    sample_mode = strcmp(argv[1], "sample") == 0;
+    sample_mode = strcmp(argv[1], "sample-identity") == 0;
+    buffer_only = strcmp(argv[1], "buffer") == 0;
+    selected_modifier = strcmp(argv[1], "linear") == 0 ? 0 : QCOM_COMPRESSED;
     test_usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
                  (sample_mode ? VK_IMAGE_USAGE_SAMPLED_BIT : VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
-    test_flags = sample_mode ? VK_IMAGE_CREATE_MUTABLE_FORMAT_BIT : 0;
+    test_flags = 0;
     printf("test mode=%s extent=%ux%u modifier=0x%016" PRIx64
            " usage=0x%x flags=0x%x layout=driver-selected\n",
-           argv[1], WIDTH, CODED_HEIGHT, QCOM_COMPRESSED, test_usage, test_flags);
+           argv[1], WIDTH, CODED_HEIGHT, selected_modifier, test_usage, test_flags);
 
     VkApplicationInfo application = {
         .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
@@ -583,7 +589,7 @@ int main(int argc, char **argv)
     if (queue == VK_NULL_HANDLE)
         fail_message("vkGetDeviceQueue returned null");
 
-    const uint64_t modifier = QCOM_COMPRESSED;
+    const uint64_t modifier = selected_modifier;
     VkImageDrmFormatModifierListCreateInfoEXT modifier_info = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_LIST_CREATE_INFO_EXT,
         .drmFormatModifierCount = 1, .pDrmFormatModifiers = &modifier,
@@ -620,7 +626,7 @@ int main(int argc, char **argv)
     result = get_modifier(device, image, &chosen_modifier);
     if (result != VK_SUCCESS)
         fail_vk("vkGetImageDrmFormatModifierPropertiesEXT", result);
-    if (chosen_modifier.drmFormatModifier != QCOM_COMPRESSED)
+    if (chosen_modifier.drmFormatModifier != selected_modifier)
         fail_message("Vulkan returned a different DRM modifier");
 
     VkMemoryDedicatedRequirements dedicated_requirements = {
@@ -737,75 +743,82 @@ int main(int argc, char **argv)
     if (result != VK_SUCCESS)
         fail_vk("vkBeginCommandBuffer", result);
 
-    VkImageMemoryBarrier prepare_write = {
-        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-        .srcAccessMask = 0,
-        .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
-        .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .image = image,
-        .subresourceRange = {
-            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-            .baseMipLevel = 0,
-            .levelCount = 1,
-            .baseArrayLayer = 0,
-            .layerCount = 1,
-        },
-    };
-    vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL,
-                         1, &prepare_write);
-
-    const VkBufferImageCopy copies[MEMORY_PLANE_COUNT] = {
-        {
-            .bufferOffset = 0,
-            .imageSubresource = {
-                .aspectMask = VK_IMAGE_ASPECT_PLANE_0_BIT,
-                .mipLevel = 0,
-                .baseArrayLayer = 0,
-                .layerCount = 1,
-            },
-            .imageExtent = {WIDTH, CODED_HEIGHT, 1},
-        },
-        {
-            .bufferOffset = P010_Y_SIZE,
-            .imageSubresource = {
-                .aspectMask = VK_IMAGE_ASPECT_PLANE_1_BIT,
-                .mipLevel = 0,
-                .baseArrayLayer = 0,
-                .layerCount = 1,
-            },
-            .imageExtent = {CHROMA_WIDTH, CHROMA_HEIGHT, 1},
-        },
-    };
-    vkCmdCopyBufferToImage(command_buffer, staging.buffer, image,
-                           VK_IMAGE_LAYOUT_GENERAL, MEMORY_PLANE_COUNT,
-                           copies);
-
-    VkImageMemoryBarrier write_to_read = {
-        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-        .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-        .dstAccessMask = sample_mode ? VK_ACCESS_SHADER_READ_BIT : VK_ACCESS_TRANSFER_READ_BIT,
-        .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
-        .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-        .image = image,
-        .subresourceRange = prepare_write.subresourceRange,
-    };
-    vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                         (sample_mode ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT),
-                         0, 0, NULL, 0, NULL, 1, &write_to_read);
-    if (sample_mode) {
-        vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, sampling.pipeline);
-        vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                sampling.pipeline_layout, 0, 1, &sampling.set, 0, NULL);
-        vkCmdDispatch(command_buffer, CHROMA_WIDTH / 16, CODED_HEIGHT / 8, 1);
+    if (buffer_only) {
+        /* Keep allocation order identical, but never access the image on the GPU. */
+        VkBufferCopy copy = {.size = P010_SIZE};
+        vkCmdCopyBuffer(command_buffer, staging.buffer, readback.buffer, 1, &copy);
     } else {
-        vkCmdCopyImageToBuffer(command_buffer, image, VK_IMAGE_LAYOUT_GENERAL,
-                               readback.buffer, MEMORY_PLANE_COUNT, copies);
+        VkImageMemoryBarrier prepare_write = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .srcAccessMask = 0,
+            .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresourceRange = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+        };
+        vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL,
+                             1, &prepare_write);
+
+        const VkBufferImageCopy copies[MEMORY_PLANE_COUNT] = {
+            {
+                .bufferOffset = 0,
+                .imageSubresource = {
+                    .aspectMask = VK_IMAGE_ASPECT_PLANE_0_BIT,
+                    .mipLevel = 0,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
+                .imageExtent = {WIDTH, CODED_HEIGHT, 1},
+            },
+            {
+                .bufferOffset = P010_Y_SIZE,
+                .imageSubresource = {
+                    .aspectMask = VK_IMAGE_ASPECT_PLANE_1_BIT,
+                    .mipLevel = 0,
+                    .baseArrayLayer = 0,
+                    .layerCount = 1,
+                },
+                .imageExtent = {CHROMA_WIDTH, CHROMA_HEIGHT, 1},
+            },
+        };
+        vkCmdCopyBufferToImage(command_buffer, staging.buffer, image,
+                               VK_IMAGE_LAYOUT_GENERAL, MEMORY_PLANE_COUNT,
+                               copies);
+
+        VkImageMemoryBarrier write_to_read = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+            .dstAccessMask = sample_mode ? VK_ACCESS_SHADER_READ_BIT : VK_ACCESS_TRANSFER_READ_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+            .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresourceRange = prepare_write.subresourceRange,
+        };
+        vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             (sample_mode ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_TRANSFER_BIT),
+                             0, 0, NULL, 0, NULL, 1, &write_to_read);
+        if (sample_mode) {
+            vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, sampling.pipeline);
+            vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                    sampling.pipeline_layout, 0, 1, &sampling.set, 0, NULL);
+            vkCmdDispatch(command_buffer, CHROMA_WIDTH / 16, CODED_HEIGHT / 8, 1);
+        } else {
+            vkCmdCopyImageToBuffer(command_buffer, image, VK_IMAGE_LAYOUT_GENERAL,
+                                   readback.buffer, MEMORY_PLANE_COUNT, copies);
+        }
+
     }
 
     VkBufferMemoryBarrier readback_to_host = {

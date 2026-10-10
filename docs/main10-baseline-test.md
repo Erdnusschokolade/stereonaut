@@ -179,3 +179,32 @@ Er ist vorbereitet, aber nach dem heutigen Copy-Mismatch **nicht ausgeführt**.
 Kein erneuter Iris-Q10C-Import: Seine Formatsemantik bleibt ungeklärt.
 Die bestehenden Playerdateien und die installierte Anwendung wurden durch
 diese Untersuchung nicht verändert.
+
+## Erweiterte Fehlerbehebung (anschließende Nutzerfreigabe)
+
+Der Nutzer hat das Finden und Beheben des Fehlers ausdrücklich freigegeben.
+Kontrollierte User-Space-/Vergleichsfehler dürfen nun analysiert und mit
+begründeten, vorher committeten Folgeproben untersucht werden. Bei GPU-/
+Kernelhang oder systemweiter Störung weiterhin stoppen, keine Recovery.
+
+Der ursprüngliche `sample`-Lauf wurde ausgeführt und stoppte vor GPU-Arbeit:
+`TRANSFER_DST|SAMPLED` mit `MUTABLE_FORMAT` liefert
+`VK_ERROR_FORMAT_NOT_SUPPORTED`. Die einzelnen Plane-Formatfähigkeiten waren
+vorhanden. Das widerlegt nicht Sampling ohne MUTABLE_FORMAT.
+
+Die nächste Quellversion enthält deshalb drei isolierte Kontrollmodi:
+
+- `buffer`: identische Allokationsreihenfolge, aber nur `vkCmdCopyBuffer`;
+  das angelegte Image wird von der GPU nicht benutzt.
+- `linear`: wie `copy`, jedoch DRM-Modifier LINEAR aus der Modifierliste;
+  weiterhin keine expliziten Offsets/Pitches.
+- `sample-identity`: ohne MUTABLE_FORMAT ein gemeinsamer P010-View und ein
+  unveränderlicher YCbCr-Sampler mit RGB_IDENTITY/FULL/NEAREST/MIDPOINT.
+  Der Shader liest auf LOD 0 an Pixelzentren und schreibt zehn Nutzbits
+  ohne Range-/Farbmatrixumrechnung in das SSBO. Descriptorbedarf wird
+  abgefragt. Erst Capability, dann GPU-Arbeit.
+
+Pro Modus ein sequenzieller Prozess mit `timeout -k 3s 15s`, ein Submit und
+Fence; Source-Integrity-Prüfung und Referenz unverändert. Keine Iris-Zugriffe.
+Die Proben werden anhand ihrer Ergebnisse ausgewertet, nicht automatisch
+wiederholt. Der alte Plane-Shader bleibt als historisches Artefakt erhalten.
