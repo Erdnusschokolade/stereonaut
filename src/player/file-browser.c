@@ -25,6 +25,8 @@ struct file_browser {
     bool has_ready;
     int sort;
     bool descending;
+    int local_sort;
+    bool local_descending;
 };
 
 static void set_error(char *error, size_t size, const char *format, ...)
@@ -71,12 +73,25 @@ static char *join_path(const char *directory, const char *name)
     return path;
 }
 
+/* Order for compare_entries; only the browser worker sorts. */
+static int compare_sort = FILE_BROWSER_SORT_NAME;
+static bool compare_descending;
+
 static int compare_entries(const void *left_pointer, const void *right_pointer)
 {
     const struct file_browser_entry *left = left_pointer;
     const struct file_browser_entry *right = right_pointer;
     if (left->kind != right->kind)
         return left->kind < right->kind ? -1 : 1;
+    int order = 0;
+    if (compare_sort == FILE_BROWSER_SORT_MODIFIED)
+        order = (left->modified > right->modified) -
+                (left->modified < right->modified);
+    else if (compare_sort == FILE_BROWSER_SORT_SIZE &&
+             left->kind == FILE_BROWSER_MEDIA)
+        order = (left->size > right->size) - (left->size < right->size);
+    if (order)
+        return compare_descending ? -order : order;
     int folded = strcasecmp(left->name, right->name);
     return folded ? folded : strcmp(left->name, right->name);
 }
@@ -122,7 +137,8 @@ static void parent_path(const char *path, char *parent, size_t size)
 }
 
 static struct file_browser_listing read_directory(const char *requested,
-                                                   uint64_t generation)
+                                                   uint64_t generation,
+                                                   int sort, bool descending)
 {
     struct file_browser_listing listing = {.generation = generation};
     char *resolved = realpath(requested, NULL);
@@ -196,9 +212,15 @@ static struct file_browser_listing read_directory(const char *requested,
         }
         if (append_entry(&listing, kind, item->d_name, path) < 0)
             goto allocation_failure;
+        listing.entries[listing.entry_count - 1U].modified =
+            (int64_t)status.st_mtime;
+        listing.entries[listing.entry_count - 1U].size =
+            (int64_t)status.st_size;
     }
     closedir(directory);
     free(resolved);
+    compare_sort = sort;
+    compare_descending = descending;
     qsort(listing.entries, listing.entry_count, sizeof(*listing.entries),
           compare_entries);
     return listing;
@@ -425,16 +447,16 @@ allocation_failure:
     return listing;
 }
 
-static struct file_browser_listing read_location(const char *path,
-                                                  uint64_t generation,
-                                                  int sort, bool descending)
+static struct file_browser_listing read_location(
+    const char *path, uint64_t generation, int sort, bool descending,
+    int local_sort, bool local_descending)
 {
     if (strcmp(path, "root:") == 0)
         return read_root(generation);
     if (strncmp(path, "jf:", 3) == 0)
         return read_jellyfin(path, generation, (enum jf_sort)sort,
                              descending);
-    return read_directory(path, generation);
+    return read_directory(path, generation, local_sort, local_descending);
 }
 
 static void *browser_worker(void *argument)
@@ -452,11 +474,14 @@ static void *browser_worker(void *argument)
         uint64_t generation = browser->request_generation;
         int sort = browser->sort;
         bool descending = browser->descending;
+        int local_sort = browser->local_sort;
+        bool local_descending = browser->local_descending;
         browser->request_path = NULL;
         pthread_mutex_unlock(&browser->mutex);
 
         struct file_browser_listing listing =
-            read_location(path, generation, sort, descending);
+            read_location(path, generation, sort, descending, local_sort,
+                          local_descending);
         free(path);
 
         pthread_mutex_lock(&browser->mutex);
@@ -480,6 +505,19 @@ void file_browser_set_sort(struct file_browser *browser, int sort,
     pthread_mutex_lock(&browser->mutex);
     browser->sort = sort;
     browser->descending = descending;
+    pthread_mutex_unlock(&browser->mutex);
+}
+
+void file_browser_set_local_sort(struct file_browser *browser, int sort,
+                                 bool descending)
+{
+    if (!browser)
+        return;
+    pthread_mutex_lock(&browser->mutex);
+    browser->local_sort = sort >= 0 && sort < FILE_BROWSER_SORT_COUNT
+                              ? sort
+                              : FILE_BROWSER_SORT_NAME;
+    browser->local_descending = descending;
     pthread_mutex_unlock(&browser->mutex);
 }
 

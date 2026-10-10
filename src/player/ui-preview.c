@@ -41,6 +41,11 @@ void file_browser_set_sort(struct file_browser *browser, int sort,
 {
     (void)browser; (void)sort; (void)descending;
 }
+void file_browser_set_local_sort(struct file_browser *browser, int sort,
+                                 bool descending)
+{
+    (void)browser; (void)sort; (void)descending;
+}
 void file_browser_listing_clear(struct file_browser_listing *listing)
 {
     for (size_t i = 0; i < listing->entry_count; ++i) {
@@ -231,7 +236,9 @@ int main(int argc, char **argv)
     }
     struct browser_ui ui;
     char error[64];
-    browser_ui_open(&ui, "jf:view:x", NULL, error, sizeof(error));
+    const char *location = getenv("STEREONAUT_PREVIEW_LOCATION");
+    browser_ui_open(&ui, location ? location : "jf:view:x", NULL, error,
+                    sizeof(error));
     struct file_browser_listing listing = {.generation = 1};
     listing.path = strdup("Jellyfin / VR-Filme");
     add(&listing, FILE_BROWSER_PARENT, "..", "jf:");
@@ -257,6 +264,8 @@ int main(int argc, char **argv)
     listing.entries[1].resume_us = INT64_C(1390000000); /* resume prompt */
     listing.entries[3].resume_us = INT64_C(300000000);
     listing.entries[4].played = true;
+    listing.entries[3].size = INT64_C(14500000000);
+    listing.entries[3].modified = INT64_C(1791500000);
     struct file_browser_listing copy = listing;
     ui.listing = copy;
     ui.grid = calloc(copy.entry_count, sizeof(*ui.grid));

@@ -38,6 +38,8 @@ struct browser_ui {
     struct thumbnail_loader *loader;
     int sort;             /* enum jf_sort */
     bool sort_descending;
+    int local_sort;       /* enum file_browser_local_sort */
+    bool local_sort_descending;
     bool sort_menu_open;
     size_t page;
     size_t selected_page; /* page of the last started title */

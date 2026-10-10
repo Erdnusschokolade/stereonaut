@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -111,10 +112,48 @@ static bool default_descending(int sort)
            sort != JF_SORT_OFFICIAL_RATING && sort != JF_SORT_RUNTIME;
 }
 
-/* Only folder listings of a Jellyfin library can be sorted. */
+static const char *const local_sort_labels[FILE_BROWSER_SORT_COUNT] = {
+    "Name", "Änderungsdatum", "Dateigröße",
+};
+
+static bool local_location(const struct browser_ui *ui)
+{
+    return ui->location[0] && strcmp(ui->location, "root:") != 0 &&
+           strncmp(ui->location, "jf:", 3) != 0;
+}
+
+/* Folder listings of a Jellyfin library and local directories can be
+ * sorted, each with its own criteria. */
 static bool sortable(const struct browser_ui *ui)
 {
-    return strncmp(ui->location, "jf:view:", 8) == 0;
+    return strncmp(ui->location, "jf:view:", 8) == 0 || local_location(ui);
+}
+
+static int sort_count(const struct browser_ui *ui)
+{
+    return local_location(ui) ? FILE_BROWSER_SORT_COUNT : JF_SORT_COUNT;
+}
+
+static const char *sort_label(const struct browser_ui *ui, int sort)
+{
+    return local_location(ui) ? local_sort_labels[sort] : sort_labels[sort];
+}
+
+static int active_sort(const struct browser_ui *ui)
+{
+    return local_location(ui) ? ui->local_sort : ui->sort;
+}
+
+static bool active_descending(const struct browser_ui *ui)
+{
+    return local_location(ui) ? ui->local_sort_descending
+                              : ui->sort_descending;
+}
+
+/* Random order has no direction. */
+static bool has_direction(const struct browser_ui *ui, int sort)
+{
+    return local_location(ui) || sort != JF_SORT_RANDOM;
 }
 
 enum { RAIL_START, RAIL_JELLYFIN, RAIL_LOCAL, RAIL_COUNT };
@@ -396,11 +435,11 @@ static void draw_sort_chip(struct browser_ui *ui, struct ui_canvas *canvas,
                                                    : color_chip);
     ui_draw_text(canvas, ui->font, 24, SORT_X + 24, SORT_Y + 10,
                  SORT_W - 112, UI_ALIGN_LEFT, color_text,
-                 sort_labels[ui->sort]);
-    if (ui->sort != JF_SORT_RANDOM)
+                 sort_label(ui, active_sort(ui)));
+    if (has_direction(ui, active_sort(ui)))
         ui_draw_icon(canvas,
-                     ui->sort_descending ? UI_ICON_ARROW_DOWN
-                                         : UI_ICON_ARROW_UP,
+                     active_descending(ui) ? UI_ICON_ARROW_DOWN
+                                           : UI_ICON_ARROW_UP,
                      SORT_X + SORT_W - 70, SORT_Y + SORT_H / 2.0f, 28,
                      color_accent);
     ui_draw_icon(canvas, UI_ICON_CHEVRON_DOWN, SORT_X + SORT_W - 32,
@@ -410,25 +449,28 @@ static void draw_sort_chip(struct browser_ui *ui, struct ui_canvas *canvas,
 static void draw_sort_menu(struct browser_ui *ui, struct ui_canvas *canvas,
                            int hover)
 {
-    ui_shadow_round_rect(canvas, MENU_X, MENU_Y + 6, MENU_W, MENU_H, 22, 24,
+    int count = sort_count(ui);
+    int height = count * MENU_ITEM_H + 16;
+    ui_shadow_round_rect(canvas, MENU_X, MENU_Y + 6, MENU_W, height, 22, 24,
                          color_shadow);
-    ui_fill_round_rect(canvas, MENU_X, MENU_Y, MENU_W, MENU_H, 22,
+    ui_fill_round_rect(canvas, MENU_X, MENU_Y, MENU_W, height, 22,
                        UI_RGBA(30, 32, 39, 255));
-    ui_stroke_round_rect(canvas, MENU_X, MENU_Y, MENU_W, MENU_H, 22, 2,
+    ui_stroke_round_rect(canvas, MENU_X, MENU_Y, MENU_W, height, 22, 2,
                          color_border);
-    for (int i = 0; i < JF_SORT_COUNT; ++i) {
+    for (int i = 0; i < count; ++i) {
         int y = MENU_Y + 8 + i * MENU_ITEM_H;
-        bool current = i == ui->sort;
+        bool current = i == active_sort(ui);
         if (hover == ID_SORT_ITEM + i)
             ui_fill_round_rect(canvas, MENU_X + 8, y, MENU_W - 16,
                                MENU_ITEM_H, 14, color_tile_hover);
         ui_draw_text(canvas, current ? ui->bold : ui->font, 25, MENU_X + 28,
                      y + 11, MENU_W - 96, UI_ALIGN_LEFT,
-                     current ? color_accent : color_text, sort_labels[i]);
-        if (current && i != JF_SORT_RANDOM)
+                     current ? color_accent : color_text,
+                     sort_label(ui, i));
+        if (current && has_direction(ui, i))
             ui_draw_icon(canvas,
-                         ui->sort_descending ? UI_ICON_ARROW_DOWN
-                                             : UI_ICON_ARROW_UP,
+                         active_descending(ui) ? UI_ICON_ARROW_DOWN
+                                               : UI_ICON_ARROW_UP,
                          MENU_X + MENU_W - 40, y + MENU_ITEM_H / 2.0f, 28,
                          color_accent);
     }
@@ -570,6 +612,24 @@ static void draw_detail(struct browser_ui *ui, struct ui_canvas *canvas)
     int y = title_y + lines * 40 + 24;
     bool jellyfin = strncmp(entry->path, "jf:", 3) == 0;
     char badge[8], duration[16], year[16] = "", size[40] = "", resume[16];
+    char file_size[24] = "", modified[24] = "";
+    if (entry->size > 0) {
+        double megabytes = (double)entry->size / (1024.0 * 1024.0);
+        if (megabytes >= 1024.0)
+            snprintf(file_size, sizeof(file_size), "%.1f GB",
+                     megabytes / 1024.0);
+        else
+            snprintf(file_size, sizeof(file_size), "%.0f MB", megabytes);
+        char *point = strchr(file_size, '.');
+        if (point)
+            *point = ','; /* German decimal comma */
+    }
+    if (entry->modified > 0) {
+        time_t when = (time_t)entry->modified;
+        struct tm local;
+        if (localtime_r(&when, &local))
+            strftime(modified, sizeof(modified), "%d.%m.%Y", &local);
+    }
     if (entry->year > 0)
         snprintf(year, sizeof(year), "%d", entry->year);
     if (entry->width > 0 && entry->height > 0)
@@ -587,6 +647,8 @@ static void draw_detail(struct browser_ui *ui, struct ui_canvas *canvas)
         {"Format", extension_badge(entry, badge)},
         {"Codec", entry->codec},
         {"Größe", size},
+        {"Datei", file_size},
+        {"Geändert", modified},
     };
     for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); ++i) {
         if (!rows[i].value[0])
@@ -803,7 +865,8 @@ void browser_ui_set_pointer(struct browser_ui *ui, bool visible, int x, int y,
          * is just grid. */
         if (ui->sort_menu_open) {
             int row = (y - MENU_Y - 8) / MENU_ITEM_H;
-            hover = row >= 0 && row < JF_SORT_COUNT ? ID_SORT_ITEM + row : -1;
+            hover = row >= 0 && row < sort_count(ui) ? ID_SORT_ITEM + row
+                                                     : -1;
         } else {
             hover = hit_test(x, y, 0);
         }
@@ -886,6 +949,12 @@ static void load_sort(struct browser_ui *ui)
     int sort = settings_get_int("sort", JF_SORT_NAME);
     ui->sort = sort >= 0 && sort < JF_SORT_COUNT ? sort : JF_SORT_NAME;
     ui->sort_descending = settings_get_bool("sort_descending", false);
+    int local = settings_get_int("local_sort", FILE_BROWSER_SORT_NAME);
+    ui->local_sort = local >= 0 && local < FILE_BROWSER_SORT_COUNT
+                         ? local
+                         : FILE_BROWSER_SORT_NAME;
+    ui->local_sort_descending =
+        settings_get_bool("local_sort_descending", false);
 }
 
 static void save_sort(const struct browser_ui *ui)
@@ -897,6 +966,22 @@ static void save_sort(const struct browser_ui *ui)
 /* Chooses a criterion; choosing the current one flips the direction. */
 static void choose_sort(struct browser_ui *ui, int sort)
 {
+    if (local_location(ui)) {
+        if (sort == ui->local_sort)
+            ui->local_sort_descending = !ui->local_sort_descending;
+        else {
+            ui->local_sort = sort;
+            ui->local_sort_descending = sort != FILE_BROWSER_SORT_NAME;
+        }
+        settings_set_int("local_sort", ui->local_sort);
+        settings_set_bool("local_sort_descending",
+                          ui->local_sort_descending);
+        file_browser_set_local_sort(ui->browser, ui->local_sort,
+                                    ui->local_sort_descending);
+        ui->restore_page = 0;
+        request(ui, ui->location);
+        return;
+    }
     if (sort == ui->sort && sort != JF_SORT_RANDOM)
         ui->sort_descending = !ui->sort_descending;
     else {
@@ -971,7 +1056,7 @@ enum browser_ui_action browser_ui_activate(struct browser_ui *ui, char *path,
                             path, path_size);
     }
     if (ui->sort_menu_open) {
-        if (hover >= ID_SORT_ITEM && hover < ID_SORT_ITEM + JF_SORT_COUNT)
+        if (hover >= ID_SORT_ITEM && hover < ID_SORT_ITEM + sort_count(ui))
             choose_sort(ui, hover - ID_SORT_ITEM);
         ui->sort_menu_open = false;
         ui->hover = -1;
@@ -1154,8 +1239,11 @@ int browser_ui_open(struct browser_ui *ui, const char *location,
     ui->loader = thumbnail_loader_create();
     load_sort(ui);
     int opened = file_browser_open(&ui->browser, location, error, error_size);
-    if (opened == 0)
+    if (opened == 0) {
         file_browser_set_sort(ui->browser, ui->sort, ui->sort_descending);
+        file_browser_set_local_sort(ui->browser, ui->local_sort,
+                                    ui->local_sort_descending);
+    }
     return opened;
 }
 
