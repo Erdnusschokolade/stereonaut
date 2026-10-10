@@ -288,7 +288,8 @@ struct app {
 static void need_vk(const char *what, VkResult result);
 static void need(bool condition, const char *what);
 static void hold_current_frame(struct app *app);
-static void send_control(struct app *app, uint32_t type, const char *path);
+static void send_control(struct app *app, uint32_t type, const char *path,
+                         int64_t start_us);
 static void discard_held_frame(struct app *app);
 static void reinitialize_video(struct app *app,
                                const struct nv12_ipc_message *message,
@@ -2504,7 +2505,7 @@ static void sync_player_input(struct app *app, XrTime time)
             /* Before the first frame the session may be blocked opening the
              * source and cannot read the action. */
             if (action == NV12_ACTION_BACK && app->awaiting_frame)
-                send_control(app, PLAYER_UI_STOP_REQUESTED, NULL);
+                send_control(app, PLAYER_UI_STOP_REQUESTED, NULL, 0);
         }
     }
 
@@ -2931,9 +2932,10 @@ static XrCompositionLayerQuad make_browser_layer(const struct app *app)
 
 /* ---- launcher control socket ---------------------------------------- */
 
-static void send_control(struct app *app, uint32_t type, const char *path)
+static void send_control(struct app *app, uint32_t type, const char *path,
+                         int64_t start_us)
 {
-    struct player_ui_result result = {.type = type};
+    struct player_ui_result result = {.type = type, .start_us = start_us};
     if (path)
         snprintf(result.path, sizeof(result.path), "%s", path);
     ssize_t written;
@@ -3139,11 +3141,12 @@ static void sync_browser_input(struct app *app, XrTime time)
         app->awaiting_command = true;
         snprintf(app->title, sizeof(app->title), "%s",
                  app->browser.selected_title);
-        send_control(app, PLAYER_UI_FILE_SELECTED, path);
+        send_control(app, PLAYER_UI_FILE_SELECTED, path,
+                     app->browser.selected_start_us);
         break;
     case BROWSER_UI_EXIT_REQUESTED:
         app->awaiting_command = true;
-        send_control(app, PLAYER_UI_EXIT_REQUESTED, NULL);
+        send_control(app, PLAYER_UI_EXIT_REQUESTED, NULL, 0);
         app->quit = true;
         break;
     case BROWSER_UI_NONE:
@@ -3849,7 +3852,7 @@ int main(int argc, char **argv)
             end_playback(&app);
     }
     if (app.xr_exit)
-        send_control(&app, PLAYER_UI_EXIT_REQUESTED, NULL);
+        send_control(&app, PLAYER_UI_EXIT_REQUESTED, NULL, 0);
     if (app.playing)
         end_playback(&app);
     browser_ui_close(&app.browser);

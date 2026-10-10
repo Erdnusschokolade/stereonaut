@@ -17,6 +17,8 @@ enum player_ui_result_type {
 
 struct player_ui_result {
     uint32_t type;
+    /* FILE_SELECTED: start position (0 = from the beginning). */
+    int64_t start_us;
     char path[PLAYER_UI_PATH_MAX];
 };
 

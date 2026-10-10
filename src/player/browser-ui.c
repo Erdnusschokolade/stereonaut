@@ -63,6 +63,20 @@
 #define MENU_Y (SORT_Y + SORT_H + 8)
 #define MENU_H (JF_SORT_COUNT * MENU_ITEM_H + 16)
 
+/* "Resume or restart" prompt over the grid. */
+#define PROMPT_W 680
+#define PROMPT_H 300
+#define PROMPT_X (CENTER_X + (CENTER_W - PROMPT_W) / 2)
+#define PROMPT_Y 330
+#define PROMPT_BUTTON_W 300
+#define PROMPT_BUTTON_H 64
+#define PROMPT_BUTTON_Y (PROMPT_Y + PROMPT_H - PROMPT_BUTTON_H - 32)
+#define PROMPT_RESUME_X (PROMPT_X + 32)
+#define PROMPT_RESTART_X (PROMPT_X + PROMPT_W - 32 - PROMPT_BUTTON_W)
+
+/* Titles watched less than this are offered from the start only. */
+#define RESUME_MINIMUM_US INT64_C(30000000)
+
 /* Control ids returned by browser_ui_hit_test. */
 enum {
     ID_TILE = 0, /* 0 .. PAGE_ENTRIES-1 */
@@ -76,7 +90,13 @@ enum {
     ID_SORT = 50,       /* the chip */
     ID_SORT_ITEM = 60,  /* 60 .. 60+JF_SORT_COUNT-1 */
     ID_SORT_AREA = 79,  /* hit test only: resolved with the model */
+    ID_RESUME = 80,
+    ID_RESTART = 81,
+    ID_PROMPT_AREA = 82, /* hit test only: resolved with the model */
 };
+
+/* What the stateless hit test reports (menus are open or not). */
+enum { HIT_MENU = 1, HIT_PROMPT = 2 };
 
 static const char *const sort_labels[JF_SORT_COUNT] = {
     "Name", "Zufällig", "Community-Bewertung", "Kritikerbewertung",
@@ -287,6 +307,21 @@ static void draw_tile(struct browser_ui *ui, struct ui_canvas *canvas,
                            width, 28, 8, UI_RGBA(0, 0, 0, 170));
         ui_draw_text(canvas, ui->bold, 18, x + TILE_W - 19, y + THUMB_H - 35,
                      0, UI_ALIGN_RIGHT, color_text, duration);
+    }
+    if (entry->played) {
+        int width = ui_text_width(ui->bold, 18, "Gesehen") + 18;
+        ui_fill_round_rect(canvas, x + TILE_W - 10 - width, y + 10, width, 28,
+                           8, UI_RGBA(0, 0, 0, 170));
+        ui_draw_text(canvas, ui->bold, 18, x + TILE_W - 19, y + 13, 0,
+                     UI_ALIGN_RIGHT, color_accent, "Gesehen");
+    }
+    if (entry->resume_us > 0 && entry->duration_us > 0) {
+        float share = (float)entry->resume_us / (float)entry->duration_us;
+        share = share < 0.02f ? 0.02f : share > 1.0f ? 1.0f : share;
+        ui_fill_round_rect(canvas, x + 10, y + THUMB_H - 8, TILE_W - 20, 5,
+                           2.5f, UI_RGBA(0, 0, 0, 170));
+        ui_fill_round_rect(canvas, x + 10, y + THUMB_H - 8,
+                           (TILE_W - 20) * share, 5, 2.5f, color_accent);
     }
     if (hover)
         ui_stroke_round_rect(canvas, x - 5, y - 5, TILE_W + 10, THUMB_H + 10,
@@ -534,7 +569,7 @@ static void draw_detail(struct browser_ui *ui, struct ui_canvas *canvas)
                                      entry->name);
     int y = title_y + lines * 40 + 24;
     bool jellyfin = strncmp(entry->path, "jf:", 3) == 0;
-    char badge[8], duration[16], year[16] = "", size[40] = "";
+    char badge[8], duration[16], year[16] = "", size[40] = "", resume[16];
     if (entry->year > 0)
         snprintf(year, sizeof(year), "%d", entry->year);
     if (entry->width > 0 && entry->height > 0)
@@ -545,6 +580,8 @@ static void draw_detail(struct browser_ui *ui, struct ui_canvas *canvas)
     } rows[] = {
         {"Typ", entry->kind == FILE_BROWSER_MEDIA ? "Video" : "Ordner"},
         {"Dauer", format_duration(entry->duration_us, duration)},
+        {"Gestoppt", format_duration(entry->resume_us, resume)},
+        {"Gesehen", entry->played ? "Ja" : ""},
         {"Jahr", year},
         {"Quelle", jellyfin ? "Jellyfin" : "Lokal"},
         {"Format", extension_badge(entry, badge)},
@@ -564,6 +601,52 @@ static void draw_detail(struct browser_ui *ui, struct ui_canvas *canvas)
         ui_draw_text_wrapped(canvas, ui->font, 24, x, CARD_Y + CARD_H - 80,
                              width, 32, 2, UI_ALIGN_LEFT, color_dim,
                              "Trigger drücken zum Abspielen");
+}
+
+static void draw_resume_prompt(struct browser_ui *ui,
+                               struct ui_canvas *canvas, int hover)
+{
+    const struct file_browser_entry *entry =
+        &ui->listing.entries[ui->resume_prompt];
+    ui_fill_round_rect(canvas, CENTER_X, CARD_Y, CENTER_W, CARD_H, 28,
+                       UI_RGBA(0, 0, 0, 150));
+    ui_shadow_round_rect(canvas, PROMPT_X, PROMPT_Y + 8, PROMPT_W, PROMPT_H,
+                         26, 28, color_shadow);
+    ui_fill_round_rect(canvas, PROMPT_X, PROMPT_Y, PROMPT_W, PROMPT_H, 26,
+                       UI_RGBA(30, 32, 39, 255));
+    ui_stroke_round_rect(canvas, PROMPT_X, PROMPT_Y, PROMPT_W, PROMPT_H, 26,
+                         2, color_border);
+    ui_draw_text(canvas, ui->bold, 34, PROMPT_X + PROMPT_W / 2,
+                 PROMPT_Y + 34, PROMPT_W - 64, UI_ALIGN_CENTER, color_text,
+                 entry->name);
+    char position[16], text[64];
+    format_duration(entry->resume_us, position);
+    ui_draw_text(canvas, ui->font, 26, PROMPT_X + PROMPT_W / 2,
+                 PROMPT_Y + 96, PROMPT_W - 64, UI_ALIGN_CENTER, color_dim,
+                 "Zuletzt gestoppt – wo weiterschauen?");
+    snprintf(text, sizeof(text), "Ab %s", position);
+    const struct {
+        int id, x;
+        const char *label;
+        bool primary;
+    } buttons[] = {
+        {ID_RESUME, PROMPT_RESUME_X, text, true},
+        {ID_RESTART, PROMPT_RESTART_X, "Von vorn", false},
+    };
+    for (size_t i = 0; i < 2; ++i) {
+        bool focused = hover == buttons[i].id;
+        ui_fill_round_rect(canvas, buttons[i].x, PROMPT_BUTTON_Y,
+                           PROMPT_BUTTON_W, PROMPT_BUTTON_H,
+                           PROMPT_BUTTON_H / 2.0f,
+                           buttons[i].primary
+                               ? (focused ? UI_RGBA(90, 180, 255, 255)
+                                          : color_accent)
+                               : (focused ? color_tile_hover : color_chip));
+        ui_draw_text(canvas, ui->bold, 28,
+                     buttons[i].x + PROMPT_BUTTON_W / 2,
+                     PROMPT_BUTTON_Y + 15, PROMPT_BUTTON_W - 32,
+                     UI_ALIGN_CENTER, color_text, buttons[i].label);
+    }
 }
 
 void browser_ui_render(struct browser_ui *ui, uint32_t *pixels, bool bgra)
@@ -615,21 +698,28 @@ void browser_ui_render(struct browser_ui *ui, uint32_t *pixels, bool bgra)
     draw_detail(ui, &canvas);
     if (ui->sort_menu_open)
         draw_sort_menu(ui, &canvas, hover);
+    if (ui->resume_prompt >= 0 &&
+        (size_t)ui->resume_prompt < ui->listing.entry_count)
+        draw_resume_prompt(ui, &canvas, hover);
     ui->dirty = false;
 }
 
 /* ---- input ------------------------------------------------------------- */
 
-/* The stateless hit test cannot know whether the sort menu is open; it
- * reports ID_SORT_AREA over the menu rectangle (which overlaps the grid) and
- * set_pointer re-tests with the menu ignored when the menu is closed. */
-static int hit_test(int x, int y, bool with_menu)
+/* The stateless hit test cannot know whether the sort menu or the resume
+ * prompt is open; it reports ID_PROMPT_AREA / ID_SORT_AREA over their
+ * rectangles (which overlap the grid) and set_pointer re-tests without them
+ * when they are closed. */
+static int hit_test(int x, int y, int layers)
 {
+    if ((layers & HIT_PROMPT) && x >= PROMPT_X && x < PROMPT_X + PROMPT_W &&
+        y >= PROMPT_Y && y < PROMPT_Y + PROMPT_H)
+        return ID_PROMPT_AREA;
     if (x >= SORT_X && x < SORT_X + SORT_W && y >= SORT_Y &&
         y < SORT_Y + SORT_H)
         return ID_SORT;
-    if (with_menu && x >= MENU_X && x < MENU_X + MENU_W && y >= MENU_Y &&
-        y < MENU_Y + MENU_H)
+    if ((layers & HIT_MENU) && x >= MENU_X && x < MENU_X + MENU_W &&
+        y >= MENU_Y && y < MENU_Y + MENU_H)
         return ID_SORT_AREA;
     for (int slot = 0; slot < (int)PAGE_ENTRIES; ++slot) {
         int tx, ty;
@@ -661,7 +751,7 @@ static int hit_test(int x, int y, bool with_menu)
 int browser_ui_hit_test(float u, float v)
 {
     return hit_test((int)(u * BROWSER_UI_WIDTH), (int)(v * BROWSER_UI_HEIGHT),
-                    true);
+                    HIT_MENU | HIT_PROMPT);
 }
 
 /* Page buttons depend on the page count, which the stateless hit test does
@@ -684,6 +774,30 @@ static int resolve_page_button(const struct browser_ui *ui, int x)
 void browser_ui_set_pointer(struct browser_ui *ui, bool visible, int x, int y,
                             int hover)
 {
+    if (ui->resume_prompt >= 0) {
+        /* Modal: only its buttons react; any other click closes it. */
+        bool on_button = y >= PROMPT_BUTTON_Y &&
+                         y < PROMPT_BUTTON_Y + PROMPT_BUTTON_H;
+        if (hover == ID_PROMPT_AREA && on_button && x >= PROMPT_RESUME_X &&
+            x < PROMPT_RESUME_X + PROMPT_BUTTON_W)
+            hover = ID_RESUME;
+        else if (hover == ID_PROMPT_AREA && on_button &&
+                 x >= PROMPT_RESTART_X &&
+                 x < PROMPT_RESTART_X + PROMPT_BUTTON_W)
+            hover = ID_RESTART;
+        else
+            hover = hover == ID_PROMPT_AREA ? ID_PROMPT_AREA : -1;
+        if (hover != ui->hover) {
+            ui->hover = hover;
+            ui->dirty = true;
+        }
+        ui->pointer_visible = visible;
+        ui->pointer_x = x;
+        ui->pointer_y = y;
+        return;
+    }
+    if (hover == ID_PROMPT_AREA)
+        hover = hit_test(x, y, HIT_MENU);
     if (hover == ID_SORT_AREA) {
         /* The menu hides everything below it while open; closed, the area
          * is just grid. */
@@ -691,7 +805,7 @@ void browser_ui_set_pointer(struct browser_ui *ui, bool visible, int x, int y,
             int row = (y - MENU_Y - 8) / MENU_ITEM_H;
             hover = row >= 0 && row < JF_SORT_COUNT ? ID_SORT_ITEM + row : -1;
         } else {
-            hover = hit_test(x, y, false);
+            hover = hit_test(x, y, 0);
         }
     } else if (ui->sort_menu_open) {
         /* Clicks outside the menu only close it. */
@@ -808,15 +922,29 @@ static void set_page(struct browser_ui *ui, size_t page)
 
 void browser_ui_close_menus(struct browser_ui *ui)
 {
-    if (ui->sort_menu_open) {
+    if (ui->sort_menu_open || ui->resume_prompt >= 0) {
         ui->sort_menu_open = false;
+        ui->resume_prompt = -1;
         ui->dirty = true;
     }
 }
 
+static enum browser_ui_action select_title(struct browser_ui *ui, int index,
+                                           int64_t start_us, char *path,
+                                           size_t path_size)
+{
+    const struct file_browser_entry *entry = &ui->listing.entries[index];
+    ui->selected_page = ui->page;
+    ui->selected_start_us = start_us;
+    snprintf(ui->selected_title, sizeof(ui->selected_title), "%s",
+             entry->name);
+    snprintf(path, path_size, "%s", entry->path);
+    return BROWSER_UI_FILE_SELECTED;
+}
+
 void browser_ui_flip(struct browser_ui *ui, int direction)
 {
-    if (ui->sort_menu_open)
+    if (ui->sort_menu_open || ui->resume_prompt >= 0)
         return;
     if (direction < 0 && ui->page > 0)
         set_page(ui, ui->page - 1);
@@ -828,6 +956,20 @@ enum browser_ui_action browser_ui_activate(struct browser_ui *ui, char *path,
                                            size_t path_size)
 {
     int hover = ui->hover;
+    if (ui->resume_prompt >= 0) {
+        int index = ui->resume_prompt;
+        ui->resume_prompt = -1;
+        ui->hover = -1;
+        ui->dirty = true;
+        if ((size_t)index >= ui->listing.entry_count ||
+            (hover != ID_RESUME && hover != ID_RESTART))
+            return BROWSER_UI_NONE;
+        return select_title(ui, index,
+                            hover == ID_RESUME
+                                ? ui->listing.entries[index].resume_us
+                                : 0,
+                            path, path_size);
+    }
     if (ui->sort_menu_open) {
         if (hover >= ID_SORT_ITEM && hover < ID_SORT_ITEM + JF_SORT_COUNT)
             choose_sort(ui, hover - ID_SORT_ITEM);
@@ -847,11 +989,13 @@ enum browser_ui_action browser_ui_activate(struct browser_ui *ui, char *path,
             return BROWSER_UI_NONE;
         const struct file_browser_entry *entry = &ui->listing.entries[index];
         if (entry->kind == FILE_BROWSER_MEDIA) {
-            ui->selected_page = ui->page;
-            snprintf(ui->selected_title, sizeof(ui->selected_title), "%s",
-                     entry->name);
-            snprintf(path, path_size, "%s", entry->path);
-            return BROWSER_UI_FILE_SELECTED;
+            if (entry->resume_us >= RESUME_MINIMUM_US) {
+                ui->resume_prompt = index;
+                ui->hover = -1;
+                ui->dirty = true;
+                return BROWSER_UI_NONE;
+            }
+            return select_title(ui, index, 0, path, path_size);
         }
         request(ui, entry->path);
     } else if (hover == ID_BACK && ui->parent >= 0) {
@@ -919,6 +1063,7 @@ static void install_listing(struct browser_ui *ui,
         ui->page = 0;
     ui->hover = -1;
     ui->detail = -1;
+    ui->resume_prompt = -1;
     ui->content_dirty = true;
     ui->dirty = true;
     request_thumbnails(ui);
@@ -975,6 +1120,7 @@ int browser_ui_open(struct browser_ui *ui, const char *location,
     memset(ui, 0, sizeof(*ui));
     ui->hover = -1;
     ui->detail = -1;
+    ui->resume_prompt = -1;
     ui->parent = -1;
     ui->dirty = true;
     ui->content_dirty = true;

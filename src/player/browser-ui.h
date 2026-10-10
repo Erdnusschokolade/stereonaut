@@ -42,6 +42,8 @@ struct browser_ui {
     size_t page;
     size_t selected_page; /* page of the last started title */
     char selected_title[256]; /* name of the last started title */
+    int64_t selected_start_us; /* where the last started title begins */
+    int resume_prompt;    /* listing index asking "resume or restart", -1 */
     size_t restore_page;  /* page to show for the next listing */
     int hover;
     int detail;           /* listing index shown in the detail card or -1 */
@@ -76,7 +78,8 @@ void browser_ui_set_pointer(struct browser_ui *ui, bool visible, int x, int y,
                             int hover);
 enum browser_ui_action browser_ui_activate(struct browser_ui *ui, char *path,
                                            size_t path_size);
-/* Closes the sort menu (e.g. when the browser is left). */
+/* Closes the sort menu and the resume prompt (e.g. when the browser is
+ * left). */
 void browser_ui_close_menus(struct browser_ui *ui);
 /* Previous (< 0) or next (> 0) page, e.g. from the thumbstick. */
 void browser_ui_flip(struct browser_ui *ui, int direction);

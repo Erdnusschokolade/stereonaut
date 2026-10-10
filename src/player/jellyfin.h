@@ -33,6 +33,11 @@ struct jf_item {
     int year;              /* 0 if unknown */
     char codec[32];        /* first video stream, e.g. "HEVC Main 10" ("" if unknown) */
     int width, height;     /* first video stream, 0 if unknown */
+    /* The user's state: resume position (0 = from the start), share
+     * watched in percent and whether it was played to the end. */
+    int64_t resume_ticks;
+    float played_percentage;
+    bool played;
 };
 
 struct jf_playback {
@@ -100,6 +105,10 @@ int jf_list_children(const struct jf_config *config, const char *parent_id,
                      enum jf_sort sort, bool descending,
                      struct jf_item **items, size_t *count,
                      char *error, size_t error_size);
+/* Partly watched videos of all libraries, most recent first ("continue
+ * watching"); a short timeout, the start page waits for it. */
+int jf_list_resume(const struct jf_config *config, struct jf_item **items,
+                   size_t *count, char *error, size_t error_size);
 /* Name and parent id of an item (parent may be empty). */
 int jf_item_info(const struct jf_config *config, const char *id,
                  char *name, size_t name_size, char *parent,

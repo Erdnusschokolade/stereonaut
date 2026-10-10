@@ -219,12 +219,13 @@ static int run_playback(const char *path, char *const *extra, int *exit_code)
 static void selected_parent(const char *path, char *directory, size_t size)
 {
     if (strncmp(path, "jf:item:", 8) == 0) {
-        /* jf:item:<id>:<folder> returns to the folder it was chosen in. */
+        /* jf:item:<id>:<folder> returns to the folder it was chosen in;
+         * titles from the start page ("continue watching") have none. */
         const char *folder = strchr(path + 8, ':');
         if (folder && folder[1])
             snprintf(directory, size, "jf:view:%s", folder + 1);
         else
-            snprintf(directory, size, "jf:");
+            snprintf(directory, size, "root:");
         return;
     }
     snprintf(directory, size, "%s", path);
@@ -308,7 +309,16 @@ int main(int argc, char **argv)
         printf("selected_file=%s\n", result.path);
         int exit_code = 0;
         browser_message[0] = '\0';
-        int played = run_playback(result.path, NULL, &exit_code);
+        char start_text[32];
+        char *start_arguments[] = {"--start-us", start_text, NULL};
+        snprintf(start_text, sizeof(start_text), "%lld",
+                 (long long)result.start_us);
+        if (result.start_us > 0)
+            printf("selected_start_us=%s\n", start_text);
+        int played = run_playback(result.path,
+                                  result.start_us > 0 ? start_arguments
+                                                      : NULL,
+                                  &exit_code);
         if (exit_after_playback) {
             shutdown_host();
             return 0;

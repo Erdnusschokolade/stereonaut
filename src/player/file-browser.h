@@ -22,6 +22,11 @@ struct file_browser_entry {
     int year;            /* 0 if unknown */
     char codec[32];      /* e.g. "HEVC Main 10", "" if unknown */
     int width, height;   /* 0 if unknown */
+    /* Jellyfin user state: resume position (0 = none), share watched in
+     * percent, played to the end. */
+    int64_t resume_us;
+    float played_percentage;
+    bool played;
 };
 
 struct file_browser_listing {

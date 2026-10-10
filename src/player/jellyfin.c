@@ -279,12 +279,14 @@ static long http_request(const struct jf_config *config, const char *method,
 }
 
 /* Parses a successful JSON response. 401 maps to JF_AUTH_RETRY. */
-static int json_call(const struct jf_config *config, const char *method,
-                     const char *path, const char *body, json_object **root,
-                     char *error, size_t error_size)
+static int json_call_timed(const struct jf_config *config, const char *method,
+                           const char *path, const char *body,
+                           json_object **root, char *error,
+                           size_t error_size, long timeout_seconds)
 {
     struct buffer response;
-    long status = http_request(config, method, path, body, &response);
+    long status = http_request_timed(config, method, path, body, &response,
+                                     timeout_seconds);
     int result = 0;
     if (status < 0) {
         set_error(error, error_size, "Jellyfin-Server nicht erreichbar");
@@ -304,6 +306,14 @@ static int json_call(const struct jf_config *config, const char *method,
     }
     free(response.data);
     return result;
+}
+
+static int json_call(const struct jf_config *config, const char *method,
+                     const char *path, const char *body, json_object **root,
+                     char *error, size_t error_size)
+{
+    return json_call_timed(config, method, path, body, root, error,
+                           error_size, 30L);
 }
 
 /* ---- Quick Connect -------------------------------------------------- */
@@ -505,6 +515,19 @@ static int collect_items(json_object *root, bool filter_views,
         if (json_object_object_get_ex(entry, "ProductionYear", &value))
             list[used].year = json_object_get_int(value);
         describe_video(entry, &list[used]);
+        json_object *user_data = NULL;
+        if (json_object_object_get_ex(entry, "UserData", &user_data) &&
+            json_object_is_type(user_data, json_type_object)) {
+            if (json_object_object_get_ex(user_data, "PlaybackPositionTicks",
+                                          &value))
+                list[used].resume_ticks = json_object_get_int64(value);
+            if (json_object_object_get_ex(user_data, "PlayedPercentage",
+                                          &value))
+                list[used].played_percentage =
+                    (float)json_object_get_double(value);
+            if (json_object_object_get_ex(user_data, "Played", &value))
+                list[used].played = json_object_get_boolean(value);
+        }
         copy_string(list[used].name, sizeof(list[used].name), name);
         list[used].is_folder =
             filter_views ||
@@ -561,6 +584,26 @@ int jf_list_children(const struct jf_config *config, const char *parent_id,
     json_object *root = NULL;
     int result = json_call(config, "GET", path, NULL, &root, error,
                            error_size);
+    if (result < 0)
+        return result;
+    result = collect_items(root, false, items, count);
+    json_object_put(root);
+    if (result < 0)
+        set_error(error, error_size, "Nicht genug Speicher");
+    return result;
+}
+
+int jf_list_resume(const struct jf_config *config, struct jf_item **items,
+                   size_t *count, char *error, size_t error_size)
+{
+    char path[256];
+    snprintf(path, sizeof(path),
+             "/UserItems/Resume?userId=%s&MediaTypes=Video&Limit=12&"
+             "Fields=MediaStreams&EnableTotalRecordCount=false",
+             config->user_id);
+    json_object *root = NULL;
+    int result = json_call_timed(config, "GET", path, NULL, &root, error,
+                                 error_size, 4L);
     if (result < 0)
         return result;
     result = collect_items(root, false, items, count);

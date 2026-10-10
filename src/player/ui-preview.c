@@ -203,7 +203,7 @@ int main(int argc, char **argv)
                               argc > 5 ? atoi(argv[5]) : 0);
     if (argc < 2) {
         fprintf(stderr,
-                "usage: %s OUTPUT.ppm [HOVER_ID]\n"
+                "usage: %s OUTPUT.ppm [HOVER_ID] (80/81: resume prompt)\n"
                 "       %s --player OUTPUT.ppm [HOVER_ID] [POPUP] [TAB]\n",
                 argv[0], argv[0]);
         return 2;
@@ -231,6 +231,11 @@ int main(int argc, char **argv)
     }
     for (int i = 0; i < 30; ++i)
         add(&listing, FILE_BROWSER_MEDIA, "Weitere Seite", "jf:item:y:x");
+    for (size_t i = 1; i < listing.entry_count; ++i)
+        listing.entries[i].duration_us = INT64_C(2280000000);
+    listing.entries[1].resume_us = INT64_C(1390000000); /* resume prompt */
+    listing.entries[3].resume_us = INT64_C(300000000);
+    listing.entries[4].played = true;
     struct file_browser_listing copy = listing;
     ui.listing = copy;
     ui.grid = calloc(copy.entry_count, sizeof(*ui.grid));
@@ -255,7 +260,7 @@ int main(int argc, char **argv)
     ui.hover = -1;
     browser_ui_set_pointer(&ui, true, 0, 0, -1);
     int px = 452 + (hover % 4) * 294 + 200, py = 196 + (hover / 4) * 220 + 90;
-    if (hover >= 60) { /* sort menu open, item hover - 60 */
+    if (hover >= 60 && hover < 80) { /* sort menu open, item hover - 60 */
         ui.sort_menu_open = true;
         ui.sort = 4;
         ui.sort_descending = true;
@@ -264,8 +269,14 @@ int main(int argc, char **argv)
         ui.sort = 4;
         ui.sort_descending = true;
     }
+    if (hover == 80 || hover == 81) { /* resume prompt, button focused */
+        ui.resume_prompt = 1;
+        px = hover == 80 ? 900 : 1200;
+        py = 600;
+        hover = 82;
+    }
     browser_ui_set_pointer(&ui, true, px, py, hover);
-    if (hover >= 60)
+    if (hover >= 60 && hover < 80)
         ui.hover = hover;
 
     uint32_t *pixels = malloc((size_t)BROWSER_UI_WIDTH * BROWSER_UI_HEIGHT * 4);

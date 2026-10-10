@@ -227,6 +227,47 @@ static int add_entry(struct file_browser_listing *listing,
     return copy ? append_entry(listing, kind, name, copy) : -1;
 }
 
+/* Appends Jellyfin items; titles remember `folder_id` to return to after
+ * playback ("" = the start page). */
+static int add_jellyfin_items(struct file_browser_listing *listing,
+                              const struct jf_item *items, size_t count,
+                              const char *folder_id)
+{
+    for (size_t i = 0; i < count; ++i) {
+        char path[2 * JF_ID_SIZE + 16];
+        if (items[i].is_folder)
+            snprintf(path, sizeof(path), "jf:view:%s", items[i].id);
+        else
+            snprintf(path, sizeof(path), "jf:item:%s:%s", items[i].id,
+                     folder_id);
+        if (add_entry(listing,
+                      items[i].is_folder ? FILE_BROWSER_DIRECTORY
+                                         : FILE_BROWSER_MEDIA,
+                      items[i].name, path) < 0)
+            return -1;
+        struct file_browser_entry *entry =
+            &listing->entries[listing->entry_count - 1U];
+        if (items[i].image[0]) {
+            size_t size = strlen(items[i].id) + strlen(items[i].image) + 2U;
+            entry->image = malloc(size);
+            if (entry->image)
+                snprintf(entry->image, size, "%s|%s", items[i].id,
+                         items[i].image);
+        }
+        entry->duration_us = items[i].runtime_ticks / 10;
+        entry->year = items[i].year;
+        snprintf(entry->codec, sizeof(entry->codec), "%s", items[i].codec);
+        entry->width = items[i].width;
+        entry->height = items[i].height;
+        entry->resume_us = items[i].resume_ticks / 10;
+        entry->played_percentage = items[i].played_percentage;
+        entry->played = items[i].played;
+    }
+    return 0;
+}
+
+/* Start page: the two sources, then Jellyfin's "continue watching" titles
+ * (skipped quietly if the server is not configured or not reachable). */
 static struct file_browser_listing read_root(uint64_t generation)
 {
     struct file_browser_listing listing = {.generation = generation};
@@ -238,7 +279,16 @@ static struct file_browser_listing read_root(uint64_t generation)
         file_browser_listing_clear(&listing);
         listing.generation = generation;
         snprintf(listing.error, sizeof(listing.error), "Nicht genug Speicher");
+        return listing;
     }
+    struct jf_config config;
+    struct jf_item *items = NULL;
+    size_t count = 0;
+    if (jf_config_load(&config, NULL, 0) == 0 &&
+        jf_config_has_token(&config) &&
+        jf_list_resume(&config, &items, &count, NULL, 0) == 0)
+        add_jellyfin_items(&listing, items, count, "");
+    free(items);
     return listing;
 }
 
@@ -360,33 +410,9 @@ static struct file_browser_listing read_jellyfin(const char *request,
     listing.path = strdup(title);
     if (add_entry(&listing, FILE_BROWSER_PARENT, "..", parent_path_text) < 0)
         goto allocation_failure;
-    for (size_t i = 0; i < count; ++i) {
-        char path[2 * JF_ID_SIZE + 16];
-        if (items[i].is_folder)
-            snprintf(path, sizeof(path), "jf:view:%s", items[i].id);
-        else
-            snprintf(path, sizeof(path), "jf:item:%s:%s", items[i].id,
-                     folder_id ? folder_id : "");
-        if (add_entry(&listing,
-                      items[i].is_folder ? FILE_BROWSER_DIRECTORY
-                                         : FILE_BROWSER_MEDIA,
-                      items[i].name, path) < 0)
-            goto allocation_failure;
-        struct file_browser_entry *entry =
-            &listing.entries[listing.entry_count - 1U];
-        if (items[i].image[0]) {
-            size_t size = strlen(items[i].id) + strlen(items[i].image) + 2U;
-            entry->image = malloc(size);
-            if (entry->image)
-                snprintf(entry->image, size, "%s|%s", items[i].id,
-                         items[i].image);
-        }
-        entry->duration_us = items[i].runtime_ticks / 10;
-        entry->year = items[i].year;
-        snprintf(entry->codec, sizeof(entry->codec), "%s", items[i].codec);
-        entry->width = items[i].width;
-        entry->height = items[i].height;
-    }
+    if (add_jellyfin_items(&listing, items, count,
+                           folder_id ? folder_id : "") < 0)
+        goto allocation_failure;
     free(items);
     return listing;
 
