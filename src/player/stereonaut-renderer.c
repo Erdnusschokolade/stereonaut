@@ -394,11 +394,11 @@ static void initialize_actions(struct app *app)
 static void apply_init(struct app *app, const struct nv12_ipc_message *message,
                        const struct msghdr *received)
 {
-    need(message->buffer_count == 12 &&
+    /* Iris chooses the count per stream (H.264 needs more references at
+     * small sizes), so it may differ between titles and seeks. */
+    need(message->buffer_count >= 1 &&
              message->buffer_count <= NV12_IPC_MAX_BUFFERS,
-         "NV12 IPC buffer count is not twelve");
-    need(message->buffer_count == app->video_buffer_count,
-         "NV12 IPC init changed the buffer count");
+         "NV12 IPC buffer count out of range");
     struct cmsghdr *header = CMSG_FIRSTHDR(received);
     need(header && header->cmsg_level == SOL_SOCKET &&
              header->cmsg_type == SCM_RIGHTS,
@@ -1461,32 +1461,34 @@ static void create_render_resources(struct app *app)
     need_vk("vkAllocateMemory(uniform)", vkAllocateMemory(app->device, &allocation, NULL, &app->uniform_memory));
     need_vk("vkBindBufferMemory(uniform)", vkBindBufferMemory(app->device, app->uniform_buffer, app->uniform_memory, 0));
     need_vk("vkMapMemory(uniform)", vkMapMemory(app->device, app->uniform_memory, 0, VK_WHOLE_SIZE, 0, &app->uniform_mapping));
-    /* One extra set lets a frame be kept on screen across a session restart
+    /* A set for every possible buffer (the count varies per stream) plus
+     * one extra, which keeps a frame on screen across a session restart
      * while the regular buffers are imported again. */
+    const uint32_t set_count = NV12_IPC_MAX_BUFFERS + 1U;
     VkDescriptorPoolSize sizes[2] = {
         {.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
-         .descriptorCount = app->video_buffer_count + 1U},
+         .descriptorCount = set_count},
         {.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-         .descriptorCount = app->video_buffer_count + 1U},
+         .descriptorCount = set_count},
     };
     VkDescriptorPoolCreateInfo descriptor_pool = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
-        .maxSets = app->video_buffer_count + 1U, .poolSizeCount = 2,
+        .maxSets = set_count, .poolSizeCount = 2,
         .pPoolSizes = sizes};
     need_vk("vkCreateDescriptorPool", vkCreateDescriptorPool(app->device, &descriptor_pool, NULL, &app->descriptor_pool));
     VkDescriptorSetLayout layouts[NV12_IPC_MAX_BUFFERS + 1U];
     VkDescriptorSet sets[NV12_IPC_MAX_BUFFERS + 1U];
-    for (uint32_t i = 0; i <= app->video_buffer_count; ++i)
+    for (uint32_t i = 0; i < set_count; ++i)
         layouts[i] = app->descriptor_layout;
     VkDescriptorSetAllocateInfo descriptor_allocate = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
         .descriptorPool = app->descriptor_pool,
-        .descriptorSetCount = app->video_buffer_count + 1U,
+        .descriptorSetCount = set_count,
         .pSetLayouts = layouts};
     need_vk("vkAllocateDescriptorSets",
             vkAllocateDescriptorSets(app->device, &descriptor_allocate,
                                      sets));
-    for (uint32_t i = 0; i < app->video_buffer_count; ++i)
+    for (uint32_t i = 0; i < NV12_IPC_MAX_BUFFERS; ++i)
         app->video_buffers[i].descriptor_set = sets[i];
-    app->spare_set = sets[app->video_buffer_count];
+    app->spare_set = sets[NV12_IPC_MAX_BUFFERS];
 }
 
 static void destroy_video_buffer(struct app *app, struct video_buffer *buffer)

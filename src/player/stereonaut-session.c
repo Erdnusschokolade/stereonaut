@@ -1,8 +1,8 @@
 /*
- * Continuous Iris HEVC Main -> NV12 DMA-BUF -> Vulkan transfer probe.
+ * Continuous Iris HEVC Main / H.264 -> NV12 DMA-BUF -> Vulkan transfer probe.
  *
- * Input is demuxed by the bounded media pipeline into Annex-B HEVC Main
- * access units with container timestamps. The session imports
+ * Input is demuxed by the bounded media pipeline into Annex-B HEVC Main or
+ * 8-bit H.264 access units with container timestamps. The session imports
  * every Iris CAPTURE allocation once, executes one two-plane Vulkan transfer
  * for every decoded frame, and requeues CAPTURE only after the Vulkan fence.
  */
@@ -1877,17 +1877,21 @@ int main(int argc, char **argv)
     };
     output_format.fmt.pix_mp.width = expected_width;
     output_format.fmt.pix_mp.height = expected_height;
-    output_format.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_HEVC;
+    bool h264 = info->video_codec == AV_CODEC_ID_H264;
+    uint32_t coded_format = h264 ? V4L2_PIX_FMT_H264 : V4L2_PIX_FMT_HEVC;
+    const char *coded_name = h264 ? "H264" : "HEVC";
+    output_format.fmt.pix_mp.pixelformat = coded_format;
     output_format.fmt.pix_mp.field = V4L2_FIELD_NONE;
     output_format.fmt.pix_mp.num_planes = 1;
     output_format.fmt.pix_mp.plane_fmt[0].sizeimage =
         COMPRESSED_OUTPUT_CAPACITY;
-    must_ioctl(VIDIOC_S_FMT, &output_format, "VIDIOC_S_FMT OUTPUT HEVC");
-    if (output_format.fmt.pix_mp.pixelformat != V4L2_PIX_FMT_HEVC ||
+    must_ioctl(VIDIOC_S_FMT, &output_format, "VIDIOC_S_FMT OUTPUT");
+    if (output_format.fmt.pix_mp.pixelformat != coded_format ||
         output_format.fmt.pix_mp.num_planes != 1 ||
         !output_format.fmt.pix_mp.plane_fmt[0].sizeimage)
-        fail_message("Iris rejected the HEVC OUTPUT format");
-    printf("output_format fourcc=HEVC width=%u height=%u sizeimage=%u\n",
+        fail_message("Iris rejected the OUTPUT format");
+    printf("output_format fourcc=%s width=%u height=%u sizeimage=%u\n",
+           coded_name,
            output_format.fmt.pix_mp.width, output_format.fmt.pix_mp.height,
            output_format.fmt.pix_mp.plane_fmt[0].sizeimage);
 
@@ -2354,8 +2358,6 @@ int main(int argc, char **argv)
                     fail_message("SOURCE_CHANGE CAPTURE memory contract changed");
                 if (!compose_unchanged)
                     fail_message("SOURCE_CHANGE visible compose region changed");
-                if (capture_count != 12U)
-                    fail_message("SOURCE_CHANGE CAPTURE count is not twelve");
                 validate_capture_contract(&updated_contract, &updated_layout,
                                           expected_width, expected_height);
                 struct capture_minimum minimum = query_capture_minimum();

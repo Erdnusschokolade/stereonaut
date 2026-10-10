@@ -53,11 +53,21 @@ static int64_t packet_time_us(int64_t value, AVRational time_base)
     return av_rescale_q(value, time_base, AV_TIME_BASE_Q);
 }
 
-static bool is_main_8_bit(const AVCodecParameters *parameters)
+/* Iris decodes HEVC Main and the 8-bit 4:2:0 H.264 profiles to NV12. */
+static bool is_supported_video(const AVCodecParameters *parameters)
 {
-    if (parameters->codec_id != AV_CODEC_ID_HEVC ||
-        parameters->profile != AV_PROFILE_HEVC_MAIN)
+    if (parameters->codec_id == AV_CODEC_ID_HEVC) {
+        if (parameters->profile != AV_PROFILE_HEVC_MAIN)
+            return false;
+    } else if (parameters->codec_id == AV_CODEC_ID_H264) {
+        int profile = parameters->profile & ~AV_PROFILE_H264_CONSTRAINED;
+        if (profile != AV_PROFILE_H264_BASELINE &&
+            profile != AV_PROFILE_H264_MAIN &&
+            profile != AV_PROFILE_H264_HIGH)
+            return false;
+    } else {
         return false;
+    }
     if (parameters->format != AV_PIX_FMT_NONE &&
         parameters->format != AV_PIX_FMT_YUV420P)
         return false;
@@ -97,11 +107,12 @@ static int select_audio_stream(AVFormatContext *format)
 static int initialize_video_filter(struct media_demux *demux,
                                    char *error, size_t error_size)
 {
-    const AVBitStreamFilter *filter =
-        av_bsf_get_by_name("hevc_mp4toannexb");
+    const char *name = demux->info.video_codec == AV_CODEC_ID_H264
+                           ? "h264_mp4toannexb"
+                           : "hevc_mp4toannexb";
+    const AVBitStreamFilter *filter = av_bsf_get_by_name(name);
     if (!filter) {
-        set_error(error, error_size,
-                  "FFmpeg provides no hevc_mp4toannexb filter");
+        set_error(error, error_size, "FFmpeg provides no %s filter", name);
         return -1;
     }
     int result = av_bsf_alloc(filter, &demux->video_bsf);
@@ -197,7 +208,7 @@ int media_demux_open(struct media_demux **result, const char *path,
     }
     AVCodecParameters *video_parameters =
         demux->format->streams[video]->codecpar;
-    if (!is_main_8_bit(video_parameters)) {
+    if (!is_supported_video(video_parameters)) {
         const char *pixel = av_get_pix_fmt_name(video_parameters->format);
         set_error(error, error_size,
                   "unsupported video: codec=%s profile=%d pixel_format=%s",

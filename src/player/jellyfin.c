@@ -18,12 +18,12 @@
 #define RESPONSE_LIMIT (48U * 1024U * 1024U)
 #define LIST_LIMIT 5000
 
-/* Direct Play only HEVC Main 8 bit in mkv/mp4; everything else becomes an HLS
- * transcode to HEVC Main 8 bit (the only format the decoder path handles). */
+/* Direct Play HEVC Main 8 bit and 8-bit 4:2:0 H.264 (Baseline, Main, High) in
+ * mkv/mp4; everything else becomes an HLS transcode to HEVC Main 8 bit. */
 static const char DEVICE_PROFILE[] =
     "{\"Name\":\"Stereonaut\",\"MaxStreamingBitrate\":200000000,"
     "\"DirectPlayProfiles\":[{\"Type\":\"Video\",\"Container\":\"mkv,mp4\","
-    "\"VideoCodec\":\"hevc\",\"AudioCodec\":\"aac,ac3,eac3,mp3,opus\"}],"
+    "\"VideoCodec\":\"hevc,h264\",\"AudioCodec\":\"aac,ac3,eac3,mp3,opus\"}],"
     "\"TranscodingProfiles\":[{\"Type\":\"Video\",\"Container\":\"ts\","
     "\"Protocol\":\"hls\",\"VideoCodec\":\"hevc\",\"AudioCodec\":\"aac\","
     "\"Context\":\"Streaming\",\"MaxAudioChannels\":\"2\","
@@ -31,6 +31,13 @@ static const char DEVICE_PROFILE[] =
     "\"CodecProfiles\":[{\"Type\":\"Video\",\"Codec\":\"hevc\","
     "\"Conditions\":[{\"Condition\":\"EqualsAny\","
     "\"Property\":\"VideoProfile\",\"Value\":\"main\",\"IsRequired\":true},"
+    "{\"Condition\":\"LessThanEqual\",\"Property\":\"VideoBitDepth\","
+    "\"Value\":\"8\",\"IsRequired\":true}]},"
+    "{\"Type\":\"Video\",\"Codec\":\"h264\","
+    "\"Conditions\":[{\"Condition\":\"EqualsAny\","
+    "\"Property\":\"VideoProfile\","
+    "\"Value\":\"high|main|baseline|constrained baseline\","
+    "\"IsRequired\":true},"
     "{\"Condition\":\"LessThanEqual\",\"Property\":\"VideoBitDepth\","
     "\"Value\":\"8\",\"IsRequired\":true}]}]}";
 
