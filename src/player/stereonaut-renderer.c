@@ -3160,6 +3160,7 @@ static void begin_playback(struct app *app, int fd, const char *location)
     app->autofocus_speed = 0.0f;
     app->autofocus_time = 0.0;
     app->autofocus_focused = false;
+    app->autofocus_focus_disparity = app->autofocus_distance = 0.0f;
     app->ipc_fd = fd;
     app->playing = true;
     app->awaiting_command = false;
