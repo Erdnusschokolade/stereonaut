@@ -368,7 +368,8 @@ static struct {
     struct format_samples samples;
 } trickplay_detection = {.mutex = PTHREAD_MUTEX_INITIALIZER};
 
-/* Thumbnails at about 20 % and 55 % of the title, eleven per tile. */
+/* Thumbnails at about 20 % and 55 % of the title, about eleven per tile
+ * (tiles hold 5 x 5 or 10 x 10). */
 static void *detect_from_trickplay(void *argument)
 {
     (void)argument;
@@ -397,7 +398,8 @@ static void *detect_from_trickplay(void *argument)
             int width = 0, height = 0;
             if (format_decode_jpeg_luma((const unsigned char *)data, size,
                                         &luma, &width, &height) == 0) {
-                for (int k = 0; k < per_tile; k += 9) {
+                int step = per_tile / 11 > 1 ? per_tile / 11 : 1;
+                for (int k = 0; k < per_tile; k += step) {
                     int column = k % info.columns, row = k / info.columns;
                     if ((column + 1) * info.width > width ||
                         (row + 1) * info.height > height)
@@ -610,7 +612,12 @@ static void detect_format_from_frame(struct playback_options *options,
     if (!frame_detection.active || pts_us < frame_detection.next_pts_us)
         return;
     frame_detection.next_pts_us = pts_us + 1000000;
-    sample_frame(&buffers[index], index, layout);
+    bool used = sample_frame(&buffers[index], index, layout);
+    const struct format_samples *taken = &frame_detection.samples;
+    int last = taken->count - 1;
+    printf("format_frame try=%u used=%d samples=%d sbs=%.2f tb=%.2f\n",
+           frame_detection.tries, used, taken->count,
+           used ? taken->sbs[last] : 0.0f, used ? taken->tb[last] : 0.0f);
     if (++frame_detection.tries >= FRAME_DETECTION_TRIES)
         frame_detection.active = false;
     guess = format_name_guess;
