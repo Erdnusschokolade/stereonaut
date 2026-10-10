@@ -41,6 +41,7 @@ struct browser_ui {
     int local_sort;       /* enum file_browser_local_sort */
     bool local_sort_descending;
     bool sort_menu_open;
+    bool filter_menu_open;
     size_t page;
     size_t selected_page; /* page of the last started title */
     char selected_title[256]; /* name of the last started title */

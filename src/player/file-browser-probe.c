@@ -20,7 +20,7 @@ int main(int argc, char **argv)
         return 1;
     }
     struct file_browser_listing listing = {0};
-    for (unsigned attempt = 0; attempt < 200U; ++attempt) {
+    for (unsigned attempt = 0; attempt < 3000U; ++attempt) { /* 30 s */
         int result = file_browser_poll(browser, &listing);
         if (result < 0) {
             file_browser_close(&browser);

@@ -113,14 +113,30 @@ enum jf_sort {
     JF_SORT_COUNT,
 };
 
+/* Filters of a library listing: titles of one genre, studio or person. */
+enum jf_filter {
+    JF_FILTER_NONE,
+    JF_FILTER_GENRE,
+    JF_FILTER_STUDIO,
+    JF_FILTER_PERSON,
+    JF_FILTER_COUNT,
+};
+
 /* Libraries (views) sorted by name and the children of a folder in the given
- * order (folders first). The array is freed with free(). */
+ * order (folders first); with a filter all titles below the folder that
+ * match it. The array is freed with free(). */
 int jf_list_views(const struct jf_config *config, struct jf_item **items,
                   size_t *count, char *error, size_t error_size);
 int jf_list_children(const struct jf_config *config, const char *parent_id,
+                     enum jf_filter filter, const char *filter_id,
                      enum jf_sort sort, bool descending,
                      struct jf_item **items, size_t *count,
                      char *error, size_t error_size);
+/* The genres, studios or persons occurring below a folder, by name. */
+int jf_list_filter_values(const struct jf_config *config,
+                          const char *parent_id, enum jf_filter filter,
+                          struct jf_item **items, size_t *count,
+                          char *error, size_t error_size);
 /* Partly watched videos of all libraries, most recent first ("continue
  * watching"); a short timeout, the start page waits for it. */
 int jf_list_resume(const struct jf_config *config, struct jf_item **items,

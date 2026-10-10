@@ -299,6 +299,12 @@ int main(int argc, char **argv)
         ui.sort = 4;
         ui.sort_descending = true;
     }
+    if (hover >= 84 && hover <= 87) { /* filter menu, item focused */
+        ui.filter_menu_open = true;
+        px = 1406 + 190 - 360 + 60;
+        py = 126 + 46 + 8 + 8 + (hover - 84) * 52 + 20;
+        hover = 88;
+    }
     if (hover == 80 || hover == 81) { /* resume prompt, button focused */
         ui.resume_prompt = 1;
         px = hover == 80 ? 900 : 1200;

@@ -64,6 +64,16 @@
 #define MENU_Y (SORT_Y + SORT_H + 8)
 #define MENU_H (JF_SORT_COUNT * MENU_ITEM_H + 16)
 
+/* Filter chip at the right end of the breadcrumb row and its menu. */
+#define FILTER_W 190
+#define FILTER_H 46
+#define FILTER_X (CENTER_X + CENTER_W - 32 - FILTER_W)
+#define FILTER_Y 126
+#define FILTER_MENU_W 360
+#define FILTER_MENU_X (FILTER_X + FILTER_W - FILTER_MENU_W)
+#define FILTER_MENU_Y (FILTER_Y + FILTER_H + 8)
+#define FILTER_MENU_H (4 * MENU_ITEM_H + 16)
+
 /* "Resume or restart" prompt over the grid. */
 #define PROMPT_W 680
 #define PROMPT_H 300
@@ -94,10 +104,13 @@ enum {
     ID_RESUME = 80,
     ID_RESTART = 81,
     ID_PROMPT_AREA = 82, /* hit test only: resolved with the model */
+    ID_FILTER = 83,
+    ID_FILTER_ITEM = 84, /* 84 .. 87 */
+    ID_FILTER_AREA = 88, /* hit test only: resolved with the model */
 };
 
 /* What the stateless hit test reports (menus are open or not). */
-enum { HIT_MENU = 1, HIT_PROMPT = 2 };
+enum { HIT_MENU = 1, HIT_PROMPT = 2, HIT_FILTER = 4 };
 
 static const char *const sort_labels[JF_SORT_COUNT] = {
     "Name", "Zufällig", "Community-Bewertung", "Kritikerbewertung",
@@ -127,6 +140,28 @@ static bool local_location(const struct browser_ui *ui)
 static bool sortable(const struct browser_ui *ui)
 {
     return strncmp(ui->location, "jf:view:", 8) == 0 || local_location(ui);
+}
+
+/* Library listings ("jf:view:FOLDER", optionally "/genre=ID") can be
+ * filtered by genre, studio or person. */
+static bool filterable(const struct browser_ui *ui)
+{
+    return strncmp(ui->location, "jf:view:", 8) == 0;
+}
+
+static bool filtered(const struct browser_ui *ui)
+{
+    return filterable(ui) && strchr(ui->location + 8, '/') != NULL;
+}
+
+static const char *const filter_labels[4] = {
+    "Genres", "Studios", "Darsteller", "Filter aufheben",
+};
+static const char *const filter_keys[3] = {"genre", "studio", "person"};
+
+static int filter_count(const struct browser_ui *ui)
+{
+    return filtered(ui) ? 4 : 3;
 }
 
 static int sort_count(const struct browser_ui *ui)
@@ -377,7 +412,8 @@ static void draw_breadcrumbs(struct browser_ui *ui, struct ui_canvas *canvas)
     char segment[256];
     int x = GRID_X;
     const char *cursor = path;
-    while (*cursor && x < CENTER_X + CENTER_W - 60) {
+    const int limit = filterable(ui) ? FILTER_X - 16 : CENTER_X + CENTER_W - 60;
+    while (*cursor && x < limit - 60) {
         const char *separator = strstr(cursor, " / ");
         size_t length = separator ? (size_t)(separator - cursor)
                                   : strlen(cursor);
@@ -390,6 +426,8 @@ static void draw_breadcrumbs(struct browser_ui *ui, struct ui_canvas *canvas)
                     44;
         if (width > 420)
             width = 420;
+        if (x + width > limit)
+            width = limit - x;
         ui_fill_round_rect(canvas, x, 126, width, 46, 23,
                            last ? color_accent : color_chip);
         ui_draw_text(canvas, last ? ui->bold : ui->font, 24, x + width / 2,
@@ -444,6 +482,50 @@ static void draw_sort_chip(struct browser_ui *ui, struct ui_canvas *canvas,
                      color_accent);
     ui_draw_icon(canvas, UI_ICON_CHEVRON_DOWN, SORT_X + SORT_W - 32,
                  SORT_Y + SORT_H / 2.0f, 28, color_dim);
+}
+
+static void draw_filter_chip(struct browser_ui *ui, struct ui_canvas *canvas,
+                             bool hover)
+{
+    if (!filterable(ui))
+        return;
+    ui_set_rect_raw(canvas, FILTER_X - 4, FILTER_Y - 4, FILTER_W + 8,
+                    FILTER_H + 8, ui->card_pixel);
+    bool active = filtered(ui);
+    ui_fill_round_rect(canvas, FILTER_X, FILTER_Y, FILTER_W, FILTER_H,
+                       FILTER_H / 2.0f,
+                       hover || ui->filter_menu_open ? color_tile_hover
+                       : active                      ? color_accent_soft
+                                                     : color_chip);
+    ui_draw_text(canvas, active ? ui->bold : ui->font, 24, FILTER_X + 24,
+                 FILTER_Y + 8, FILTER_W - 72, UI_ALIGN_LEFT,
+                 active ? color_accent : color_text,
+                 active ? "Gefiltert" : "Filter");
+    ui_draw_icon(canvas, UI_ICON_CHEVRON_DOWN, FILTER_X + FILTER_W - 30,
+                 FILTER_Y + FILTER_H / 2.0f, 26, color_dim);
+}
+
+static void draw_filter_menu(struct browser_ui *ui, struct ui_canvas *canvas,
+                             int hover)
+{
+    int count = filter_count(ui);
+    int height = count * MENU_ITEM_H + 16;
+    ui_shadow_round_rect(canvas, FILTER_MENU_X, FILTER_MENU_Y + 6,
+                         FILTER_MENU_W, height, 22, 24, color_shadow);
+    ui_fill_round_rect(canvas, FILTER_MENU_X, FILTER_MENU_Y, FILTER_MENU_W,
+                       height, 22, UI_RGBA(30, 32, 39, 255));
+    ui_stroke_round_rect(canvas, FILTER_MENU_X, FILTER_MENU_Y, FILTER_MENU_W,
+                         height, 22, 2, color_border);
+    for (int i = 0; i < count; ++i) {
+        int y = FILTER_MENU_Y + 8 + i * MENU_ITEM_H;
+        if (hover == ID_FILTER_ITEM + i)
+            ui_fill_round_rect(canvas, FILTER_MENU_X + 8, y,
+                               FILTER_MENU_W - 16, MENU_ITEM_H, 14,
+                               color_tile_hover);
+        ui_draw_text(canvas, ui->font, 25, FILTER_MENU_X + 28, y + 11,
+                     FILTER_MENU_W - 56, UI_ALIGN_LEFT,
+                     i == 3 ? color_accent : color_text, filter_labels[i]);
+    }
 }
 
 static void draw_sort_menu(struct browser_ui *ui, struct ui_canvas *canvas,
@@ -547,6 +629,7 @@ static void draw_base(struct browser_ui *ui, struct ui_canvas *canvas)
                  sortable(ui) ? 480 : 820, UI_ALIGN_CENTER, color_text,
                  current_title(ui));
     draw_sort_chip(ui, canvas, false);
+    draw_filter_chip(ui, canvas, false);
     draw_breadcrumbs(ui, canvas);
     for (int slot = 0; slot < (int)PAGE_ENTRIES; ++slot)
         draw_tile(ui, canvas, slot, false);
@@ -748,6 +831,8 @@ void browser_ui_render(struct browser_ui *ui, uint32_t *pixels, bool bgra)
     int hover = ui->hover;
     if (hover == ID_SORT)
         draw_sort_chip(ui, &canvas, true);
+    else if (hover == ID_FILTER)
+        draw_filter_chip(ui, &canvas, true);
     else if (hover >= ID_TILE && hover < ID_TILE + (int)PAGE_ENTRIES)
         draw_tile(ui, &canvas, hover - ID_TILE, true);
     else if (hover == ID_BACK)
@@ -760,6 +845,8 @@ void browser_ui_render(struct browser_ui *ui, uint32_t *pixels, bool bgra)
     draw_detail(ui, &canvas);
     if (ui->sort_menu_open)
         draw_sort_menu(ui, &canvas, hover);
+    if (ui->filter_menu_open)
+        draw_filter_menu(ui, &canvas, hover);
     if (ui->resume_prompt >= 0 &&
         (size_t)ui->resume_prompt < ui->listing.entry_count)
         draw_resume_prompt(ui, &canvas, hover);
@@ -780,6 +867,13 @@ static int hit_test(int x, int y, int layers)
     if (x >= SORT_X && x < SORT_X + SORT_W && y >= SORT_Y &&
         y < SORT_Y + SORT_H)
         return ID_SORT;
+    if (x >= FILTER_X && x < FILTER_X + FILTER_W && y >= FILTER_Y &&
+        y < FILTER_Y + FILTER_H)
+        return ID_FILTER;
+    if ((layers & HIT_FILTER) && x >= FILTER_MENU_X &&
+        x < FILTER_MENU_X + FILTER_MENU_W && y >= FILTER_MENU_Y &&
+        y < FILTER_MENU_Y + FILTER_MENU_H)
+        return ID_FILTER_AREA;
     if ((layers & HIT_MENU) && x >= MENU_X && x < MENU_X + MENU_W &&
         y >= MENU_Y && y < MENU_Y + MENU_H)
         return ID_SORT_AREA;
@@ -813,7 +907,7 @@ static int hit_test(int x, int y, int layers)
 int browser_ui_hit_test(float u, float v)
 {
     return hit_test((int)(u * BROWSER_UI_WIDTH), (int)(v * BROWSER_UI_HEIGHT),
-                    HIT_MENU | HIT_PROMPT);
+                    HIT_MENU | HIT_PROMPT | HIT_FILTER);
 }
 
 /* Page buttons depend on the page count, which the stateless hit test does
@@ -859,7 +953,21 @@ void browser_ui_set_pointer(struct browser_ui *ui, bool visible, int x, int y,
         return;
     }
     if (hover == ID_PROMPT_AREA)
-        hover = hit_test(x, y, HIT_MENU);
+        hover = hit_test(x, y, HIT_MENU | HIT_FILTER);
+    if (hover == ID_FILTER_AREA) {
+        if (ui->filter_menu_open) {
+            int row = (y - FILTER_MENU_Y - 8) / MENU_ITEM_H;
+            hover = row >= 0 && row < filter_count(ui) ? ID_FILTER_ITEM + row
+                                                       : -1;
+        } else {
+            hover = hit_test(x, y, HIT_MENU);
+        }
+    }
+    if (ui->filter_menu_open && hover != ID_FILTER &&
+        (hover < ID_FILTER_ITEM || hover >= ID_FILTER_ITEM + 4))
+        hover = -1; /* clicks outside the menu only close it */
+    if (hover == ID_FILTER && !filterable(ui))
+        hover = -1;
     if (hover == ID_SORT_AREA) {
         /* The menu hides everything below it while open; closed, the area
          * is just grid. */
@@ -1007,8 +1115,10 @@ static void set_page(struct browser_ui *ui, size_t page)
 
 void browser_ui_close_menus(struct browser_ui *ui)
 {
-    if (ui->sort_menu_open || ui->resume_prompt >= 0) {
+    if (ui->sort_menu_open || ui->filter_menu_open ||
+        ui->resume_prompt >= 0) {
         ui->sort_menu_open = false;
+        ui->filter_menu_open = false;
         ui->resume_prompt = -1;
         ui->dirty = true;
     }
@@ -1029,7 +1139,8 @@ static enum browser_ui_action select_title(struct browser_ui *ui, int index,
 
 void browser_ui_flip(struct browser_ui *ui, int direction)
 {
-    if (ui->sort_menu_open || ui->resume_prompt >= 0)
+    if (ui->sort_menu_open || ui->filter_menu_open ||
+        ui->resume_prompt >= 0)
         return;
     if (direction < 0 && ui->page > 0)
         set_page(ui, ui->page - 1);
@@ -1054,6 +1165,36 @@ enum browser_ui_action browser_ui_activate(struct browser_ui *ui, char *path,
                                 ? ui->listing.entries[index].resume_us
                                 : 0,
                             path, path_size);
+    }
+    if (ui->filter_menu_open) {
+        ui->filter_menu_open = false;
+        ui->hover = -1;
+        ui->dirty = true;
+        if (hover >= ID_FILTER_ITEM &&
+            hover < ID_FILTER_ITEM + filter_count(ui)) {
+            /* The library folder without any filter suffix. */
+            char folder[64];
+            size_t length = strcspn(ui->location + 8, "/");
+            snprintf(folder, sizeof(folder), "%.*s",
+                     (int)(length < sizeof(folder) ? length : 0),
+                     ui->location + 8);
+            char location[128];
+            int item = hover - ID_FILTER_ITEM;
+            if (item == 3)
+                snprintf(location, sizeof(location), "jf:view:%s", folder);
+            else
+                snprintf(location, sizeof(location), "jf:filters:%s:%s",
+                         folder, filter_keys[item]);
+            ui->restore_page = 0;
+            request(ui, location);
+        }
+        return BROWSER_UI_NONE;
+    }
+    if (hover == ID_FILTER && filterable(ui)) {
+        ui->filter_menu_open = true;
+        ui->sort_menu_open = false;
+        ui->dirty = true;
+        return BROWSER_UI_NONE;
     }
     if (ui->sort_menu_open) {
         if (hover >= ID_SORT_ITEM && hover < ID_SORT_ITEM + sort_count(ui))

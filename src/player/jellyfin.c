@@ -562,10 +562,20 @@ int jf_list_views(const struct jf_config *config, struct jf_item **items,
 }
 
 int jf_list_children(const struct jf_config *config, const char *parent_id,
+                     enum jf_filter filter, const char *filter_id,
                      enum jf_sort sort, bool descending,
                      struct jf_item **items, size_t *count, char *error,
                      size_t error_size)
 {
+    static const char *const filter_fields[JF_FILTER_COUNT] = {
+        NULL, "GenreIds", "StudioIds", "PersonIds",
+    };
+    char filter_text[160] = "";
+    if (filter > JF_FILTER_NONE && filter < JF_FILTER_COUNT && filter_id &&
+        filter_id[0])
+        snprintf(filter_text, sizeof(filter_text),
+                 "&Recursive=true&IncludeItemTypes=Movie,Video,Episode&%s=%.48s",
+                 filter_fields[filter], filter_id);
     static const char *const fields[JF_SORT_COUNT] = {
         "SortName", "Random", "CommunityRating,SortName",
         "CriticRating,SortName", "DateCreated,SortName",
@@ -578,9 +588,39 @@ int jf_list_children(const struct jf_config *config, const char *parent_id,
     snprintf(path, sizeof(path),
              "/Items?userId=%s&ParentId=%s&SortBy=%s&"
              "SortOrder=%s&Limit=%d&EnableTotalRecordCount=false&"
-             "Fields=MediaStreams",
+             "Fields=MediaStreams%s",
              config->user_id, parent_id, fields[sort],
-             descending ? "Descending" : "Ascending", LIST_LIMIT);
+             descending ? "Descending" : "Ascending", LIST_LIMIT,
+             filter_text);
+    json_object *root = NULL;
+    int result = json_call(config, "GET", path, NULL, &root, error,
+                           error_size);
+    if (result < 0)
+        return result;
+    result = collect_items(root, false, items, count);
+    json_object_put(root);
+    if (result < 0)
+        set_error(error, error_size, "Nicht genug Speicher");
+    return result;
+}
+
+int jf_list_filter_values(const struct jf_config *config,
+                          const char *parent_id, enum jf_filter filter,
+                          struct jf_item **items, size_t *count,
+                          char *error, size_t error_size)
+{
+    static const char *const endpoints[JF_FILTER_COUNT] = {
+        NULL, "/Genres", "/Studios", "/Persons",
+    };
+    *items = NULL;
+    *count = 0;
+    if (filter <= JF_FILTER_NONE || filter >= JF_FILTER_COUNT)
+        return -1;
+    char path[256];
+    snprintf(path, sizeof(path),
+             "%s?ParentId=%s&userId=%s&SortBy=SortName&Limit=%d&"
+             "EnableTotalRecordCount=false",
+             endpoints[filter], parent_id, config->user_id, LIST_LIMIT);
     json_object *root = NULL;
     int result = json_call(config, "GET", path, NULL, &root, error,
                            error_size);

@@ -256,7 +256,7 @@ static int add_jellyfin_items(struct file_browser_listing *listing,
                               const char *folder_id)
 {
     for (size_t i = 0; i < count; ++i) {
-        char path[2 * JF_ID_SIZE + 16];
+        char path[4 * JF_ID_SIZE + 32];
         if (items[i].is_folder)
             snprintf(path, sizeof(path), "jf:view:%s", items[i].id);
         else
@@ -359,6 +359,60 @@ static struct file_browser_listing jellyfin_login(
     return listing;
 }
 
+static const char *const filter_keys[JF_FILTER_COUNT] = {
+    "", "genre", "studio", "person",
+};
+static const char *const filter_names[JF_FILTER_COUNT] = {
+    "", "Genre", "Studio", "Darsteller",
+};
+static const char *const filter_titles[JF_FILTER_COUNT] = {
+    "", "Genres", "Studios", "Darsteller",
+};
+
+/* "genre=ID" (id copied when `id` is given) or "genre" alone. */
+static enum jf_filter parse_filter(const char *text, char *id,
+                                   size_t id_size)
+{
+    for (int filter = JF_FILTER_GENRE; filter < JF_FILTER_COUNT; ++filter) {
+        size_t length = strlen(filter_keys[filter]);
+        if (strncmp(text, filter_keys[filter], length) != 0)
+            continue;
+        if (!id && text[length] == '\0')
+            return (enum jf_filter)filter;
+        if (id && text[length] == '=' && text[length + 1] &&
+            strlen(text + length + 1) < id_size) {
+            snprintf(id, id_size, "%s", text + length + 1);
+            return (enum jf_filter)filter;
+        }
+    }
+    return JF_FILTER_NONE;
+}
+
+/* Genres, studios or persons as folders that open the filtered listing. */
+static int add_filter_values(struct file_browser_listing *listing,
+                             const struct jf_item *items, size_t count,
+                             const char *folder_id, enum jf_filter filter)
+{
+    for (size_t i = 0; i < count; ++i) {
+        char path[3 * JF_ID_SIZE + 32];
+        snprintf(path, sizeof(path), "jf:view:%s/%s=%s", folder_id,
+                 filter_keys[filter], items[i].id);
+        if (add_entry(listing, FILE_BROWSER_DIRECTORY, items[i].name,
+                      path) < 0)
+            return -1;
+        struct file_browser_entry *entry =
+            &listing->entries[listing->entry_count - 1U];
+        if (items[i].image[0]) {
+            size_t size = strlen(items[i].id) + strlen(items[i].image) + 2U;
+            entry->image = malloc(size);
+            if (entry->image)
+                snprintf(entry->image, size, "%s|%s", items[i].id,
+                         items[i].image);
+        }
+    }
+    return 0;
+}
+
 static struct file_browser_listing read_jellyfin(const char *request,
                                                   uint64_t generation,
                                                   enum jf_sort sort,
@@ -383,9 +437,30 @@ static struct file_browser_listing read_jellyfin(const char *request,
     char title[320] = "Jellyfin";
     char parent_path_text[JF_ID_SIZE + 16] = "root:";
     const char *folder_id = NULL;
+    /* "jf:view:FOLDER/genre=ID" lists a folder's titles of one genre (or
+     * studio, person); "jf:filters:FOLDER:genre" the genres to pick from. */
+    char folder[JF_ID_SIZE] = "", filter_id[JF_ID_SIZE] = "";
+    enum jf_filter filter = JF_FILTER_NONE;
+    bool filter_values = false;
+    if (strncmp(request, "jf:view:", 8) == 0 ||
+        strncmp(request, "jf:filters:", 11) == 0) {
+        filter_values = request[3] == 'f';
+        const char *start = request + (filter_values ? 11 : 8);
+        size_t length = strcspn(start, filter_values ? ":" : "/");
+        if (length < sizeof(folder)) {
+            memcpy(folder, start, length);
+            folder[length] = '\0';
+        }
+        folder_id = folder;
+        const char *rest = start + length;
+        if (*rest)
+            ++rest;
+        filter = parse_filter(rest, filter_values ? NULL : filter_id,
+                              sizeof(filter_id));
+        if (filter_values && filter == JF_FILTER_NONE)
+            filter_values = false;
+    }
     int result;
-    if (strncmp(request, "jf:view:", 8) == 0)
-        folder_id = request + 8;
     if (!folder_id) {
         result = jf_list_views(&config, &items, &count, error, sizeof(error));
     } else {
@@ -417,8 +492,30 @@ static struct file_browser_listing read_jellyfin(const char *request,
             }
         }
         error[0] = '\0';
-        result = jf_list_children(&config, folder_id, sort, descending,
-                                  &items, &count, error, sizeof(error));
+        if (filter != JF_FILTER_NONE) {
+            /* Filters belong to the folder: ".." leads back to it. */
+            snprintf(parent_path_text, sizeof(parent_path_text),
+                     "jf:view:%s", folder_id);
+            size_t used = strlen(title);
+            if (filter_values) {
+                snprintf(title + used, sizeof(title) - used, " / %s",
+                         filter_titles[filter]);
+            } else {
+                char name[256] = {0};
+                jf_item_info(&config, filter_id, name, sizeof(name), NULL, 0,
+                             NULL, 0);
+                snprintf(title + used, sizeof(title) - used, " / %s: %s",
+                         filter_names[filter], name[0] ? name : "?");
+            }
+        }
+        if (filter_values)
+            result = jf_list_filter_values(&config, folder_id, filter,
+                                           &items, &count, error,
+                                           sizeof(error));
+        else
+            result = jf_list_children(&config, folder_id, filter, filter_id,
+                                      sort, descending, &items, &count,
+                                      error, sizeof(error));
     }
     if (result == JF_AUTH_RETRY) {
         config.token[0] = '\0';
@@ -432,9 +529,21 @@ static struct file_browser_listing read_jellyfin(const char *request,
     listing.path = strdup(title);
     if (add_entry(&listing, FILE_BROWSER_PARENT, "..", parent_path_text) < 0)
         goto allocation_failure;
-    if (add_jellyfin_items(&listing, items, count,
-                           folder_id ? folder_id : "") < 0)
-        goto allocation_failure;
+    if (filter_values) {
+        if (add_filter_values(&listing, items, count, folder_id, filter) < 0)
+            goto allocation_failure;
+    } else {
+        /* Titles remember the filtered folder to come back to. */
+        char back[2 * JF_ID_SIZE + 16];
+        snprintf(back, sizeof(back), "%s", folder_id ? folder_id : "");
+        if (filter != JF_FILTER_NONE) {
+            size_t used = strlen(back);
+            snprintf(back + used, sizeof(back) - used, "/%s=%s",
+                     filter_keys[filter], filter_id);
+        }
+        if (add_jellyfin_items(&listing, items, count, back) < 0)
+            goto allocation_failure;
+    }
     free(items);
     return listing;
 
