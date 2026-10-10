@@ -91,9 +91,13 @@ static unsigned packets(const uint8_t *data,size_t size,struct packet *p) {
 }
 int main(int argc,char **argv) {
     setvbuf(stdout,NULL,_IOLBF,0);
-    if(argc!=4){fprintf(stderr,"usage: v4l2-decode INPUT {auto|NV12|Q10C|P010} DUMP_FIRST_ALLOCATION\n");return 2;}
-    uint32_t preferred=0;
-    if(!strcmp(argv[2],"NV12"))preferred=V4L2_PIX_FMT_NV12;
+    if(argc!=4){fprintf(stderr,"usage: v4l2-decode INPUT {auto|NV12|Q10C|P010|after-NV12|after-P010} DUMP_FIRST_ALLOCATION\n");return 2;}
+    uint32_t preferred=0,after=0;
+    /* after-*: keep the driver's choice until the headers are parsed, then
+     * request the format (the driver knows the bit depth only from then). */
+    if(!strcmp(argv[2],"after-NV12"))after=V4L2_PIX_FMT_NV12;
+    else if(!strcmp(argv[2],"after-P010"))after=V4L2_PIX_FMT_P010;
+    else if(!strcmp(argv[2],"NV12"))preferred=V4L2_PIX_FMT_NV12;
     else if(!strcmp(argv[2],"Q10C"))preferred=v4l2_fourcc('Q','1','0','C');
     else if(!strcmp(argv[2],"P010"))preferred=V4L2_PIX_FMT_P010;
     else if(strcmp(argv[2],"auto"))return 2;
@@ -107,7 +111,9 @@ int main(int argc,char **argv) {
     struct packet pk[MAX_PACKETS];unsigned total=packets(data,(size_t)flen,pk);
     printf("input_AUs=%u bytes=%ld requested=%s\n",total,flen,argv[2]);
     if(total!=60){fprintf(stderr,"expected exactly 60 fixture AUs\n");return 2;}
-    fd=open("/dev/video22",O_RDWR|O_NONBLOCK|O_CLOEXEC);if(fd<0)die("open decoder");
+    fd=open("/dev/video-dec0",O_RDWR|O_NONBLOCK|O_CLOEXEC);
+    if(fd<0)fd=open("/dev/video22",O_RDWR|O_NONBLOCK|O_CLOEXEC);
+    if(fd<0)die("open decoder");
     struct v4l2_capability cap={0};must(VIDIOC_QUERYCAP,&cap,"QUERYCAP");
     printf("driver=%s card=%s\n",cap.driver,cap.card);
     if(strcmp((char*)cap.driver,"iris_driver")){fprintf(stderr,"unexpected driver\n");return 2;}
@@ -141,6 +147,15 @@ int main(int argc,char **argv) {
                 if(ready){fprintf(stderr,"unexpected additional source change\n");errors++;goto finish;}
                 capture.type=V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;must(VIDIOC_G_FMT,&capture,"G_FMT after headers");
                 describe(&capture,"after SOURCE_CHANGE");enumerate("after SOURCE_CHANGE");
+                if(after){
+                    struct v4l2_format tried=capture;tried.fmt.pix_mp.pixelformat=after;
+                    if(call(VIDIOC_TRY_FMT,&tried)==0)describe(&tried,"TRY_FMT after headers");
+                    else printf("TRY_FMT after headers failed errno=%d (%s)\n",errno,strerror(errno));
+                    capture.fmt.pix_mp.pixelformat=after;
+                    if(call(VIDIOC_S_FMT,&capture)<0){printf("S_FMT after headers failed errno=%d (%s)\n",errno,strerror(errno));errors++;goto finish;}
+                    describe(&capture,"S_FMT after headers");
+                    if(capture.fmt.pix_mp.pixelformat!=after){fprintf(stderr,"requested format substituted after headers\n");errors++;goto finish;}
+                }
                 struct v4l2_selection sel={.type=V4L2_BUF_TYPE_VIDEO_CAPTURE,.target=V4L2_SEL_TGT_COMPOSE};
                 if(call(VIDIOC_G_SELECTION,&sel)==0)printf("compose left=%d top=%d width=%u height=%u\n",sel.r.left,sel.r.top,sel.r.width,sel.r.height);
                 struct v4l2_control min={.id=V4L2_CID_MIN_BUFFERS_FOR_CAPTURE};
