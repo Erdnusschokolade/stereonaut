@@ -233,9 +233,10 @@ static size_t write_body(char *data, size_t size, size_t count, void *user)
 
 /* Returns the HTTP status (>0) or -1 on a transport failure. The body is
  * always NUL-terminated and owned by the caller (free(body->data)). */
-static long http_request(const struct jf_config *config, const char *method,
-                         const char *path, const char *body,
-                         struct buffer *response)
+static long http_request_timed(const struct jf_config *config,
+                               const char *method, const char *path,
+                               const char *body, struct buffer *response,
+                               long timeout_seconds)
 {
     pthread_once(&curl_once, curl_setup);
     memset(response, 0, sizeof(*response));
@@ -254,8 +255,9 @@ static long http_request(const struct jf_config *config, const char *method,
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_body);
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, response);
-    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
-    curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT,
+                     timeout_seconds < 10L ? timeout_seconds : 10L);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT, timeout_seconds);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, "Stereonaut");
     if (body)
@@ -267,6 +269,13 @@ static long http_request(const struct jf_config *config, const char *method,
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
     return status;
+}
+
+static long http_request(const struct jf_config *config, const char *method,
+                         const char *path, const char *body,
+                         struct buffer *response)
+{
+    return http_request_timed(config, method, path, body, response, 30L);
 }
 
 /* Parses a successful JSON response. 401 maps to JF_AUTH_RETRY. */
@@ -678,13 +687,16 @@ int jf_resolve_playback(const struct jf_config *config, const char *item_id,
             return -1;
         }
         playback->transcoding = true;
-        copy_string(playback->play_session, sizeof(playback->play_session),
-                    json_string(root, "PlaySessionId"));
     } else {
         set_error(error, error_size, "Titel kann nicht abgespielt werden");
         json_object_put(root);
         return -1;
     }
+    copy_string(playback->item_id, sizeof(playback->item_id), item_id);
+    copy_string(playback->media_source, sizeof(playback->media_source),
+                source_id);
+    copy_string(playback->play_session, sizeof(playback->play_session),
+                json_string(root, "PlaySessionId"));
     json_object_put(root);
     return 0;
 }
@@ -721,4 +733,124 @@ void jf_stop_encoding(const struct jf_config *config,
     struct buffer response;
     http_request(config, "DELETE", path, NULL, &response);
     free(response.data);
+}
+
+/* ---- playback reports ------------------------------------------------ */
+
+int jf_report_playback(const struct jf_config *config,
+                       const struct jf_playback *playback,
+                       enum jf_report report, int64_t position_us,
+                       bool paused, const char *event)
+{
+    static const char *const paths[] = {
+        [JF_REPORT_START] = "/Sessions/Playing",
+        [JF_REPORT_PROGRESS] = "/Sessions/Playing/Progress",
+        [JF_REPORT_STOPPED] = "/Sessions/Playing/Stopped",
+    };
+    if ((unsigned)report > JF_REPORT_STOPPED || !playback->item_id[0])
+        return -1;
+    char body[768], event_field[64] = "";
+    if (event && event[0])
+        snprintf(event_field, sizeof(event_field), ",\"EventName\":\"%s\"",
+                 event);
+    snprintf(body, sizeof(body),
+             "{\"ItemId\":\"%s\",\"MediaSourceId\":\"%s\","
+             "\"PlaySessionId\":\"%s\",\"PositionTicks\":%lld,"
+             "\"IsPaused\":%s,\"CanSeek\":true,\"PlayMethod\":\"%s\"%s}",
+             playback->item_id,
+             playback->media_source[0] ? playback->media_source
+                                       : playback->item_id,
+             playback->play_session,
+             (long long)(position_us > 0 ? position_us * 10 : 0),
+             paused ? "true" : "false",
+             playback->transcoding ? "Transcode" : "DirectPlay",
+             event_field);
+    struct buffer response;
+    long status = http_request_timed(config, "POST", paths[report], body,
+                                     &response, 5L);
+    free(response.data);
+    return status >= 200 && status < 300 ? 0 : -1;
+}
+
+/* ---- trickplay ------------------------------------------------------- */
+
+static int json_int(json_object *object, const char *key)
+{
+    json_object *value = NULL;
+    if (!json_object_object_get_ex(object, key, &value) || !value)
+        return 0;
+    return json_object_get_int(value);
+}
+
+int jf_trickplay_info(const struct jf_config *config, const char *item_id,
+                      struct jf_trickplay *info)
+{
+    memset(info, 0, sizeof(*info));
+    char path[256];
+    snprintf(path, sizeof(path), "/Items?userId=%s&Ids=%s&Fields=Trickplay",
+             config->user_id, item_id);
+    json_object *root = NULL;
+    if (json_call(config, "GET", path, NULL, &root, NULL, 0) < 0)
+        return -1;
+    json_object *items = NULL, *trickplay = NULL;
+    if (json_object_object_get_ex(root, "Items", &items) &&
+        json_object_is_type(items, json_type_array) &&
+        json_object_array_length(items) > 0)
+        json_object_object_get_ex(json_object_array_get_idx(items, 0),
+                                  "Trickplay", &trickplay);
+    int result = -1;
+    if (trickplay && json_object_is_type(trickplay, json_type_object)) {
+        /* Media source id -> width -> description; the first source is
+         * the one PlaybackInfo picks for a single-version item. */
+        json_object_object_foreach(trickplay, source, widths) {
+            if (!json_object_is_type(widths, json_type_object))
+                continue;
+            int best = 0;
+            json_object_object_foreach(widths, width_text, entry) {
+                int width = atoi(width_text);
+                bool better = best == 0 ||
+                              (width <= 640 && (best > 640 || width > best)) ||
+                              (width > 640 && best > 640 && width < best);
+                if (width <= 0 || !better)
+                    continue;
+                best = width;
+                copy_string(info->media_source, sizeof(info->media_source),
+                            source);
+                info->width = width; /* also the URL key */
+                info->height = json_int(entry, "Height");
+                info->columns = json_int(entry, "TileWidth");
+                info->rows = json_int(entry, "TileHeight");
+                info->count = json_int(entry, "ThumbnailCount");
+                info->interval_ms = json_int(entry, "Interval");
+            }
+            break;
+        }
+        if (info->width > 0 && info->height > 0 && info->columns > 0 &&
+            info->rows > 0 && info->count > 0 && info->interval_ms > 0)
+            result = 0;
+    }
+    json_object_put(root);
+    return result;
+}
+
+int jf_fetch_trickplay_tile(const struct jf_config *config,
+                            const char *item_id,
+                            const struct jf_trickplay *info, int tile,
+                            char **data, size_t *size)
+{
+    *data = NULL;
+    *size = 0;
+    char path[256];
+    snprintf(path, sizeof(path),
+             "/Videos/%s/Trickplay/%d/%d.jpg?MediaSourceId=%s", item_id,
+             info->width, tile, info->media_source);
+    struct buffer response;
+    long status = http_request(config, "GET", path, NULL, &response);
+    if (status < 200 || status >= 300 || !response.size) {
+        free(response.data);
+        return -1;
+    }
+    *data = response.data;
+    *size = response.size;
+    return 0;
 }

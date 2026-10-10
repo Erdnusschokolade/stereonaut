@@ -40,9 +40,15 @@ struct player_ui_state {
     uint32_t projection_mode, stereo_layout;
     bool swap_eyes;
     int hover;         /* enum player_ui_control */
+    /* Scrub preview above the seek bar (while hovered or dragged): the
+     * position and, if the server has trickplay tiles, its picture. */
+    bool preview_visible;
+    int64_t preview_us;
+    const struct ui_image *preview;
 };
 
 struct ui_font;
+struct ui_image;
 
 struct player_ui {
     struct ui_font *font, *bold;

@@ -31,5 +31,7 @@ void thumbnail_loader_request(struct thumbnail_loader *loader,
 /* Takes one finished result; false if there is none. */
 bool thumbnail_loader_poll(struct thumbnail_loader *loader,
                            struct thumbnail_result *result);
+/* Decodes a JPEG into an opaque RGBA image; NULL on failure. */
+struct ui_image *thumbnail_decode_jpeg(const char *data, size_t size);
 
 #endif

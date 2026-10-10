@@ -32,6 +32,7 @@
 #include "nv12-playback-ipc.h"
 #include "media-pipeline.h"
 #include "jellyfin.h"
+#include "playback-report.h"
 #include "title-settings.h"
 
 #define MAX_OUTPUT_BUFFERS 16U
@@ -128,6 +129,8 @@ struct playback_options {
     /* Renderer kept alive across a seek restart (inherited socket + pid). */
     int adopt_renderer_fd;
     pid_t adopt_renderer_pid;
+    /* Seek restart of a Jellyfin title: its start is already reported. */
+    bool jellyfin_resumed;
 };
 
 struct capture_contract {
@@ -167,18 +170,24 @@ static bool renderer_held;
 static struct jf_config jellyfin_config;
 static struct jf_playback jellyfin_playback;
 static bool jellyfin_active;
+static struct playback_report *jellyfin_report;
+/* Set before the seek re-exec: the playback continues in the new process. */
+static bool jellyfin_restarting;
 
 static void jellyfin_cleanup(void)
 {
     if (!jellyfin_active)
         return;
     jellyfin_active = false;
+    playback_report_finish(jellyfin_report, !jellyfin_restarting);
+    jellyfin_report = NULL;
     jf_stop_encoding(&jellyfin_config, &jellyfin_playback);
 }
 
 /* "jf:item:<id>[:<parent>]" names a Jellyfin title. Resolve it to a stream
  * URL and hand the credentials to libavformat through the environment. */
-static int resolve_jellyfin_input(const char *spec, char *url, size_t size)
+static int resolve_jellyfin_input(const char *spec, bool resumed, char *url,
+                                  size_t size)
 {
     char id[JF_ID_SIZE];
     const char *start = spec + strlen("jf:item:");
@@ -207,6 +216,8 @@ static int resolve_jellyfin_input(const char *spec, char *url, size_t size)
     setenv("STEREONAUT_HTTP_HEADERS", header, 1);
     snprintf(url, size, "%s", jellyfin_playback.url);
     jellyfin_active = true;
+    jellyfin_report = playback_report_create(&jellyfin_config,
+                                             &jellyfin_playback, resumed);
     atexit(jellyfin_cleanup);
     printf("jellyfin_playback mode=%s\n",
            jellyfin_playback.transcoding ? "hls-transcode" : "direct-play");
@@ -653,6 +664,8 @@ static struct playback_options parse_playback_options(int argc, char **argv)
                 fail_message("invalid --renderer value");
             options.adopt_renderer_fd = fd;
             options.adopt_renderer_pid = (pid_t)pid;
+        } else if (strcmp(argv[i], "--jellyfin-resumed") == 0) {
+            options.jellyfin_resumed = true;
         } else if (strcmp(argv[i], "--start-us") == 0) {
             if (++i >= argc)
                 fail_message("--start-us requires a nonnegative timestamp");
@@ -1839,8 +1852,9 @@ int main(int argc, char **argv)
     char input_url[2304];
     const char *input = argv[1];
     if (strncmp(argv[1], "jf:item:", 8) == 0) {
-        int resolved = resolve_jellyfin_input(argv[1], input_url,
-                                              sizeof(input_url));
+        int resolved = resolve_jellyfin_input(argv[1],
+                                              options.jellyfin_resumed,
+                                              input_url, sizeof(input_url));
         if (stop_requested)
             return 0;
         if (resolved == JF_BROKEN_ITEM)
@@ -2042,6 +2056,10 @@ int main(int argc, char **argv)
                                  status_position_us(pipeline,
                                                     options.start_us),
                                  info->duration_us);
+            playback_report_update(jellyfin_report,
+                                   status_position_us(pipeline,
+                                                      options.start_us),
+                                   playback_paused, audio_started);
             last_status_sent = now;
         } else if (renderer_action == NV12_ACTION_SEEK_BACK ||
                    renderer_action == NV12_ACTION_SEEK_FORWARD ||
@@ -2079,6 +2097,10 @@ int main(int argc, char **argv)
                                  status_position_us(pipeline,
                                                     options.start_us),
                                  info->duration_us);
+            playback_report_update(jellyfin_report,
+                                   status_position_us(pipeline,
+                                                      options.start_us),
+                                   playback_paused, audio_started);
             last_status_sent = now;
         }
         if (!playback_paused && now > deadline)
@@ -2493,6 +2515,7 @@ int main(int argc, char **argv)
             snprintf(panel_text, sizeof(panel_text), "%.6f,%.6f,%.6f,%.6f,%u",
                      panel_state.x, panel_state.y, panel_state.z,
                      panel_state.yaw, panel_state.visible ? 1U : 0U);
+        jellyfin_restarting = true;
         jellyfin_cleanup();
         char renderer_text[48] = {0};
         bool keep_renderer = renderer_fd >= 0;
@@ -2524,6 +2547,8 @@ int main(int argc, char **argv)
             restart_argv[restart_argc++] = "--renderer";
             restart_argv[restart_argc++] = renderer_text;
         }
+        if (strncmp(argv[1], "jf:item:", 8) == 0)
+            restart_argv[restart_argc++] = "--jellyfin-resumed";
         restart_argv[restart_argc] = NULL;
         execv(argv[0], restart_argv);
         fail_errno("restart stereonaut-session after seek");

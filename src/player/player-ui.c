@@ -32,6 +32,12 @@
 #define SKIP_R 42
 #define PLAY_R 54
 
+/* Scrub preview above the card, centred on the previewed position. */
+#define PREVIEW_IMAGE_H 196
+#define PREVIEW_PAD 6
+#define PREVIEW_LABEL_H 40
+#define PREVIEW_BOTTOM (CARD_Y - 12)
+
 /* View popup above the card, right-aligned. */
 #define POPUP_X 1100
 #define POPUP_Y 10
@@ -68,14 +74,19 @@ static void format_time(char text[32], int64_t microseconds)
                  (int)(seconds % 60));
 }
 
-static float shown_ratio(const struct player_ui_state *state)
+static float time_ratio(const struct player_ui_state *state, int64_t position)
 {
-    int64_t position = state->scrubbing ? state->scrub_us : state->position_us;
     if (state->duration_us <= 0 || position <= 0)
         return 0.0f;
     if (position >= state->duration_us)
         return 1.0f;
     return (float)((double)position / (double)state->duration_us);
+}
+
+static float shown_ratio(const struct player_ui_state *state)
+{
+    return time_ratio(state, state->scrubbing ? state->scrub_us
+                                              : state->position_us);
 }
 
 static bool in_circle(float x, float y, float cx, float cy, float r)
@@ -147,6 +158,43 @@ static void draw_popup(struct player_ui *ui, struct ui_canvas *canvas,
     draw_chip(ui, canvas, CHIP_X, SWAP_Y, swap_width,
               state->swap_eyes ? "Augen getauscht" : "Augen tauschen",
               state->swap_eyes, state->hover == PLAYER_UI_SWAP_EYES);
+}
+
+/* Picture (if any) with the time below it; without a picture just the
+ * time. */
+static void draw_preview(struct player_ui *ui, struct ui_canvas *canvas,
+                         const struct player_ui_state *state)
+{
+    const struct ui_image *image = state->preview;
+    int image_w = 0, image_h = 0;
+    if (image && image->width > 0 && image->height > 0) {
+        image_h = PREVIEW_IMAGE_H;
+        image_w = image->width * PREVIEW_IMAGE_H / image->height;
+        if (image_w > 2 * PREVIEW_IMAGE_H)
+            image_w = 2 * PREVIEW_IMAGE_H;
+    }
+    int width = image_w ? image_w + 2 * PREVIEW_PAD : 140;
+    int height = (image_h ? image_h + PREVIEW_PAD : 0) + PREVIEW_LABEL_H;
+    float center = BAR_X + BAR_W * time_ratio(state, state->preview_us);
+    float x = center - width / 2.0f;
+    if (x < CARD_X)
+        x = CARD_X;
+    if (x > CARD_X + CARD_W - width)
+        x = CARD_X + CARD_W - width;
+    float y = PREVIEW_BOTTOM - height;
+    ui_shadow_round_rect(canvas, x, y + 6, width, height, 18, 18,
+                         color_shadow);
+    ui_fill_round_rect(canvas, x, y, width, height, 18,
+                       UI_RGBA(17, 18, 22, 240));
+    ui_stroke_round_rect(canvas, x, y, width, height, 18, 2, color_border);
+    if (image_w)
+        ui_draw_image(canvas, image, x + PREVIEW_PAD, y + PREVIEW_PAD,
+                      image_w, image_h, 12, 0.0f);
+    char text[32];
+    format_time(text, state->preview_us);
+    ui_draw_text(canvas, ui->bold, 26, (int)(x + width / 2.0f),
+                 (int)(y + height - PREVIEW_LABEL_H + 5), width - 12,
+                 UI_ALIGN_CENTER, color_text, text);
 }
 
 void player_ui_render(struct player_ui *ui, const struct player_ui_state *state,
@@ -223,6 +271,9 @@ void player_ui_render(struct player_ui *ui, const struct player_ui_state *state,
     round_button(&canvas, VIEW_X, SMALL_R, hover == PLAYER_UI_VIEW_POPUP,
                  state->popup_open);
     ui_draw_icon(&canvas, UI_ICON_CUBE, VIEW_X, ROW_Y, 38, color_text);
+
+    if (state->preview_visible && state->duration_us > 0)
+        draw_preview(ui, &canvas, state);
 }
 
 void player_ui_close(struct player_ui *ui)

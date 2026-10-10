@@ -168,7 +168,7 @@ static int run_playback(const char *path, char *const *extra, int *exit_code)
     }
     close(session_fd);
     close(sockets[0]);
-    int sent = send_command(PLAYER_UI_PLAY, NULL, NULL, sockets[1]);
+    int sent = send_command(PLAYER_UI_PLAY, path, NULL, sockets[1]);
     close(sockets[1]);
     if (sent < 0)
         kill(child, SIGTERM);

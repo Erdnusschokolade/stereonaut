@@ -25,6 +25,7 @@
 
 #include "browser-ui.h"
 #include "player-ui.h"
+#include "trickplay.h"
 #include "ui-draw.h"
 #include "nv12-playback-ipc.h"
 #include "player-ui-ipc.h"
@@ -199,6 +200,11 @@ struct app {
     struct player_ui player_ui;
     bool popup_open;
     char title[256];
+    /* Seek bar preview: trickplay pictures of the playing Jellyfin item. */
+    struct trickplay *trickplay;
+    struct ui_image *preview;
+    bool preview_visible;
+    int64_t preview_us;
     VkCommandBuffer ui_command;
     VkFence ui_fence;
     uint64_t xr_frames, rendered_frames, session_changes;
@@ -1357,6 +1363,9 @@ static struct player_ui_state player_state(const struct app *app)
         .stereo_layout = app->stereo_layout,
         .swap_eyes = app->swap_eyes,
         .hover = app->ui_hover,
+        .preview_visible = app->preview_visible,
+        .preview_us = app->preview_us,
+        .preview = app->preview,
     };
 }
 
@@ -1959,6 +1968,21 @@ static void show_panel(struct app *app, const XrSpaceLocation *head,
            app->panel_x, app->panel_y, app->panel_z, app->panel_yaw);
 }
 
+/* Shows the scrub preview for `position_us` (-1 hides it) and asks the
+ * trickplay worker for the matching picture. */
+static void update_preview(struct app *app, int64_t position_us)
+{
+    bool visible = position_us >= 0 && app->duration_us > 0;
+    if (visible != app->preview_visible ||
+        (visible && position_us / 1000000 != app->preview_us / 1000000))
+        app->ui_dirty = true;
+    app->preview_visible = visible;
+    if (!visible)
+        return;
+    app->preview_us = position_us;
+    trickplay_request(app->trickplay, position_us, app->stereo_layout);
+}
+
 static void sync_player_input(struct app *app, XrTime time)
 {
     XrActiveActionSet active = {.actionSet = app->action_set};
@@ -2096,6 +2120,7 @@ static void sync_player_input(struct app *app, XrTime time)
     }
 
     int hover = 0;
+    int64_t hover_us = -1;
     bool pointer_visible = false;
     int pointer_x = 0;
     int pointer_y = 0;
@@ -2111,6 +2136,8 @@ static void sync_player_input(struct app *app, XrTime time)
             struct player_ui_state state = player_state(app);
             hover = player_ui_hit_test(&state, hands[hand].hit.u,
                                        hands[hand].hit.v);
+            if (hover == PLAYER_UI_SEEK_BAR)
+                hover_us = scrub_target_us(app, hands[hand].hit.u);
             place_pointer(app,
                           (XrVector3f){app->panel_x, app->panel_y,
                                        app->panel_z},
@@ -2124,6 +2151,7 @@ static void sync_player_input(struct app *app, XrTime time)
         app->ui_hover = hover;
         app->ui_dirty = true;
     }
+    update_preview(app, app->scrub_hand >= 0 ? app->scrub_us : hover_us);
     if (pointer_visible != app->ui_pointer_visible ||
         (pointer_visible &&
          (pointer_x != app->ui_pointer_x ||
@@ -2572,15 +2600,29 @@ static void end_playback(struct app *app)
      * held so the browser only reacts after a release (it could otherwise
      * land on "Beenden" and close the program). */
     app->select_down[0] = app->select_down[1] = true;
+    trickplay_open(app->trickplay, NULL);
+    ui_image_free(app->preview);
+    app->preview = NULL;
+    app->preview_visible = false;
     app->ui_dirty = true;
     app->browser.dirty = true;
     printf("playback_ended\n");
 }
 
-static void begin_playback(struct app *app, int fd)
+/* `location` is what the session plays; "jf:item:ID[:PARENT]" has
+ * trickplay previews. */
+static void begin_playback(struct app *app, int fd, const char *location)
 {
     if (app->playing)
         end_playback(app);
+    if (strncmp(location, "jf:item:", 8) == 0) {
+        char item[64] = "";
+        size_t length = strcspn(location + 8, ":");
+        if (length < sizeof(item))
+            memcpy(item, location + 8, length);
+        item[length < sizeof(item) ? length : 0] = '\0';
+        trickplay_open(app->trickplay, item);
+    }
     app->ipc_fd = fd;
     app->playing = true;
     app->awaiting_command = false;
@@ -2618,7 +2660,8 @@ static void handle_control(struct app *app)
                 header->cmsg_len == CMSG_LEN(sizeof(int))) {
                 int fd;
                 memcpy(&fd, CMSG_DATA(header), sizeof(fd));
-                begin_playback(app, fd);
+                command.path[sizeof(command.path) - 1] = '\0';
+                begin_playback(app, fd, command.path);
             }
         } else if (command.type == PLAYER_UI_BROWSE) {
             if (app->playing)
@@ -2972,6 +3015,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "browser_error=%s\n", browser_error);
         return 2;
     }
+    app.trickplay = trickplay_create();
     initialize_xr_vulkan(&app);
     XrGraphicsBindingVulkan2KHR binding = {.type = XR_TYPE_GRAPHICS_BINDING_VULKAN2_KHR,
         .instance = app.instance, .physicalDevice = app.physical, .device = app.device, .queueFamilyIndex = app.queue_family, .queueIndex = 0};
@@ -3005,8 +3049,16 @@ int main(int argc, char **argv)
     printf("host_ready\n");
     while (!app.quit) {
         handle_control(&app);
-        if (app.playing)
+        if (app.playing) {
             receive_frame_messages(&app);
+            struct ui_image *preview = NULL;
+            if (trickplay_poll(app.trickplay, &preview)) {
+                ui_image_free(app.preview);
+                app.preview = preview;
+                if (app.preview_visible)
+                    app.ui_dirty = true;
+            }
+        }
         browser_ui_update(&app.browser);
         poll_events(&app);
         hide_dashboard_at_startup(&app);
@@ -3022,5 +3074,7 @@ int main(int argc, char **argv)
         end_playback(&app);
     browser_ui_close(&app.browser);
     player_ui_close(&app.player_ui);
+    trickplay_destroy(app.trickplay);
+    ui_image_free(app.preview);
     return 0;
 }

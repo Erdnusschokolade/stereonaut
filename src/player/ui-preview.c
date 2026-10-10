@@ -155,8 +155,25 @@ static int preview_player(const char *path, int hover, bool popup)
         .stereo_layout = 1,
         .hover = hover == 99 ? 0 : hover,
     };
+    /* Hovering the seek bar shows the scrub preview (a stand-in picture of
+     * one SBS eye). */
+    struct ui_image *picture = NULL;
+    if (hover == PLAYER_UI_SEEK_BAR) {
+        picture = ui_image_create(160, 180);
+        for (int i = 0; picture && i < 160 * 180; ++i) {
+            uint8_t *p = picture->rgba + i * 4;
+            p[0] = (uint8_t)(40 + i % 160);
+            p[1] = (uint8_t)(60 + i / 160 / 2);
+            p[2] = 140;
+            p[3] = 255;
+        }
+        state.preview_visible = true;
+        state.preview_us = INT64_C(2900000000);
+        state.preview = picture;
+    }
     uint32_t *pixels = malloc((size_t)PLAYER_UI_WIDTH * PLAYER_UI_HEIGHT * 4);
     player_ui_render(&ui, &state, pixels, false);
+    ui_image_free(picture);
     int result = write_ppm(path, (const uint8_t *)pixels, PLAYER_UI_WIDTH,
                            PLAYER_UI_HEIGHT, true);
     player_ui_close(&ui);

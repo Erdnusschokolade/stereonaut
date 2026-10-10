@@ -131,7 +131,7 @@ static void jpeg_failed(j_common_ptr info)
     longjmp(((struct jpeg_failure *)info->err)->jump, 1);
 }
 
-static struct ui_image *decode_jpeg(const char *data, size_t size)
+struct ui_image *thumbnail_decode_jpeg(const char *data, size_t size)
 {
     struct jpeg_decompress_struct info;
     struct jpeg_failure failure;
@@ -287,7 +287,7 @@ static struct ui_image *load(const struct jf_config *config,
         if (cacheable)
             write_file(path, data, size);
     }
-    struct ui_image *decoded = decode_jpeg(data, size);
+    struct ui_image *decoded = thumbnail_decode_jpeg(data, size);
     free(data);
     return decoded ? prepare(decoded) : NULL;
 }
