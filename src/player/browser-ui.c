@@ -1423,16 +1423,20 @@ enum browser_ui_action browser_ui_activate(struct browser_ui *ui, char *path,
 }
 
 bool browser_ui_following_title(struct browser_ui *ui, const char *path,
-                                char *next, size_t next_size)
+                                int direction, char *next, size_t next_size)
 {
-    bool found = false;
-    for (size_t position = 0; position < ui->grid_count; ++position) {
+    size_t position = 0;
+    while (position < ui->grid_count &&
+           strcmp(ui->listing.entries[ui->grid[position]].path, path) != 0)
+        ++position;
+    if (position == ui->grid_count)
+        return false;
+    for (;;) {
+        if (direction < 0 ? position == 0 : position + 1 >= ui->grid_count)
+            return false;
+        position = direction < 0 ? position - 1 : position + 1;
         const struct file_browser_entry *entry =
             &ui->listing.entries[ui->grid[position]];
-        if (!found) {
-            found = strcmp(entry->path, path) == 0;
-            continue;
-        }
         if (entry->kind != FILE_BROWSER_MEDIA)
             continue;
         ui->selected_page = position / PAGE_ENTRIES;
@@ -1442,7 +1446,6 @@ bool browser_ui_following_title(struct browser_ui *ui, const char *path,
         snprintf(next, next_size, "%s", entry->path);
         return true;
     }
-    return false;
 }
 
 /* ---- model ------------------------------------------------------------- */

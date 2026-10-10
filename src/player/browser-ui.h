@@ -86,10 +86,11 @@ enum browser_ui_action browser_ui_activate(struct browser_ui *ui, char *path,
 /* Closes the sort menu and the resume prompt (e.g. when the browser is
  * left). */
 void browser_ui_close_menus(struct browser_ui *ui);
-/* The title after `path` in the current listing (for "play next"): copies
- * its path and remembers it as the started title; false if there is none. */
+/* The title after (direction 1) or before (-1) `path` in the current
+ * listing ("play next/previous"): copies its path and remembers it as the
+ * started title; false if there is none. */
 bool browser_ui_following_title(struct browser_ui *ui, const char *path,
-                                char *next, size_t next_size);
+                                int direction, char *next, size_t next_size);
 /* Previous (< 0) or next (> 0) page, e.g. from the thumbstick. */
 void browser_ui_flip(struct browser_ui *ui, int direction);
 

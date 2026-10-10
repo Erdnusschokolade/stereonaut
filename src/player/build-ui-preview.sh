@@ -15,6 +15,7 @@ cc -std=c11 -O2 -Wall -Wextra -Werror \
   -o "$script_dir/build/ui-preview" \
   "$script_dir/ui-preview.c" "$script_dir/browser-ui.c" \
   "$script_dir/player-ui.c" "$script_dir/settings.c" \
+  "$script_dir/controller-bindings.c" \
   "$script_dir/ui-draw.c" "$script_dir/thumbnails.c" "$script_dir/jellyfin.c" \
   "$script_dir/local-thumbnail.c" \
   $(pkg-config --libs freetype2 libjpeg libcurl json-c libavformat \

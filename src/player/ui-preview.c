@@ -192,6 +192,11 @@ static int preview_player(const char *path, int hover, bool popup, int tab)
         .popup_tab = tab,
         .adjust = adjust,
         .gaze_debug = true,
+        /* STEREONAUT_PREVIEW_LEARN=ACTION shows the buttons tab while
+         * that action waits for its buttons. */
+        .learn_action = getenv("STEREONAUT_PREVIEW_LEARN")
+                            ? atoi(getenv("STEREONAUT_PREVIEW_LEARN"))
+                            : -1,
         .debug_text = "Blick: Auge · Disparität +11.40° · Score 0.98 · "
                       "Struktur 0.0020 · gültig · Versatz 7.80°",
     };

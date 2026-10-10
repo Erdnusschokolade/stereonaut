@@ -9,7 +9,7 @@
  * with the tabs view (scrub preview, head motion, projection, stereo
  * layout, eye order), position (zoom, height, rotation, stereo offsets),
  * picture (levels, brightness, contrast, saturation, gamma), focus
- * (autofocus) and information. The host owns all state and passes it in;
+ * (autofocus), controller buttons and information. The host owns all state and passes it in;
  * nothing here knows about OpenXR or Vulkan. */
 
 #define PLAYER_UI_WIDTH 1600U
@@ -61,6 +61,7 @@ enum player_ui_tab {
     PLAYER_UI_TAB_POSITION,
     PLAYER_UI_TAB_PICTURE,
     PLAYER_UI_TAB_FOCUS,
+    PLAYER_UI_TAB_BUTTONS,  /* controller bindings (global) */
     PLAYER_UI_TAB_INFO,     /* description from Jellyfin, read only */
     PLAYER_UI_TAB_COUNT,
 };
@@ -101,6 +102,11 @@ enum player_ui_control {
     /* + 2 * enum player_adjust: decrease; + 1: increase. */
     PLAYER_UI_ADJUST = 100,
     PLAYER_UI_ADJUST_END = PLAYER_UI_ADJUST + 2 * PLAYER_ADJUST_COUNT,
+    /* + enum binding_action: wait for the buttons to assign. */
+    PLAYER_UI_BINDING = 140,
+    PLAYER_UI_BINDING_CLEAR = 160,    /* unbind the action being assigned */
+    PLAYER_UI_BINDING_CANCEL = 161,
+    PLAYER_UI_BINDING_DEFAULTS = 162, /* all bindings back to standard */
 };
 
 /* Seconds without input after which the panel hides during playback
@@ -135,6 +141,10 @@ struct player_ui_state {
     const float *adjust; /* PLAYER_ADJUST_COUNT values */
     bool gaze_debug;
     bool focus_threshold; /* autofocus only below FOCUS_DISTANCE */
+    /* Controller bindings (BINDING_ACTION_COUNT, NULL = standard) and the
+     * action waiting for buttons, or -1. */
+    const struct binding *bindings;
+    int learn_action;
     const char *debug_text; /* line at the bottom of the card, or NULL */
     int hover;         /* enum player_ui_control */
     /* Scrub preview above the seek bar (while hovered or dragged): the
@@ -150,6 +160,7 @@ struct player_ui_state {
 struct ui_font;
 struct ui_image;
 struct jf_details;
+struct binding;
 
 struct player_ui {
     struct ui_font *font, *bold;

@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "player-ui.h"
 
+#include "controller-bindings.h"
 #include "jellyfin.h"
 #include "nv12-playback-ipc.h"
 #include "ui-draw.h"
@@ -168,6 +169,7 @@ struct widget {
     int control; /* chips only */
     int x, y, width;
     bool selected;
+    bool small; /* chips: smaller text */
     char text[96];
 };
 
@@ -255,12 +257,82 @@ static void add_stepper(struct popup_layout *layout,
     add_widget(layout, WIDGET_VALUE, value_x, y + 8, plus_x - value_x, value);
 }
 
+/* Controller tab: pairs of actions in two columns, help or the action
+ * being assigned in the third. */
+static void layout_buttons(const struct player_ui_state *state,
+                           struct popup_layout *layout)
+{
+    static const struct {
+        const char *label;
+        int first, second; /* enum binding_action, -1 = none */
+    } rows[6] = {
+        {"Spulen (−10 s | +10 s)", BINDING_SEEK_BACK, BINDING_SEEK_FORWARD},
+        {"Lautstärke (− | +)", BINDING_VOLUME_DOWN, BINDING_VOLUME_UP},
+        {"Video (vorheriges | nächstes)", BINDING_PREVIOUS, BINDING_NEXT},
+        {"Neigung (runter | hoch)", BINDING_TILT_DOWN, BINDING_TILT_UP},
+        {"Zoom (weg | näher)", BINDING_ZOOM_OUT, BINDING_ZOOM_IN},
+        {"Wiedergabe / Pause", BINDING_PLAY_PAUSE, -1},
+    };
+    for (int r = 0; r < 6; ++r) {
+        int column = r / 3, row = r % 3;
+        add_widget(layout, WIDGET_HINT, COLUMN_X(column), ROW_LABEL_Y(row), 0,
+                   rows[r].label);
+        int count = rows[r].second >= 0 ? 2 : 1;
+        int width = (COLUMN_W - (count - 1) * CHIP_GAP) / count;
+        for (int i = 0; i < count; ++i) {
+            int action = i ? rows[r].second : rows[r].first;
+            char text[64];
+            if (state->learn_action == action)
+                snprintf(text, sizeof(text), "drücken …");
+            else
+                binding_describe(state->bindings
+                                     ? state->bindings[action]
+                                     : binding_action_info[action].standard,
+                                 text, sizeof(text));
+            add_chip(layout, PLAYER_UI_BINDING + action,
+                     COLUMN_X(column) + i * (width + CHIP_GAP),
+                     ROW_CHIP_Y(row), width, text,
+                     state->learn_action == action);
+            layout->items[layout->count - 1].small = true;
+        }
+    }
+    int x = COLUMN_X(2), half = (COLUMN_W - CHIP_GAP) / 2;
+    if (state->learn_action >= 0 &&
+        state->learn_action < BINDING_ACTION_COUNT) {
+        char label[96];
+        snprintf(label, sizeof(label), "Belegen: %s",
+                 binding_action_info[state->learn_action].label);
+        add_widget(layout, WIDGET_TEXT, x, ROW_LABEL_Y(0), 0, label);
+        add_widget(layout, WIDGET_HINT, x, ROW_LABEL_Y(0) + 40, 0,
+                   "Taste drücken oder für eine");
+        add_widget(layout, WIDGET_HINT, x, ROW_LABEL_Y(0) + 70, 0,
+                   "Kombination die erste halten");
+        add_widget(layout, WIDGET_HINT, x, ROW_LABEL_Y(0) + 100, 0,
+                   "und die zweite drücken.");
+        add_chip(layout, PLAYER_UI_BINDING_CLEAR, x, ROW_CHIP_Y(2), half,
+                 "Entfernen", false);
+        add_chip(layout, PLAYER_UI_BINDING_CANCEL, x + half + CHIP_GAP,
+                 ROW_CHIP_Y(2), half, "Abbrechen", false);
+    } else {
+        add_widget(layout, WIDGET_HINT, x, ROW_LABEL_Y(0), 0,
+                   "Feld wählen, dann am Controller");
+        add_widget(layout, WIDGET_HINT, x, ROW_LABEL_Y(0) + 30, 0,
+                   "die Taste oder Kombination");
+        add_widget(layout, WIDGET_HINT, x, ROW_LABEL_Y(0) + 60, 0,
+                   "drücken. Der Griff geht nur in");
+        add_widget(layout, WIDGET_HINT, x, ROW_LABEL_Y(0) + 90, 0,
+                   "Kombinationen. Gilt für alle Titel.");
+        add_chip(layout, PLAYER_UI_BINDING_DEFAULTS, x, ROW_CHIP_Y(2),
+                 COLUMN_W, "Standardbelegung", false);
+    }
+}
+
 static void layout_popup(const struct player_ui_state *state,
                          struct popup_layout *layout)
 {
     layout->count = 0;
     static const char *const tabs[PLAYER_UI_TAB_COUNT] = {
-        "Ansicht", "Position", "Bild", "Fokus", "Info",
+        "Ansicht", "Position", "Bild", "Fokus", "Tasten", "Info",
     };
     for (int i = 0; i < PLAYER_UI_TAB_COUNT; ++i)
         add_chip(layout, PLAYER_UI_TAB + i,
@@ -421,6 +493,8 @@ static void layout_popup(const struct player_ui_state *state,
                    "1 m zurückgeschoben.");
         add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(1) + 66, 0,
                    "Gilt für alle Titel.");
+    } else if (state->popup_tab == PLAYER_UI_TAB_BUTTONS) {
+        layout_buttons(state, layout);
     }
 }
 
@@ -452,14 +526,15 @@ static void round_button(struct ui_canvas *canvas, float cx, float r,
 
 static void draw_chip(struct player_ui *ui, struct ui_canvas *canvas, int x,
                       int y, int width, const char *label, bool selected,
-                      bool hover)
+                      bool hover, bool small)
 {
     ui_fill_round_rect(canvas, x, y, width, CHIP_H, CHIP_H / 2.0f,
                        selected ? color_accent
                        : hover ? color_button_hover
                                : color_button);
-    ui_draw_text(canvas, selected ? ui->bold : ui->font, 24, x + width / 2,
-                 y + 8, width - 16, UI_ALIGN_CENTER, color_text, label);
+    ui_draw_text(canvas, selected ? ui->bold : ui->font, small ? 20 : 24,
+                 x + width / 2, y + (small ? 10 : 8), width - 16,
+                 UI_ALIGN_CENTER, color_text, label);
 }
 
 /* Information tab: the description across two columns, facts in the
@@ -538,7 +613,7 @@ static void draw_popup(struct player_ui *ui, struct ui_canvas *canvas,
         case WIDGET_CHIP:
             draw_chip(ui, canvas, widget->x, widget->y, widget->width,
                       widget->text, widget->selected,
-                      state->hover == widget->control);
+                      state->hover == widget->control, widget->small);
             break;
         case WIDGET_TEXT:
             ui_draw_text(canvas, ui->font, 24, widget->x, widget->y,
