@@ -254,7 +254,8 @@ static void layout_popup(const struct player_ui_state *state,
 
     if (state->popup_tab == PLAYER_UI_TAB_VIEW) {
         static const char *const modes[2] = {"Original", "Perspektive"};
-        static const char *const projections[3] = {"Flach", "180°", "360°"};
+        static const char *const projections[4] = {"Flach", "180°", "360°",
+                                                   "Fisheye"};
         static const char *const layouts[3] = {"Mono", "SBS", "TB"};
         const char *fovs[PLAYER_UI_PREVIEW_FOV_COUNT];
         char fov_text[PLAYER_UI_PREVIEW_FOV_COUNT][16];
@@ -295,13 +296,28 @@ static void layout_popup(const struct player_ui_state *state,
             [NV12_FORMAT_SOURCE_IMAGE] = "Projektion (im Bild erkannt)",
             [NV12_FORMAT_SOURCE_USER] = "Projektion",
         };
+        char projection_label[96];
+        snprintf(projection_label, sizeof(projection_label), "%s",
+                 projection_labels[state->format_source <=
+                                           NV12_FORMAT_SOURCE_USER
+                                       ? state->format_source
+                                       : NV12_FORMAT_SOURCE_USER]);
+        if (state->projection_mode == NV12_PROJECTION_FISHEYE) {
+            size_t used = strlen(projection_label);
+            snprintf(projection_label + used,
+                     sizeof(projection_label) - used, " · %u°",
+                     state->fisheye_fov);
+        }
         add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(0), 0,
-                   projection_labels[state->format_source <=
-                                             NV12_FORMAT_SOURCE_USER
-                                         ? state->format_source
-                                         : NV12_FORMAT_SOURCE_USER]);
-        add_chip_row(layout, 2, 0, 3, PLAYER_UI_PROJECTION, projections,
-                     (int)state->projection_mode);
+                   projection_label);
+        /* "Fisheye" needs more room than the angles. */
+        const int fisheye_w = 128;
+        const int short_w = (COLUMN_W - fisheye_w - 3 * CHIP_GAP) / 3;
+        for (int i = 0; i < 4; ++i)
+            add_chip(layout, PLAYER_UI_PROJECTION + i,
+                     COLUMN_X(2) + i * (short_w + CHIP_GAP), ROW_CHIP_Y(0),
+                     i == 3 ? fisheye_w : short_w, projections[i],
+                     i == (int)state->projection_mode);
         add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(1), 0,
                    "Stereo");
         add_chip_row(layout, 2, 1, 3, PLAYER_UI_STEREO, layouts,

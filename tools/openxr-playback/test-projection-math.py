@@ -4,12 +4,23 @@
 import math
 
 
-def projection_uv(direction, projection):
+def projection_uv(direction, projection, fisheye_fov=190.0):
     x, y, z = direction
     length = math.sqrt(x * x + y * y + z * z)
     x, y, z = x / length, y / length, z / length
     longitude = math.atan2(x, -z)
     latitude = math.asin(max(-1.0, min(1.0, y)))
+    if projection == "fisheye":
+        # Equidistant lens, as in the fragment shaders.
+        d = (math.cos(latitude) * math.sin(longitude), math.sin(latitude),
+             -math.cos(latitude) * math.cos(longitude))
+        radius = math.acos(max(-1.0, min(1.0, -d[2]))) / math.radians(
+            fisheye_fov / 2)
+        if radius > 1.0:
+            return None
+        planar = math.hypot(d[0], d[1])
+        ax, ay = (d[0] / planar, d[1] / planar) if planar > 1e-6 else (0, 0)
+        return 0.5 + 0.5 * radius * ax, 0.5 - 0.5 * radius * ay
     if projection == "180":
         if abs(longitude) > math.pi / 2:
             return None
@@ -141,5 +152,19 @@ assert math.isclose(sum(x * x for x in hit), 1.0, abs_tol=1e-9)
 # below the picture centre.
 hit = dome_lookup((0.0, 0.0, -1.0), (0.0, -0.2, 0.0))
 assert hit[1] < 0.0, hit
+
+# Fisheye: straight ahead is the circle centre; 95 degrees to the right is
+# the right edge of a 190-degree lens, 47.5 degrees up half way to the top;
+# behind the lens nothing is shown.
+close(projection_uv((0.0, 0.0, -1.0), "fisheye"), (0.5, 0.5))
+close(projection_uv((math.sin(rad(95)), 0.0, -math.cos(rad(95))), "fisheye"),
+      (1.0, 0.5))
+close(projection_uv((0.0, math.sin(rad(47.5)), -math.cos(rad(47.5))),
+                    "fisheye"), (0.5, 0.25))
+assert projection_uv((0.0, 0.0, 1.0), "fisheye") is None
+# A 220-degree lens maps the same 95 degrees inside the circle.
+u, v = projection_uv((math.sin(rad(95)), 0.0, -math.cos(rad(95))), "fisheye",
+                     220.0)
+assert math.isclose(u, 0.5 + 0.5 * 95 / 110, abs_tol=1e-9), u
 
 print("projection_math=success")

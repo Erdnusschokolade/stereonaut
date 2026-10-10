@@ -111,6 +111,7 @@ struct player_ui_state {
     bool swap_eyes;
     uint32_t video_levels;
     uint32_t format_source; /* enum nv12_format_source */
+    uint32_t fisheye_fov;   /* degrees, shown for fisheye titles */
     float volume;      /* linear output gain, 0 to 1.5 */
     int end_action;    /* enum player_end_action */
     /* Jellyfin description of the title (chapters, information) or NULL. */

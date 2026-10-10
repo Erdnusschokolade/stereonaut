@@ -12,7 +12,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-static const char *const projection_names[] = {"flat", "180", "360"};
+static const char *const projection_names[] = {"flat", "180", "360",
+                                               "fisheye"};
 static const char *const stereo_names[] = {"mono", "sbs", "tb"};
 static const char *const levels_names[] = {"normal", "deep", "full"};
 static const char *const source_names[] = {"default", "name", "image",
@@ -25,6 +26,7 @@ void title_settings_defaults(struct title_settings *settings)
     settings->swap_eyes = false;
     settings->video_levels = NV12_LEVELS_NORMAL;
     settings->format_source = NV12_FORMAT_SOURCE_DEFAULT;
+    settings->fisheye_fov = NV12_FISHEYE_FOV_DEFAULT;
 }
 
 void title_settings_key(const char *input, char *key, size_t key_size)
@@ -134,10 +136,15 @@ int title_settings_load(const char *key, struct title_settings *settings)
         if (json_object_object_get_ex(entry, "projection", &value) &&
             json_object_is_type(value, json_type_string)) {
             settings->projection_mode = lookup(
-                projection_names, 3, json_object_get_string(value),
+                projection_names, 4, json_object_get_string(value),
                 settings->projection_mode);
             settings->format_source = NV12_FORMAT_SOURCE_USER;
         }
+        if (json_object_object_get_ex(entry, "fisheye_fov", &value) &&
+            json_object_is_type(value, json_type_int) &&
+            json_object_get_int(value) >= 120 &&
+            json_object_get_int(value) <= 240)
+            settings->fisheye_fov = (uint32_t)json_object_get_int(value);
         if (json_object_object_get_ex(entry, "format_source", &value) &&
             json_object_is_type(value, json_type_string))
             settings->format_source = lookup(
@@ -164,7 +171,7 @@ int title_settings_load(const char *key, struct title_settings *settings)
 
 int title_settings_save(const char *key, const struct title_settings *settings)
 {
-    if (settings->projection_mode > NV12_PROJECTION_EQUIRECT_360 ||
+    if (settings->projection_mode > NV12_PROJECTION_FISHEYE ||
         settings->stereo_layout > NV12_STEREO_TB ||
         settings->video_levels > NV12_LEVELS_FULL ||
         settings->format_source > NV12_FORMAT_SOURCE_USER)
@@ -187,6 +194,8 @@ int title_settings_save(const char *key, const struct title_settings *settings)
     json_object_object_add(
         entry, "levels",
         json_object_new_string(levels_names[settings->video_levels]));
+    json_object_object_add(entry, "fisheye_fov",
+                           json_object_new_int((int)settings->fisheye_fov));
     json_object_object_add(
         entry, "format_source",
         json_object_new_string(source_names[settings->format_source]));

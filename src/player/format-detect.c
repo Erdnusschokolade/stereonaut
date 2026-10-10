@@ -64,10 +64,17 @@ static void apply_token(const char *token, struct format_guess *guess)
 {
     if (strncmp(token, "vr", 2) == 0 && isdigit((unsigned char)token[2]))
         token += 2; /* "vr180" */
-    /* Fisheye lenses: no fisheye projection yet, 180 is the closest. */
-    if (strncmp(token, "fisheye", 7) == 0 || strncmp(token, "mkx", 3) == 0 ||
-        strncmp(token, "vrca", 4) == 0 || strcmp(token, "rf52") == 0) {
-        guess->projection = NV12_PROJECTION_EQUIRECT_180;
+    /* Fisheye lenses, with the angle where the tag names one. */
+    const char *angle = strncmp(token, "fisheye", 7) == 0 ? token + 7
+                        : strncmp(token, "mkx", 3) == 0   ? token + 3
+                        : strncmp(token, "vrca", 4) == 0  ? token + 4
+                                                          : NULL;
+    if (angle || strcmp(token, "rf52") == 0) {
+        int degrees = angle ? atoi(angle) : 190;
+        guess->projection = NV12_PROJECTION_FISHEYE;
+        guess->fisheye_fov = degrees >= 120 && degrees <= 240 ? degrees
+                             : angle && !*angle               ? 180
+                                                              : 190;
         return;
     }
     if (strcmp(token, "flat") == 0 || strcmp(token, "2d") == 0) {

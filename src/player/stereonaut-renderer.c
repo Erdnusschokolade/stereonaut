@@ -208,6 +208,7 @@ struct app {
     bool swap_eyes;
     uint32_t video_levels; /* enum nv12_video_levels */
     uint32_t format_source; /* enum nv12_format_source, shown on the panel */
+    uint32_t fisheye_fov;   /* lens angle (degrees) for fisheye titles */
     float volume;           /* output gain (settings.json "volume") */
     XrActionSet action_set;
     XrAction aim_action;
@@ -569,6 +570,10 @@ static void apply_init(struct app *app, const struct nv12_ipc_message *message,
     app->swap_eyes = message->swap_eyes != 0;
     app->video_levels = message->video_levels;
     app->format_source = message->format_source;
+    app->fisheye_fov = message->fisheye_fov >= 120 &&
+                               message->fisheye_fov <= 240
+                           ? message->fisheye_fov
+                           : NV12_FISHEYE_FOV_DEFAULT;
     need(app->video_width > 0 && app->video_height > 0 &&
              !(app->video_width & 1U) && !(app->video_height & 1U) &&
              (app->video_format == NV12_FORMAT_TP10 ||
@@ -578,7 +583,7 @@ static void apply_init(struct app *app, const struct nv12_ipc_message *message,
              app->dma_buf_size >= app->uv_offset +
                  (uint64_t)app->video_stride * app->video_height / 2U,
          "NV12 IPC layout is not linear 4:2:0");
-    need(app->projection_mode <= NV12_PROJECTION_EQUIRECT_360,
+    need(app->projection_mode <= NV12_PROJECTION_FISHEYE,
          "invalid projection mode in IPC contract");
     need(app->stereo_layout <= NV12_STEREO_TB,
          "invalid stereo layout in IPC contract");
@@ -647,8 +652,19 @@ static void send_seek_to(struct app *app, int64_t target_us)
 static void change_view(struct app *app, int control)
 {
     if (control >= PLAYER_UI_PROJECTION &&
-        control <= PLAYER_UI_PROJECTION + NV12_PROJECTION_EQUIRECT_360) {
-        app->projection_mode = (uint32_t)(control - PLAYER_UI_PROJECTION);
+        control <= PLAYER_UI_PROJECTION + NV12_PROJECTION_FISHEYE) {
+        uint32_t projection = (uint32_t)(control - PLAYER_UI_PROJECTION);
+        /* Choosing fisheye again steps through the usual lens angles. */
+        static const uint32_t lenses[] = {180, 190, 200, 220};
+        if (projection == NV12_PROJECTION_FISHEYE &&
+            app->projection_mode == NV12_PROJECTION_FISHEYE) {
+            size_t next = 0;
+            for (size_t i = 0; i < sizeof(lenses) / sizeof(lenses[0]); ++i)
+                if (lenses[i] == app->fisheye_fov)
+                    next = (i + 1) % (sizeof(lenses) / sizeof(lenses[0]));
+            app->fisheye_fov = lenses[next];
+        }
+        app->projection_mode = projection;
         app->format_source = NV12_FORMAT_SOURCE_USER;
     } else if (control >= PLAYER_UI_STEREO &&
                control <= PLAYER_UI_STEREO + NV12_STEREO_TB) {
@@ -665,6 +681,7 @@ static void change_view(struct app *app, int control)
     struct nv12_ipc_message message = {
         .type = NV12_IPC_VIEW,
         .projection_mode = app->projection_mode,
+        .fisheye_fov = app->fisheye_fov,
         .stereo_layout = app->stereo_layout,
         .swap_eyes = app->swap_eyes,
         .video_levels = app->video_levels,
@@ -871,13 +888,15 @@ static void receive_frame_messages(struct app *app)
         } else if (message.type == NV12_IPC_INIT) {
             reinitialize_video(app, &message, &received);
         } else if (message.type == NV12_IPC_FORMAT) {
-            need(message.projection_mode <= NV12_PROJECTION_EQUIRECT_360 &&
+            need(message.projection_mode <= NV12_PROJECTION_FISHEYE &&
                      message.stereo_layout <= NV12_STEREO_TB &&
                      message.format_source <= NV12_FORMAT_SOURCE_USER,
                  "invalid detected format");
             app->projection_mode = message.projection_mode;
             app->stereo_layout = message.stereo_layout;
             app->format_source = message.format_source;
+            if (message.fisheye_fov >= 120 && message.fisheye_fov <= 240)
+                app->fisheye_fov = message.fisheye_fov;
             app->ui_dirty = true;
             printf("player_format projection=%u stereo=%u source=%u\n",
                    app->projection_mode, app->stereo_layout,
@@ -1739,6 +1758,7 @@ static struct player_ui_state player_state(const struct app *app)
         .swap_eyes = app->swap_eyes,
         .video_levels = app->video_levels,
         .format_source = app->format_source,
+        .fisheye_fov = app->fisheye_fov,
         .volume = app->volume,
         .end_action = app->end_action,
         .details = app->details_valid ? &app->details : NULL,
@@ -3279,6 +3299,7 @@ static bool disparity_window(struct app *app, XrVector3f direction,
                              float stereo_x, struct disparity_push *push)
 {
     if (app->projection_mode == NV12_PROJECTION_FLAT ||
+        app->projection_mode == NV12_PROJECTION_FISHEYE ||
         app->stereo_layout == NV12_STEREO_MONO)
         return false;
     XrVector3f d = transform_direction(world_to_dome, direction);
@@ -3442,6 +3463,7 @@ static void update_debug_text(struct app *app)
                          : app->has_eye_gaze ? "Kopf (kein Blick)"
                                              : "Kopf (kein Eye Tracking)";
     if (app->projection_mode == NV12_PROJECTION_FLAT ||
+        app->projection_mode == NV12_PROJECTION_FISHEYE ||
         app->stereo_layout == NV12_STEREO_MONO)
         snprintf(text, sizeof(text), "Blick: %s · Messung nur bei 180/360 "
                  "mit SBS/TB", source);
@@ -3636,8 +3658,9 @@ static void render_frame(struct app *app)
             .mvp = multiply(projection, multiply(view, screen_model)),
             .camera_to_world = multiply(world_to_dome,
                                         rotation_from_pose(views[eye].pose)),
+            /* w: half the fisheye lens angle (radians). */
             .eye_offset = {eye_position.x, eye_position.y, eye_position.z,
-                           0.0f},
+                           0.5f * (float)app->fisheye_fov * degrees},
             .stereo_offset = {-side * stereo_x * degrees,
                               -side * stereo_y * degrees,
                               -side * stereo_x / 60.0f,

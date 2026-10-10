@@ -11,13 +11,15 @@
  * the shape of one eye then tells 180 (1:1), 360 (2:1 with continuous left
  * and right edges) and flat (16:9). Measured on 245 titles of a VR library
  * (trickplay tiles): every tagged title matched its tags. Fisheye cannot be
- * told from a masked 180 picture and is only taken from the name. */
+ * told from a masked 180 picture and is only taken from the name
+ * ("fisheye190", "mkx200", "vrca220", "rf52"). */
 
 #define FORMAT_UNKNOWN (-1)
 
 struct format_guess {
     int projection; /* enum nv12_projection_mode or FORMAT_UNKNOWN */
     int stereo;     /* enum nv12_stereo_layout or FORMAT_UNKNOWN */
+    int fisheye_fov; /* lens angle in degrees from the name, 0 if unknown */
 };
 
 /* Fills the fields the name tags determine; others stay as they are. */

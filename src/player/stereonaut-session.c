@@ -120,12 +120,14 @@ struct panel_state {
 
 struct playback_options {
     uint32_t projection_mode;
+    uint32_t fisheye_fov; /* degrees, NV12_PROJECTION_FISHEYE */
     uint32_t stereo_layout;
     bool swap_eyes;
     uint32_t video_levels;
     /* Set by explicit command-line flags; those win over the stored title
      * settings (a seek restart passes the current values explicitly). */
     bool projection_set, stereo_set, swap_eyes_set, levels_set;
+    bool fisheye_fov_set;
     uint32_t frame_limit;
     int64_t start_us;
     struct panel_state panel;
@@ -354,7 +356,7 @@ static int64_t status_position_us(struct media_pipeline *pipeline,
  * the first decoded frames (NV12 only; TP10 is UBWC-compressed). */
 static uint32_t format_source = NV12_FORMAT_SOURCE_DEFAULT;
 static struct format_guess format_name_guess = {FORMAT_UNKNOWN,
-                                                FORMAT_UNKNOWN};
+                                                FORMAT_UNKNOWN, 0};
 static const char *const format_source_names[] = {"default", "name",
                                                   "image", "user"};
 
@@ -452,6 +454,8 @@ static void apply_format(struct playback_options *options,
 {
     options->projection_mode = (uint32_t)guess->projection;
     options->stereo_layout = (uint32_t)guess->stereo;
+    if (guess->fisheye_fov > 0)
+        options->fisheye_fov = (uint32_t)guess->fisheye_fov;
     format_source = source;
     if (!view_state_valid)
         view_state = (struct title_settings){
@@ -460,6 +464,7 @@ static void apply_format(struct playback_options *options,
         };
     view_state.projection_mode = options->projection_mode;
     view_state.stereo_layout = options->stereo_layout;
+    view_state.fisheye_fov = options->fisheye_fov;
     view_state.format_source = source;
     view_state_valid = true;
     if (title_settings_save(title_key, &view_state) < 0)
@@ -472,6 +477,7 @@ static void apply_format(struct playback_options *options,
             .type = NV12_IPC_FORMAT,
             .projection_mode = options->projection_mode,
             .stereo_layout = options->stereo_layout,
+            .fisheye_fov = options->fisheye_fov,
             .format_source = source,
         };
         ssize_t written;
@@ -523,6 +529,8 @@ static void detect_format_before_start(struct playback_options *options,
     }
     if (guess.projection != FORMAT_UNKNOWN)
         options->projection_mode = (uint32_t)guess.projection;
+    if (guess.fisheye_fov > 0)
+        options->fisheye_fov = (uint32_t)guess.fisheye_fov;
     if (guess.stereo != FORMAT_UNKNOWN)
         options->stereo_layout = (uint32_t)guess.stereo;
 }
@@ -654,6 +662,7 @@ static void start_renderer(
         .size = layout->sizeimage,
         .uv_offset = layout->uv_offset,
         .projection_mode = options->projection_mode,
+        .fisheye_fov = options->fisheye_fov,
         .stereo_layout = options->stereo_layout,
         .swap_eyes = options->swap_eyes,
         .video_levels = options->video_levels,
@@ -761,14 +770,16 @@ static bool process_renderer_messages(
             renderer_action = message.index;
             renderer_action_position_us = message.position_us;
         } else if (message.type == NV12_IPC_VIEW) {
-            if (message.projection_mode > NV12_PROJECTION_EQUIRECT_360 ||
+            if (message.projection_mode > NV12_PROJECTION_FISHEYE ||
+                message.fisheye_fov < 120 || message.fisheye_fov > 240 ||
                 message.stereo_layout > NV12_STEREO_TB ||
                 message.video_levels > NV12_LEVELS_FULL)
                 fail_message("invalid renderer view settings");
             /* A changed projection or layout is the viewer's choice and
              * ends the detection; eye order and levels keep its source. */
             if (message.projection_mode != view_state.projection_mode ||
-                message.stereo_layout != view_state.stereo_layout) {
+                message.stereo_layout != view_state.stereo_layout ||
+                message.fisheye_fov != view_state.fisheye_fov) {
                 format_source = NV12_FORMAT_SOURCE_USER;
                 frame_detection.active = false;
             }
@@ -777,6 +788,7 @@ static bool process_renderer_messages(
                 .stereo_layout = message.stereo_layout,
                 .swap_eyes = message.swap_eyes != 0,
                 .video_levels = message.video_levels,
+                .fisheye_fov = message.fisheye_fov,
                 .format_source = format_source,
             };
             view_state_valid = true;
@@ -919,13 +931,16 @@ static struct playback_options parse_playback_options(int argc, char **argv)
             options.swap_eyes_set = true;
         } else if (strcmp(argv[i], "--projection") == 0) {
             if (++i >= argc)
-                fail_message("--projection requires flat, 180, or 360");
+                fail_message("--projection requires flat, 180, 360 or"
+                             " fisheye");
             if (strcmp(argv[i], "flat") == 0)
                 options.projection_mode = NV12_PROJECTION_FLAT;
             else if (strcmp(argv[i], "180") == 0)
                 options.projection_mode = NV12_PROJECTION_EQUIRECT_180;
             else if (strcmp(argv[i], "360") == 0)
                 options.projection_mode = NV12_PROJECTION_EQUIRECT_360;
+            else if (strcmp(argv[i], "fisheye") == 0)
+                options.projection_mode = NV12_PROJECTION_FISHEYE;
             else
                 fail_message("invalid --projection value");
             options.projection_set = true;
@@ -953,6 +968,14 @@ static struct playback_options parse_playback_options(int argc, char **argv)
             else
                 fail_message("invalid --levels value");
             options.levels_set = true;
+        } else if (strcmp(argv[i], "--fisheye-fov") == 0) {
+            if (++i >= argc)
+                fail_message("--fisheye-fov requires degrees");
+            uint32_t degrees = parse_u32(argv[i], "fisheye field of view");
+            if (degrees < 120 || degrees > 240)
+                fail_message("--fisheye-fov must lie between 120 and 240");
+            options.fisheye_fov = degrees;
+            options.fisheye_fov_set = true;
         } else if (strcmp(argv[i], "--paused") == 0) {
             options.start_paused = true;
         } else if (strcmp(argv[i], "--format-source") == 0) {
@@ -2150,7 +2173,7 @@ int main(int argc, char **argv)
     if (argc < 2) {
         fprintf(stderr,
                 "usage: %s INPUT.mkv|INPUT.mp4"
-                " [--projection flat|180|360]"
+                " [--projection flat|180|360|fisheye] [--fisheye-fov DEG]"
                 " [--stereo mono|sbs|tb] [--swap-eyes|--no-swap-eyes]"
                 " [--levels normal|deep|full]"
                 " [--format-source default|name|image|user] [--paused]"
@@ -2172,6 +2195,8 @@ int main(int argc, char **argv)
             fprintf(stderr, "title settings unreadable; using defaults\n");
         if (!options.projection_set)
             options.projection_mode = stored.projection_mode;
+        if (!options.fisheye_fov_set)
+            options.fisheye_fov = stored.fisheye_fov;
         if (!options.stereo_set)
             options.stereo_layout = stored.stereo_layout;
         if (!options.swap_eyes_set)
@@ -2491,6 +2516,7 @@ int main(int argc, char **argv)
                     if (!view_state_valid) {
                         view_state = (struct title_settings){
                             .projection_mode = options.projection_mode,
+                            .fisheye_fov = options.fisheye_fov,
                             .stereo_layout = options.stereo_layout,
                             .swap_eyes = options.swap_eyes,
                             .video_levels = options.video_levels,
@@ -2876,6 +2902,7 @@ int main(int argc, char **argv)
                  requested_start_us);
         if (view_state_valid) {
             options.projection_mode = view_state.projection_mode;
+            options.fisheye_fov = view_state.fisheye_fov;
             options.stereo_layout = view_state.stereo_layout;
             options.swap_eyes = view_state.swap_eyes;
             options.video_levels = view_state.video_levels;
@@ -2885,7 +2912,10 @@ int main(int argc, char **argv)
                                      ? "180"
                                  : options.projection_mode ==
                                            NV12_PROJECTION_EQUIRECT_360
-                                     ? "360" : "flat";
+                                     ? "360"
+                                 : options.projection_mode ==
+                                           NV12_PROJECTION_FISHEYE
+                                     ? "fisheye" : "flat";
         const char *stereo = options.stereo_layout == NV12_STEREO_SBS
                                  ? "sbs"
                              : options.stereo_layout == NV12_STEREO_TB
@@ -2928,6 +2958,11 @@ int main(int argc, char **argv)
         restart_argv[restart_argc++] = (char *)levels;
         restart_argv[restart_argc++] = "--start-us";
         restart_argv[restart_argc++] = start_text;
+        char fisheye_text[16];
+        snprintf(fisheye_text, sizeof(fisheye_text), "%u",
+                 options.fisheye_fov);
+        restart_argv[restart_argc++] = "--fisheye-fov";
+        restart_argv[restart_argc++] = fisheye_text;
         restart_argv[restart_argc++] = "--format-source";
         restart_argv[restart_argc++] =
             (char *)format_source_names[format_source];

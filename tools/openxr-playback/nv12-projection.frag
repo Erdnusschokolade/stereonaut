@@ -14,7 +14,8 @@ layout(set = 0, binding = 0, std140) uniform ViewUniform {
     vec4 source_info;  /* width, height, inverse width, inverse height */
     vec4 video_scale;  /* TP10 only (tp10-projection.frag) */
     vec4 levels;       /* black, white, chroma range (8-bit code values) */
-    vec4 eye_offset;   /* eye inside the dome (radius 1), dome axes */
+    vec4 eye_offset;   /* eye inside the dome (radius 1), dome axes;
+                          w: half the fisheye lens angle (rad) */
     vec4 stereo_offset; /* longitude, latitude (rad); flat u, v */
     vec4 picture;      /* brightness, contrast, saturation, gamma */
 } view;
@@ -26,6 +27,7 @@ layout(location = 0) out vec4 output_color;
 const int PROJECTION_FLAT = 0;
 const int PROJECTION_EQUIRECT_180 = 1;
 const int PROJECTION_EQUIRECT_360 = 2;
+const int PROJECTION_FISHEYE = 3;
 const int STEREO_SBS = 1;
 const int STEREO_TB = 2;
 const float PI = 3.14159265358979323846;
@@ -46,6 +48,23 @@ vec2 direction_to_projection_uv(vec3 unnormalized_direction,
     float latitude = asin(clamp(direction.y, -1.0, 1.0)) +
                      view.stereo_offset.y;
     valid = true;
+
+    if (view.modes.x == PROJECTION_FISHEYE) {
+        /* Equidistant lens: the angle from the view axis grows linearly
+         * with the distance from the circle centre; eye_offset.w is half
+         * the lens angle. */
+        vec3 d = vec3(cos(latitude) * sin(longitude), sin(latitude),
+                      -cos(latitude) * cos(longitude));
+        float radius = acos(clamp(-d.z, -1.0, 1.0)) / view.eye_offset.w;
+        if (radius > 1.0) {
+            valid = false;
+            return vec2(0.0);
+        }
+        float planar = length(d.xy);
+        vec2 axis = planar > 1e-6 ? d.xy / planar : vec2(0.0);
+        return vec2(0.5 + 0.5 * radius * axis.x,
+                    0.5 - 0.5 * radius * axis.y);
+    }
 
     if (view.modes.x == PROJECTION_EQUIRECT_180) {
         if (abs(longitude) > 0.5 * PI) {

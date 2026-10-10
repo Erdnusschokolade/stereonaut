@@ -9,7 +9,11 @@ enum nv12_projection_mode {
     NV12_PROJECTION_FLAT = 0,
     NV12_PROJECTION_EQUIRECT_180 = 1,
     NV12_PROJECTION_EQUIRECT_360 = 2,
+    /* Equidistant fisheye circle per eye; lens angle in fisheye_fov. */
+    NV12_PROJECTION_FISHEYE = 3,
 };
+
+#define NV12_FISHEYE_FOV_DEFAULT 190U
 
 enum nv12_stereo_layout {
     NV12_STEREO_MONO = 0,
@@ -119,6 +123,8 @@ struct nv12_ipc_message {
     uint32_t format_source;
     /* VOLUME: linear gain, 0 to 1.5. */
     float volume;
+    /* INIT, VIEW and FORMAT: fisheye lens angle in degrees. */
+    uint32_t fisheye_fov;
 };
 
 #endif

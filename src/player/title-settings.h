@@ -18,6 +18,7 @@ struct title_settings {
     /* enum nv12_format_source of projection and stereo layout; entries
      * written before detection existed count as the viewer's choice. */
     uint32_t format_source;
+    uint32_t fisheye_fov;     /* degrees, for NV12_PROJECTION_FISHEYE */
 };
 
 #define TITLE_KEY_SIZE 4200
