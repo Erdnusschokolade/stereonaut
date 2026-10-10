@@ -203,6 +203,7 @@ struct app {
     uint32_t projection_mode, stereo_layout;
     bool swap_eyes;
     uint32_t video_levels; /* enum nv12_video_levels */
+    uint32_t format_source; /* enum nv12_format_source, shown on the panel */
     XrActionSet action_set;
     XrAction aim_action;
     XrAction select_action;
@@ -558,6 +559,7 @@ static void apply_init(struct app *app, const struct nv12_ipc_message *message,
     app->stereo_layout = message->stereo_layout;
     app->swap_eyes = message->swap_eyes != 0;
     app->video_levels = message->video_levels;
+    app->format_source = message->format_source;
     need(app->video_width > 0 && app->video_height > 0 &&
              !(app->video_width & 1U) && !(app->video_height & 1U) &&
              (app->video_format == NV12_FORMAT_TP10 ||
@@ -573,6 +575,8 @@ static void apply_init(struct app *app, const struct nv12_ipc_message *message,
          "invalid stereo layout in IPC contract");
     need(app->video_levels <= NV12_LEVELS_FULL,
          "invalid video levels in IPC contract");
+    need(app->format_source <= NV12_FORMAT_SOURCE_USER,
+         "invalid format source in IPC contract");
     /* The host owns the panel placement for its whole lifetime. */
     printf("render_config projection=%u stereo=%u swap_eyes=%u levels=%u"
            " view0=left view1=right\n",
@@ -615,12 +619,14 @@ static void send_seek_to(struct app *app, int64_t target_us)
 static void change_view(struct app *app, int control)
 {
     if (control >= PLAYER_UI_PROJECTION &&
-        control <= PLAYER_UI_PROJECTION + NV12_PROJECTION_EQUIRECT_360)
+        control <= PLAYER_UI_PROJECTION + NV12_PROJECTION_EQUIRECT_360) {
         app->projection_mode = (uint32_t)(control - PLAYER_UI_PROJECTION);
-    else if (control >= PLAYER_UI_STEREO &&
-             control <= PLAYER_UI_STEREO + NV12_STEREO_TB)
+        app->format_source = NV12_FORMAT_SOURCE_USER;
+    } else if (control >= PLAYER_UI_STEREO &&
+               control <= PLAYER_UI_STEREO + NV12_STEREO_TB) {
         app->stereo_layout = (uint32_t)(control - PLAYER_UI_STEREO);
-    else if (control == PLAYER_UI_SWAP_EYES)
+        app->format_source = NV12_FORMAT_SOURCE_USER;
+    } else if (control == PLAYER_UI_SWAP_EYES)
         app->swap_eyes = !app->swap_eyes;
     else if (control >= PLAYER_UI_LEVELS &&
              control <= PLAYER_UI_LEVELS + NV12_LEVELS_FULL)
@@ -830,6 +836,18 @@ static void receive_frame_messages(struct app *app)
             send_ipc(app, NV12_IPC_HELD, 0);
         } else if (message.type == NV12_IPC_INIT) {
             reinitialize_video(app, &message, &received);
+        } else if (message.type == NV12_IPC_FORMAT) {
+            need(message.projection_mode <= NV12_PROJECTION_EQUIRECT_360 &&
+                     message.stereo_layout <= NV12_STEREO_TB &&
+                     message.format_source <= NV12_FORMAT_SOURCE_USER,
+                 "invalid detected format");
+            app->projection_mode = message.projection_mode;
+            app->stereo_layout = message.stereo_layout;
+            app->format_source = message.format_source;
+            app->ui_dirty = true;
+            printf("player_format projection=%u stereo=%u source=%u\n",
+                   app->projection_mode, app->stereo_layout,
+                   app->format_source);
         } else if (message.type == NV12_IPC_EOS) {
             app->eos_received = true;
         } else if (message.type == NV12_IPC_STATUS) {
@@ -1685,6 +1703,7 @@ static struct player_ui_state player_state(const struct app *app)
         .stereo_layout = app->stereo_layout,
         .swap_eyes = app->swap_eyes,
         .video_levels = app->video_levels,
+        .format_source = app->format_source,
         .hover = app->ui_hover,
         .preview_visible = app->preview_visible,
         .preview_us = app->preview_us,

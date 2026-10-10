@@ -26,6 +26,14 @@ enum nv12_video_levels {
     NV12_LEVELS_FULL = 2,
 };
 
+/* Where a title's projection and stereo layout come from (INIT, FORMAT). */
+enum nv12_format_source {
+    NV12_FORMAT_SOURCE_DEFAULT = 0, /* nothing known: 180 degrees, SBS */
+    NV12_FORMAT_SOURCE_NAME = 1,    /* tags in the file name, server metadata */
+    NV12_FORMAT_SOURCE_IMAGE = 2,   /* picture analysis */
+    NV12_FORMAT_SOURCE_USER = 3,    /* chosen on the panel */
+};
+
 enum nv12_ipc_type {
     NV12_IPC_INIT = 1,
     NV12_IPC_FRAME = 2,
@@ -46,6 +54,9 @@ enum nv12_ipc_type {
      * eye order or levels on the panel (projection_mode, stereo_layout,
      * swap_eyes, video_levels). */
     NV12_IPC_VIEW = 13,
+    /* Session -> renderer: the format was detected from the first frames
+     * (projection_mode, stereo_layout, format_source). */
+    NV12_IPC_FORMAT = 14,
 };
 
 /* INIT pixel_format: how the decoder buffers are laid out. */
@@ -100,6 +111,8 @@ struct nv12_ipc_message {
     uint32_t coded_height;
     /* INIT and VIEW: enum nv12_video_levels. */
     uint32_t video_levels;
+    /* INIT and FORMAT: enum nv12_format_source. */
+    uint32_t format_source;
 };
 
 #endif

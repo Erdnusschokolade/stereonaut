@@ -15,6 +15,8 @@
 static const char *const projection_names[] = {"flat", "180", "360"};
 static const char *const stereo_names[] = {"mono", "sbs", "tb"};
 static const char *const levels_names[] = {"normal", "deep", "full"};
+static const char *const source_names[] = {"default", "name", "image",
+                                           "user"};
 
 void title_settings_defaults(struct title_settings *settings)
 {
@@ -22,6 +24,7 @@ void title_settings_defaults(struct title_settings *settings)
     settings->stereo_layout = NV12_STEREO_SBS;
     settings->swap_eyes = false;
     settings->video_levels = NV12_LEVELS_NORMAL;
+    settings->format_source = NV12_FORMAT_SOURCE_DEFAULT;
 }
 
 void title_settings_key(const char *input, char *key, size_t key_size)
@@ -129,10 +132,17 @@ int title_settings_load(const char *key, struct title_settings *settings)
     if (json_object_object_get_ex(root, key, &entry) &&
         json_object_is_type(entry, json_type_object)) {
         if (json_object_object_get_ex(entry, "projection", &value) &&
-            json_object_is_type(value, json_type_string))
+            json_object_is_type(value, json_type_string)) {
             settings->projection_mode = lookup(
                 projection_names, 3, json_object_get_string(value),
                 settings->projection_mode);
+            settings->format_source = NV12_FORMAT_SOURCE_USER;
+        }
+        if (json_object_object_get_ex(entry, "format_source", &value) &&
+            json_object_is_type(value, json_type_string))
+            settings->format_source = lookup(
+                source_names, 4, json_object_get_string(value),
+                settings->format_source);
         if (json_object_object_get_ex(entry, "stereo", &value) &&
             json_object_is_type(value, json_type_string))
             settings->stereo_layout = lookup(
@@ -156,7 +166,8 @@ int title_settings_save(const char *key, const struct title_settings *settings)
 {
     if (settings->projection_mode > NV12_PROJECTION_EQUIRECT_360 ||
         settings->stereo_layout > NV12_STEREO_TB ||
-        settings->video_levels > NV12_LEVELS_FULL)
+        settings->video_levels > NV12_LEVELS_FULL ||
+        settings->format_source > NV12_FORMAT_SOURCE_USER)
         return -1;
     char path[PATH_MAX];
     if (store_path(path, sizeof(path), true) < 0)
@@ -176,6 +187,9 @@ int title_settings_save(const char *key, const struct title_settings *settings)
     json_object_object_add(
         entry, "levels",
         json_object_new_string(levels_names[settings->video_levels]));
+    json_object_object_add(
+        entry, "format_source",
+        json_object_new_string(source_names[settings->format_source]));
     return write_store(path, root);
 }
 

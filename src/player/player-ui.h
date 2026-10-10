@@ -98,6 +98,7 @@ struct player_ui_state {
     uint32_t projection_mode, stereo_layout;
     bool swap_eyes;
     uint32_t video_levels;
+    uint32_t format_source; /* enum nv12_format_source */
     const float *adjust; /* PLAYER_ADJUST_COUNT values */
     bool gaze_debug;
     const char *debug_text; /* line at the bottom of the card, or NULL */

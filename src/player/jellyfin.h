@@ -41,6 +41,10 @@ struct jf_playback {
     char media_source[JF_ID_SIZE];
     char play_session[128];
     bool transcoding;
+    /* For format detection: the source's file name (or its name if the
+     * server hides paths) and Video3DFormat ("" if unset). */
+    char file_name[256];
+    char video_3d_format[32];
 };
 
 /* Playback state reports: the dashboard's "now playing", webhooks on the

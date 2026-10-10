@@ -281,8 +281,17 @@ static void layout_popup(const struct player_ui_state *state,
         add_stepper(layout, state, 1, ROW_CHIP_Y(2),
                     PLAYER_ADJUST_AUTOFOCUS, NULL);
 
+        static const char *const projection_labels[] = {
+            [NV12_FORMAT_SOURCE_DEFAULT] = "Projektion (Standard)",
+            [NV12_FORMAT_SOURCE_NAME] = "Projektion (aus Dateiname)",
+            [NV12_FORMAT_SOURCE_IMAGE] = "Projektion (im Bild erkannt)",
+            [NV12_FORMAT_SOURCE_USER] = "Projektion",
+        };
         add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(0), 0,
-                   "Projektion");
+                   projection_labels[state->format_source <=
+                                             NV12_FORMAT_SOURCE_USER
+                                         ? state->format_source
+                                         : NV12_FORMAT_SOURCE_USER]);
         add_chip_row(layout, 2, 0, 3, PLAYER_UI_PROJECTION, projections,
                      (int)state->projection_mode);
         add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(1), 0,

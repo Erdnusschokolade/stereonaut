@@ -701,6 +701,13 @@ int jf_resolve_playback(const struct jf_config *config, const char *item_id,
                 source_id);
     copy_string(playback->play_session, sizeof(playback->play_session),
                 json_string(root, "PlaySessionId"));
+    const char *file = json_string(source, "Path");
+    if (file && strrchr(file, '/'))
+        file = strrchr(file, '/') + 1;
+    copy_string(playback->file_name, sizeof(playback->file_name),
+                file ? file : json_string(source, "Name"));
+    copy_string(playback->video_3d_format, sizeof(playback->video_3d_format),
+                json_string(source, "Video3DFormat"));
     json_object_put(root);
     return 0;
 }

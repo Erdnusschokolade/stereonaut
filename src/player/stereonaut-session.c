@@ -14,6 +14,7 @@
 #include <linux/dma-buf.h>
 #include <linux/videodev2.h>
 #include <poll.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -34,6 +35,7 @@
 #include "jellyfin.h"
 #include "playback-report.h"
 #include "title-settings.h"
+#include "format-detect.h"
 
 #define MAX_OUTPUT_BUFFERS 16U
 #define MAX_CAPTURE_BUFFERS 32U
@@ -132,6 +134,10 @@ struct playback_options {
     pid_t adopt_renderer_pid;
     /* Seek restart of a Jellyfin title: its start is already reported. */
     bool jellyfin_resumed;
+    /* Seek restart: where the format came from (enum nv12_format_source);
+     * name and trickplay detection already ran. */
+    uint32_t format_source;
+    bool format_source_set;
 };
 
 struct capture_contract {
@@ -336,6 +342,278 @@ static int64_t status_position_us(struct media_pipeline *pipeline,
     return clock == AV_NOPTS_VALUE ? start_us : clock;
 }
 
+/* ---- format detection ------------------------------------------------- */
+
+/* Where projection and stereo layout come from. While nothing is known
+ * (DEFAULT) they are detected: file name tags first, then the server's
+ * trickplay tiles (Jellyfin, waited for before the renderer starts), then
+ * the first decoded frames (NV12 only; TP10 is UBWC-compressed). */
+static uint32_t format_source = NV12_FORMAT_SOURCE_DEFAULT;
+static struct format_guess format_name_guess = {FORMAT_UNKNOWN,
+                                                FORMAT_UNKNOWN};
+static const char *const format_source_names[] = {"default", "name",
+                                                  "image", "user"};
+
+static struct {
+    pthread_mutex_t mutex;
+    pthread_t thread;
+    bool started, done, consumed;
+    char item_id[JF_ID_SIZE];
+    struct format_samples samples;
+} trickplay_detection = {.mutex = PTHREAD_MUTEX_INITIALIZER};
+
+/* Thumbnails at about 20 % and 55 % of the title, eleven per tile. */
+static void *detect_from_trickplay(void *argument)
+{
+    (void)argument;
+    struct format_samples samples = {0};
+    struct jf_trickplay info;
+    if (jf_trickplay_info(&jellyfin_config, trickplay_detection.item_id,
+                          &info) == 0) {
+        int per_tile = info.columns * info.rows;
+        int tiles = (info.count + per_tile - 1) / per_tile;
+        static const double positions[] = {0.2, 0.55};
+        int previous = -1;
+        for (size_t p = 0; p < 2; ++p) {
+            int tile = (int)(info.count * positions[p]) / per_tile;
+            if (tile >= tiles)
+                tile = tiles - 1;
+            if (tile == previous)
+                continue;
+            previous = tile;
+            char *data = NULL;
+            size_t size = 0;
+            if (jf_fetch_trickplay_tile(&jellyfin_config,
+                                        trickplay_detection.item_id, &info,
+                                        tile, &data, &size) < 0)
+                continue;
+            uint8_t *luma = NULL;
+            int width = 0, height = 0;
+            if (format_decode_jpeg_luma((const unsigned char *)data, size,
+                                        &luma, &width, &height) == 0) {
+                for (int k = 0; k < per_tile; k += 9) {
+                    int column = k % info.columns, row = k / info.columns;
+                    if ((column + 1) * info.width > width ||
+                        (row + 1) * info.height > height)
+                        continue;
+                    format_samples_add(
+                        &samples,
+                        luma + (size_t)row * (size_t)info.height *
+                                   (size_t)width +
+                            (size_t)column * (size_t)info.width,
+                        info.width, info.height, width);
+                }
+                free(luma);
+            }
+            free(data);
+        }
+    }
+    pthread_mutex_lock(&trickplay_detection.mutex);
+    trickplay_detection.samples = samples;
+    trickplay_detection.done = true;
+    pthread_mutex_unlock(&trickplay_detection.mutex);
+    return NULL;
+}
+
+static void start_trickplay_detection(const char *item_id)
+{
+    snprintf(trickplay_detection.item_id, sizeof(trickplay_detection.item_id),
+             "%s", item_id);
+    if (pthread_create(&trickplay_detection.thread, NULL,
+                       detect_from_trickplay, NULL) == 0) {
+        pthread_detach(trickplay_detection.thread);
+        trickplay_detection.started = true;
+    }
+}
+
+/* The analysed samples once, if the analysis has finished. */
+static bool take_trickplay_samples(struct format_samples *samples)
+{
+    bool ready = false;
+    pthread_mutex_lock(&trickplay_detection.mutex);
+    if (trickplay_detection.done && !trickplay_detection.consumed) {
+        *samples = trickplay_detection.samples;
+        trickplay_detection.consumed = true;
+        ready = true;
+    }
+    pthread_mutex_unlock(&trickplay_detection.mutex);
+    return ready;
+}
+
+/* Adopts a complete detection result: stored for the title and, once the
+ * renderer runs, sent to it. */
+static void apply_format(struct playback_options *options,
+                         const struct format_guess *guess, uint32_t source,
+                         bool notify_renderer)
+{
+    options->projection_mode = (uint32_t)guess->projection;
+    options->stereo_layout = (uint32_t)guess->stereo;
+    format_source = source;
+    if (!view_state_valid)
+        view_state = (struct title_settings){
+            .swap_eyes = options->swap_eyes,
+            .video_levels = options->video_levels,
+        };
+    view_state.projection_mode = options->projection_mode;
+    view_state.stereo_layout = options->stereo_layout;
+    view_state.format_source = source;
+    view_state_valid = true;
+    if (title_settings_save(title_key, &view_state) < 0)
+        fprintf(stderr, "title settings could not be saved\n");
+    printf("format_detected projection=%u stereo=%u source=%s\n",
+           options->projection_mode, options->stereo_layout,
+           format_source_names[source]);
+    if (notify_renderer) {
+        struct nv12_ipc_message message = {
+            .type = NV12_IPC_FORMAT,
+            .projection_mode = options->projection_mode,
+            .stereo_layout = options->stereo_layout,
+            .format_source = source,
+        };
+        ssize_t written;
+        do {
+            written = send(renderer_fd, &message, sizeof(message),
+                           MSG_NOSIGNAL);
+        } while (written < 0 && errno == EINTR);
+        if (written != (ssize_t)sizeof(message))
+            fail_errno("send renderer format");
+    }
+}
+
+/* Name tags (with the picture shape) or the trickplay analysis, before the
+ * renderer starts. Partial results replace the defaults but keep the
+ * detection running. */
+static void detect_format_before_start(struct playback_options *options,
+                                       uint32_t width, uint32_t height)
+{
+    if (format_source != NV12_FORMAT_SOURCE_DEFAULT)
+        return;
+    struct format_samples none = {0};
+    struct format_guess guess = format_name_guess;
+    if (format_samples_decide(&none, (int)width, (int)height, &guess)) {
+        apply_format(options, &guess, NV12_FORMAT_SOURCE_NAME, false);
+        return;
+    }
+    if (trickplay_detection.started) {
+        /* Started with the stream resolution; usually done by now. */
+        double deadline = monotonic_seconds() + 3.0;
+        struct format_samples samples;
+        while (!take_trickplay_samples(&samples)) {
+            if (monotonic_seconds() > deadline) {
+                printf("format_trickplay pending\n");
+                break;
+            }
+            struct timespec delay = {.tv_sec = 0, .tv_nsec = 20000000};
+            nanosleep(&delay, NULL);
+        }
+        if (trickplay_detection.consumed) {
+            printf("format_trickplay samples=%d\n", samples.count);
+            guess = format_name_guess;
+            if (format_samples_decide(&samples, (int)width, (int)height,
+                                      &guess)) {
+                apply_format(options, &guess, NV12_FORMAT_SOURCE_IMAGE,
+                             false);
+                return;
+            }
+        }
+    }
+    if (guess.projection != FORMAT_UNKNOWN)
+        options->projection_mode = (uint32_t)guess.projection;
+    if (guess.stereo != FORMAT_UNKNOWN)
+        options->stereo_layout = (uint32_t)guess.stereo;
+}
+
+/* Analysis of the first decoded frames: one luma thumbnail per second of
+ * video, read through a CPU mapping of the capture buffer. */
+#define FRAME_DETECTION_TRIES 40U
+#define FRAME_THUMBNAIL_WIDTH 256
+
+static struct {
+    bool active;
+    unsigned tries;
+    int64_t next_pts_us;
+    struct format_samples samples;
+    const uint8_t *mappings[MAX_CAPTURE_BUFFERS];
+} frame_detection;
+
+static bool sample_frame(const struct capture_buffer *buffer, unsigned index,
+                         const struct video_layout *layout)
+{
+    if (!frame_detection.mappings[index]) {
+        void *mapping = mmap(NULL, buffer->length, PROT_READ, MAP_SHARED,
+                             buffer->dma_buf_fd, 0);
+        if (mapping == MAP_FAILED) {
+            printf("format_frames unavailable errno=%d\n", errno);
+            frame_detection.active = false;
+            return false;
+        }
+        frame_detection.mappings[index] = mapping;
+    }
+    uint32_t width = layout->visible_width, height = layout->visible_height;
+    int thumb_w = FRAME_THUMBNAIL_WIDTH;
+    int thumb_h = (int)((uint64_t)thumb_w * height / width);
+    if (thumb_h < 32)
+        thumb_h = 32;
+    if (thumb_h > 512)
+        thumb_h = 512;
+    uint8_t thumbnail[FRAME_THUMBNAIL_WIDTH * 512];
+    struct dma_buf_sync sync = {.flags = DMA_BUF_SYNC_START |
+                                         DMA_BUF_SYNC_READ};
+    fd_ioctl(buffer->dma_buf_fd, DMA_BUF_IOCTL_SYNC, &sync);
+    const uint8_t *luma = frame_detection.mappings[index];
+    for (int y = 0; y < thumb_h; ++y) {
+        size_t row = (size_t)((2U * (uint32_t)y + 1U) * height /
+                              (2U * (uint32_t)thumb_h)) * layout->stride;
+        for (int x = 0; x < thumb_w; ++x)
+            thumbnail[y * thumb_w + x] =
+                luma[row + (2U * (uint32_t)x + 1U) * width /
+                               (2U * (uint32_t)thumb_w)];
+    }
+    sync.flags = DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ;
+    fd_ioctl(buffer->dma_buf_fd, DMA_BUF_IOCTL_SYNC, &sync);
+    return format_samples_add(&frame_detection.samples, thumbnail, thumb_w,
+                              thumb_h, thumb_w);
+}
+
+/* Called for every frame handed to the renderer. */
+static void detect_format_from_frame(struct playback_options *options,
+                                     const struct capture_buffer *buffers,
+                                     unsigned index,
+                                     const struct video_layout *layout,
+                                     int64_t pts_us)
+{
+    if (format_source != NV12_FORMAT_SOURCE_DEFAULT)
+        return;
+    struct format_samples samples;
+    struct format_guess guess;
+    if (take_trickplay_samples(&samples)) { /* finished after the start */
+        printf("format_trickplay samples=%d late=1\n", samples.count);
+        guess = format_name_guess;
+        if (format_samples_decide(&samples, (int)layout->visible_width,
+                                  (int)layout->visible_height, &guess)) {
+            apply_format(options, &guess, NV12_FORMAT_SOURCE_IMAGE, true);
+            return;
+        }
+    }
+    if (!frame_detection.active || pts_us < frame_detection.next_pts_us)
+        return;
+    frame_detection.next_pts_us = pts_us + 1000000;
+    sample_frame(&buffers[index], index, layout);
+    if (++frame_detection.tries >= FRAME_DETECTION_TRIES)
+        frame_detection.active = false;
+    guess = format_name_guess;
+    if (frame_detection.samples.count >= 8 &&
+        format_samples_decide(&frame_detection.samples,
+                              (int)layout->visible_width,
+                              (int)layout->visible_height, &guess)) {
+        frame_detection.active = false;
+        apply_format(options, &guess, NV12_FORMAT_SOURCE_IMAGE, true);
+    } else if (!frame_detection.active) {
+        printf("format_frames undecided samples=%d\n",
+               frame_detection.samples.count);
+    }
+}
+
 static void start_renderer(
     struct capture_buffer buffers[MAX_CAPTURE_BUFFERS], unsigned count,
     const struct video_layout *layout, const struct playback_options *options)
@@ -384,6 +662,7 @@ static void start_renderer(
         .pixel_format = layout->tp10 ? NV12_FORMAT_TP10 : NV12_FORMAT_NV12,
         .coded_width = layout->width,
         .coded_height = layout->coded_height,
+        .format_source = format_source,
     };
     int fds[MAX_CAPTURE_BUFFERS];
     for (unsigned i = 0; i < count; ++i)
@@ -482,11 +761,19 @@ static bool process_renderer_messages(
                 message.stereo_layout > NV12_STEREO_TB ||
                 message.video_levels > NV12_LEVELS_FULL)
                 fail_message("invalid renderer view settings");
+            /* A changed projection or layout is the viewer's choice and
+             * ends the detection; eye order and levels keep its source. */
+            if (message.projection_mode != view_state.projection_mode ||
+                message.stereo_layout != view_state.stereo_layout) {
+                format_source = NV12_FORMAT_SOURCE_USER;
+                frame_detection.active = false;
+            }
             view_state = (struct title_settings){
                 .projection_mode = message.projection_mode,
                 .stereo_layout = message.stereo_layout,
                 .swap_eyes = message.swap_eyes != 0,
                 .video_levels = message.video_levels,
+                .format_source = format_source,
             };
             view_state_valid = true;
             if (title_settings_save(title_key, &view_state) < 0)
@@ -657,6 +944,19 @@ static struct playback_options parse_playback_options(int argc, char **argv)
             else
                 fail_message("invalid --levels value");
             options.levels_set = true;
+        } else if (strcmp(argv[i], "--format-source") == 0) {
+            static const char *const sources[] = {"default", "name", "image",
+                                                  "user"};
+            if (++i >= argc)
+                fail_message("--format-source requires a source name");
+            options.format_source_set = false;
+            for (uint32_t s = 0; s <= NV12_FORMAT_SOURCE_USER; ++s)
+                if (strcmp(argv[i], sources[s]) == 0) {
+                    options.format_source = s;
+                    options.format_source_set = true;
+                }
+            if (!options.format_source_set)
+                fail_message("invalid --format-source value");
         } else if (strcmp(argv[i], "--frames") == 0) {
             if (++i >= argc)
                 fail_message("--frames requires a positive frame count");
@@ -1842,6 +2142,7 @@ int main(int argc, char **argv)
                 " [--projection flat|180|360]"
                 " [--stereo mono|sbs|tb] [--swap-eyes|--no-swap-eyes]"
                 " [--levels normal|deep|full]"
+                " [--format-source default|name|image|user]"
                 " [--frames N]"
                 " [--start-us TIMESTAMP]\n",
                 argv[0]);
@@ -1866,7 +2167,15 @@ int main(int argc, char **argv)
             options.swap_eyes = stored.swap_eyes;
         if (!options.levels_set)
             options.video_levels = stored.video_levels;
+        if (options.format_source_set)
+            format_source = options.format_source;
+        else if (options.projection_set && options.stereo_set)
+            format_source = NV12_FORMAT_SOURCE_USER;
+        else
+            format_source = stored.format_source;
     }
+    bool detect_format = !options.format_source_set &&
+                         format_source == NV12_FORMAT_SOURCE_DEFAULT;
     char pipeline_error[512] = {0};
     struct media_pipeline *pipeline = NULL;
     char input_url[2304];
@@ -1882,6 +2191,16 @@ int main(int argc, char **argv)
         if (resolved < 0)
             return EXIT_SOURCE_FAILED;
         input = input_url;
+        if (detect_format) {
+            format_from_name(jellyfin_playback.file_name, &format_name_guess);
+            format_from_3d_format(jellyfin_playback.video_3d_format,
+                                  &format_name_guess);
+            if (format_name_guess.projection == FORMAT_UNKNOWN ||
+                format_name_guess.stereo == FORMAT_UNKNOWN)
+                start_trickplay_detection(jellyfin_playback.item_id);
+        }
+    } else if (detect_format) {
+        format_from_name(argv[1], &format_name_guess);
     }
     if (media_pipeline_open(&pipeline, input, options.start_us, true, true,
                             pipeline_error, sizeof(pipeline_error)) < 0) {
@@ -2154,6 +2473,22 @@ int main(int argc, char **argv)
                                                   &capture_contract, &layout,
                                                   expected_width,
                                                   expected_height);
+                    detect_format_before_start(&options,
+                                               layout.visible_width,
+                                               layout.visible_height);
+                    if (!view_state_valid) {
+                        view_state = (struct title_settings){
+                            .projection_mode = options.projection_mode,
+                            .stereo_layout = options.stereo_layout,
+                            .swap_eyes = options.swap_eyes,
+                            .video_levels = options.video_levels,
+                            .format_source = format_source,
+                        };
+                        view_state_valid = true;
+                    }
+                    frame_detection.active =
+                        format_source == NV12_FORMAT_SOURCE_DEFAULT &&
+                        !layout.tp10;
                     start_renderer(captures, capture_count, &layout,
                                    &options);
                     type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
@@ -2385,6 +2720,9 @@ int main(int argc, char **argv)
                         queue_capture(dequeued.index,
                                       captures[dequeued.index].length);
                     } else {
+                        detect_format_from_frame(&options, captures,
+                                                 dequeued.index, &layout,
+                                                 frame_pts_us);
                         send_renderer_message(NV12_IPC_FRAME, dequeued.index,
                                               frame_index);
                         renderer_outstanding[dequeued.index] = true;
@@ -2553,7 +2891,7 @@ int main(int argc, char **argv)
             snprintf(renderer_text, sizeof(renderer_text), "%d,%ld",
                      renderer_fd, (long)renderer_pid);
         }
-        char *restart_argv[20];
+        char *restart_argv[24];
         size_t restart_argc = 0;
         restart_argv[restart_argc++] = argv[0];
         restart_argv[restart_argc++] = argv[1];
@@ -2567,6 +2905,9 @@ int main(int argc, char **argv)
         restart_argv[restart_argc++] = (char *)levels;
         restart_argv[restart_argc++] = "--start-us";
         restart_argv[restart_argc++] = start_text;
+        restart_argv[restart_argc++] = "--format-source";
+        restart_argv[restart_argc++] =
+            (char *)format_source_names[format_source];
         if (panel_state.valid) {
             restart_argv[restart_argc++] = "--panel";
             restart_argv[restart_argc++] = panel_text;

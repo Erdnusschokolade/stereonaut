@@ -10,7 +10,7 @@ mkdir -p "$build_dir"
 
 cc -std=c11 -O2 -Wall -Wextra -Werror \
   $(pkg-config --cflags libavformat libavcodec libavutil libswresample alsa \
-                       libcurl json-c) \
+                       libcurl json-c libjpeg) \
   -I"$project_dir/tools/openxr-playback" \
   -o "$build_dir/stereonaut-session" \
   "$script_dir/stereonaut-session.c" \
@@ -21,9 +21,10 @@ cc -std=c11 -O2 -Wall -Wextra -Werror \
   "$script_dir/jellyfin.c" \
   "$script_dir/playback-report.c" \
   "$script_dir/title-settings.c" \
+  "$script_dir/format-detect.c" \
   $(pkg-config --libs libavformat libavcodec libavutil libswresample alsa \
-                libcurl json-c) \
-  -lvulkan -pthread
+                libcurl json-c libjpeg) \
+  -lvulkan -lm -pthread
 
 # XR host: video renderer, media browser and Jellyfin client in one process.
 cc -std=c11 -O2 -Wall -Wextra -Werror \

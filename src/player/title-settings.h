@@ -15,11 +15,15 @@ struct title_settings {
     uint32_t stereo_layout;   /* enum nv12_stereo_layout */
     bool swap_eyes;
     uint32_t video_levels;    /* enum nv12_video_levels */
+    /* enum nv12_format_source of projection and stereo layout; entries
+     * written before detection existed count as the viewer's choice. */
+    uint32_t format_source;
 };
 
 #define TITLE_KEY_SIZE 4200
 
-/* Default for titles without a stored entry: 180 degrees, side by side. */
+/* Default for titles without a stored entry: 180 degrees, side by side,
+ * format source DEFAULT (to be detected). */
 void title_settings_defaults(struct title_settings *settings);
 
 /* Stable key for "jf:item:ID[:FOLDER]" specs, URLs and file paths. */
