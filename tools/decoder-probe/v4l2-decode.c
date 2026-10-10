@@ -91,12 +91,12 @@ static unsigned packets(const uint8_t *data,size_t size,struct packet *p) {
 }
 int main(int argc,char **argv) {
     setvbuf(stdout,NULL,_IOLBF,0);
-    if(argc!=4){fprintf(stderr,"usage: v4l2-decode INPUT {auto|NV12|Q10C|P010|after-NV12|after-P010} DUMP_FIRST_ALLOCATION\n");return 2;}
+    if(argc!=4){fprintf(stderr,"usage: v4l2-decode INPUT {auto|NV12|Q10C|P010|after-FOURCC} DUMP_FIRST_ALLOCATION\n");return 2;}
     uint32_t preferred=0,after=0;
     /* after-*: keep the driver's choice until the headers are parsed, then
      * request the format (the driver knows the bit depth only from then). */
-    if(!strcmp(argv[2],"after-NV12"))after=V4L2_PIX_FMT_NV12;
-    else if(!strcmp(argv[2],"after-P010"))after=V4L2_PIX_FMT_P010;
+    if(!strncmp(argv[2],"after-",6)&&strlen(argv[2])==10)
+        after=v4l2_fourcc(argv[2][6],argv[2][7],argv[2][8],argv[2][9]);
     else if(!strcmp(argv[2],"NV12"))preferred=V4L2_PIX_FMT_NV12;
     else if(!strcmp(argv[2],"Q10C"))preferred=v4l2_fourcc('Q','1','0','C');
     else if(!strcmp(argv[2],"P010"))preferred=V4L2_PIX_FMT_P010;
