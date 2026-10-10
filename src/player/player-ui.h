@@ -53,6 +53,7 @@ enum player_ui_tab {
     PLAYER_UI_TAB_VIEW,
     PLAYER_UI_TAB_POSITION,
     PLAYER_UI_TAB_PICTURE,
+    PLAYER_UI_TAB_INFO,     /* description from Jellyfin, read only */
     PLAYER_UI_TAB_COUNT,
 };
 

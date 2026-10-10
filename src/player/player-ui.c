@@ -242,7 +242,7 @@ static void layout_popup(const struct player_ui_state *state,
 {
     layout->count = 0;
     static const char *const tabs[PLAYER_UI_TAB_COUNT] = {
-        "Ansicht", "Position", "Bild",
+        "Ansicht", "Position", "Bild", "Info",
     };
     for (int i = 0; i < PLAYER_UI_TAB_COUNT; ++i)
         add_chip(layout, PLAYER_UI_TAB + i,
@@ -323,7 +323,7 @@ static void layout_popup(const struct player_ui_state *state,
                  COLUMN_W, "Zurücksetzen", false);
         add_widget(layout, WIDGET_HINT, COLUMN_X(0), STEPPER_Y(3) - 4, 0,
                    "Neigung gilt für alle Titel, alles andere je Titel.");
-    } else {
+    } else if (state->popup_tab == PLAYER_UI_TAB_PICTURE) {
         static const char *const levels[3] = {"Norm", "Tief", "Voll"};
         add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(0), 0,
                    "Schwarzwert");
@@ -386,6 +386,57 @@ static void draw_chip(struct player_ui *ui, struct ui_canvas *canvas, int x,
                  y + 8, width - 16, UI_ALIGN_CENTER, color_text, label);
 }
 
+/* Information tab: the description across two columns, facts in the
+ * third. */
+static void draw_info(struct player_ui *ui, struct ui_canvas *canvas,
+                      const struct jf_details *details)
+{
+    const int left = COLUMN_X(0), top = ROW_LABEL_Y(0);
+    const int text_w = COLUMN_X(2) - 44 - left;
+    if (!details) {
+        ui_draw_text_wrapped(canvas, ui->font, 24, left, top, text_w, 32, 3,
+                             UI_ALIGN_LEFT, color_dim,
+                             "Keine Informationen – nur Jellyfin-Titel haben "
+                             "eine Beschreibung.");
+        return;
+    }
+    ui_draw_text(canvas, ui->font, 22, left, top, 0, UI_ALIGN_LEFT,
+                 color_dim, "Beschreibung");
+    ui_draw_text_wrapped(canvas, ui->font, 23, left, top + 34, text_w, 31, 6,
+                         UI_ALIGN_LEFT,
+                         details->overview[0] ? color_text : color_dim,
+                         details->overview[0] ? details->overview
+                                              : "Keine Beschreibung vorhanden.");
+    char year[16] = "", rating[16] = "";
+    if (details->year > 0)
+        snprintf(year, sizeof(year), "%d", details->year);
+    if (details->community_rating > 0.0f)
+        snprintf(rating, sizeof(rating), "%.1f", details->community_rating);
+    const struct {
+        const char *label, *value;
+    } rows[] = {
+        {"Jahr", year},          {"Bewertung", rating},
+        {"Studio", details->studios}, {"Mitwirkende", details->people},
+        {"Genres", details->genres},  {"Tags", details->tags},
+    };
+    const int x = COLUMN_X(2), label_w = 150, bottom = POPUP_Y + POPUP_H - 20;
+    int y = top;
+    for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); ++i) {
+        if (!rows[i].value[0])
+            continue;
+        if (y + 30 > bottom)
+            break;
+        ui_draw_text(canvas, ui->font, 22, x, y + 2, label_w, UI_ALIGN_LEFT,
+                     color_dim, rows[i].label);
+        int lines = (bottom - y) / 30 >= 2 ? 2 : 1;
+        y += 30 * ui_draw_text_wrapped(canvas, ui->font, 23, x + label_w, y,
+                                       COLUMN_W - label_w, 30, lines,
+                                       UI_ALIGN_LEFT, color_text,
+                                       rows[i].value) +
+             8;
+    }
+}
+
 static void draw_popup(struct player_ui *ui, struct ui_canvas *canvas,
                        const struct player_ui_state *state)
 {
@@ -397,9 +448,12 @@ static void draw_popup(struct player_ui *ui, struct ui_canvas *canvas,
                          color_border);
     ui_fill_rect(canvas, POPUP_X + 20, TAB_Y + CHIP_H + 10, POPUP_W - 40, 2,
                  color_border);
-    for (int column = 1; column < 3; ++column)
+    for (int column = state->popup_tab == PLAYER_UI_TAB_INFO ? 2 : 1;
+         column < 3; ++column)
         ui_fill_rect(canvas, COLUMN_X(column) - 22, TAB_Y + CHIP_H + 26, 2,
                      POPUP_H - CHIP_H - 64, color_border);
+    if (state->popup_tab == PLAYER_UI_TAB_INFO)
+        draw_info(ui, canvas, state->details);
     struct popup_layout layout;
     layout_popup(state, &layout);
     for (int i = 0; i < layout.count; ++i) {
