@@ -222,7 +222,9 @@ static void selected_parent(const char *path, char *directory, size_t size)
         /* jf:item:<id>:<folder> returns to the folder it was chosen in;
          * titles from the start page ("continue watching") have none. */
         const char *folder = strchr(path + 8, ':');
-        if (folder && folder[1])
+        if (folder && folder[1] == '?') /* search results */
+            snprintf(directory, size, "jf:search:%s", folder + 2);
+        else if (folder && folder[1])
             snprintf(directory, size, "jf:view:%s", folder + 1);
         else
             snprintf(directory, size, "root:");

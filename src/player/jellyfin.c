@@ -633,6 +633,43 @@ int jf_list_filter_values(const struct jf_config *config,
     return result;
 }
 
+int jf_search(const struct jf_config *config, const char *query,
+              struct jf_item **items, size_t *count, char *error,
+              size_t error_size)
+{
+    /* Percent-encode everything but unreserved characters (UTF-8 bytes
+     * included). */
+    char encoded[3 * 96 + 1];
+    size_t used = 0;
+    for (const unsigned char *c = (const unsigned char *)query;
+         *c && used + 4 < sizeof(encoded); ++c) {
+        if ((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') ||
+            (*c >= '0' && *c <= '9') || *c == '-' || *c == '.' ||
+            *c == '_' || *c == '~')
+            encoded[used++] = (char)*c;
+        else
+            used += (size_t)snprintf(encoded + used, sizeof(encoded) - used,
+                                     "%%%02X", *c);
+    }
+    encoded[used] = '\0';
+    char path[512];
+    snprintf(path, sizeof(path),
+             "/Items?userId=%s&searchTerm=%s&Recursive=true&"
+             "IncludeItemTypes=Movie,Video,Episode&Limit=200&"
+             "Fields=MediaStreams&EnableTotalRecordCount=false",
+             config->user_id, encoded);
+    json_object *root = NULL;
+    int result = json_call(config, "GET", path, NULL, &root, error,
+                           error_size);
+    if (result < 0)
+        return result;
+    result = collect_items(root, false, items, count);
+    json_object_put(root);
+    if (result < 0)
+        set_error(error, error_size, "Nicht genug Speicher");
+    return result;
+}
+
 int jf_list_resume(const struct jf_config *config, struct jf_item **items,
                    size_t *count, char *error, size_t error_size)
 {

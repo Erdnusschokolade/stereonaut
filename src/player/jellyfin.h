@@ -137,6 +137,10 @@ int jf_list_filter_values(const struct jf_config *config,
                           const char *parent_id, enum jf_filter filter,
                           struct jf_item **items, size_t *count,
                           char *error, size_t error_size);
+/* Videos of all libraries whose name contains `query`. */
+int jf_search(const struct jf_config *config, const char *query,
+              struct jf_item **items, size_t *count, char *error,
+              size_t error_size);
 /* Partly watched videos of all libraries, most recent first ("continue
  * watching"); a short timeout, the start page waits for it. */
 int jf_list_resume(const struct jf_config *config, struct jf_item **items,

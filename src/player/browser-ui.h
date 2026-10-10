@@ -42,6 +42,8 @@ struct browser_ui {
     bool local_sort_descending;
     bool sort_menu_open;
     bool filter_menu_open;
+    bool keyboard_open;   /* on-screen keyboard of the search */
+    char query[64];       /* search text (UTF-8) */
     size_t page;
     size_t selected_page; /* page of the last started title */
     char selected_title[256]; /* name of the last started title */

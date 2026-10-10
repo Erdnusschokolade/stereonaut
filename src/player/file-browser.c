@@ -460,8 +460,16 @@ static struct file_browser_listing read_jellyfin(const char *request,
         if (filter_values && filter == JF_FILTER_NONE)
             filter_values = false;
     }
+    /* "jf:search:QUERY": titles of all libraries matching QUERY. */
+    const char *query = strncmp(request, "jf:search:", 10) == 0
+                            ? request + 10
+                            : NULL;
     int result;
-    if (!folder_id) {
+    if (query) {
+        snprintf(title, sizeof(title), "Suche / %s", query);
+        result = jf_search(&config, query, &items, &count, error,
+                           sizeof(error));
+    } else if (!folder_id) {
         result = jf_list_views(&config, &items, &count, error, sizeof(error));
     } else {
         struct jf_item *views = NULL;
@@ -533,9 +541,13 @@ static struct file_browser_listing read_jellyfin(const char *request,
         if (add_filter_values(&listing, items, count, folder_id, filter) < 0)
             goto allocation_failure;
     } else {
-        /* Titles remember the filtered folder to come back to. */
-        char back[2 * JF_ID_SIZE + 16];
-        snprintf(back, sizeof(back), "%s", folder_id ? folder_id : "");
+        /* Titles remember the filtered folder (or "?QUERY" for search
+         * results) to come back to. */
+        char back[2 * JF_ID_SIZE + 128];
+        if (query)
+            snprintf(back, sizeof(back), "?%.120s", query);
+        else
+            snprintf(back, sizeof(back), "%s", folder_id ? folder_id : "");
         if (filter != JF_FILTER_NONE) {
             size_t used = strlen(back);
             snprintf(back + used, sizeof(back) - used, "/%s=%s",
@@ -543,6 +555,9 @@ static struct file_browser_listing read_jellyfin(const char *request,
         }
         if (add_jellyfin_items(&listing, items, count, back) < 0)
             goto allocation_failure;
+        if (query && count == 0)
+            snprintf(listing.error, sizeof(listing.error),
+                     "Keine Treffer für „%.120s“", query);
     }
     free(items);
     return listing;

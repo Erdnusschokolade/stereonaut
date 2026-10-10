@@ -74,6 +74,26 @@
 #define FILTER_MENU_Y (FILTER_Y + FILTER_H + 8)
 #define FILTER_MENU_H (4 * MENU_ITEM_H + 16)
 
+/* On-screen keyboard of the search over the grid: four rows of eleven
+ * keys and a row of actions. */
+#define KB_W 1120
+#define KB_X (CENTER_X + (CENTER_W - KB_W) / 2)
+#define KB_Y 180
+#define KEY_W 88
+#define KEY_H 66
+#define KEY_GAP 10
+#define KEY_TOP (KB_Y + 120)
+#define KB_H (120 + 5 * (KEY_H + KEY_GAP) + 16)
+#define KEY_ROWS 4
+#define KEY_COLUMNS 11
+
+static const char *const keyboard_keys[KEY_ROWS][KEY_COLUMNS] = {
+    {"1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "ß"},
+    {"q", "w", "e", "r", "t", "z", "u", "i", "o", "p", "ü"},
+    {"a", "s", "d", "f", "g", "h", "j", "k", "l", "ö", "ä"},
+    {"y", "x", "c", "v", "b", "n", "m", "-", ".", "'", "&"},
+};
+
 /* "Resume or restart" prompt over the grid. */
 #define PROMPT_W 680
 #define PROMPT_H 300
@@ -107,10 +127,37 @@ enum {
     ID_FILTER = 83,
     ID_FILTER_ITEM = 84, /* 84 .. 87 */
     ID_FILTER_AREA = 88, /* hit test only: resolved with the model */
+    ID_KEY = 100,        /* 100 .. 143: keyboard_keys row by row */
+    ID_KEY_SPACE = 144,
+    ID_KEY_BACKSPACE = 145,
+    ID_KEY_CANCEL = 146,
+    ID_KEY_SEARCH = 147,
+    ID_KEYBOARD_AREA = 148, /* hit test only: resolved with the model */
 };
 
 /* What the stateless hit test reports (menus are open or not). */
-enum { HIT_MENU = 1, HIT_PROMPT = 2, HIT_FILTER = 4 };
+enum { HIT_MENU = 1, HIT_PROMPT = 2, HIT_FILTER = 4, HIT_KEYBOARD = 8 };
+
+/* Rectangle of keyboard control `id`; false for other ids. */
+static bool key_rect(int id, int *x, int *y, int *width)
+{
+    *width = KEY_W;
+    if (id >= ID_KEY && id < ID_KEY + KEY_ROWS * KEY_COLUMNS) {
+        int index = id - ID_KEY;
+        *x = KB_X + 26 + (index % KEY_COLUMNS) * (KEY_W + KEY_GAP);
+        *y = KEY_TOP + (index / KEY_COLUMNS) * (KEY_H + KEY_GAP);
+        return true;
+    }
+    static const int widths[4] = {438, 200, 200, 200};
+    if (id < ID_KEY_SPACE || id > ID_KEY_SEARCH)
+        return false;
+    *x = KB_X + 26;
+    for (int i = ID_KEY_SPACE; i < id; ++i)
+        *x += widths[i - ID_KEY_SPACE] + KEY_GAP;
+    *y = KEY_TOP + KEY_ROWS * (KEY_H + KEY_GAP);
+    *width = widths[id - ID_KEY_SPACE];
+    return true;
+}
 
 static const char *const sort_labels[JF_SORT_COUNT] = {
     "Name", "Zufällig", "Community-Bewertung", "Kritikerbewertung",
@@ -191,7 +238,7 @@ static bool has_direction(const struct browser_ui *ui, int sort)
     return local_location(ui) || sort != JF_SORT_RANDOM;
 }
 
-enum { RAIL_START, RAIL_JELLYFIN, RAIL_LOCAL, RAIL_COUNT };
+enum { RAIL_START, RAIL_JELLYFIN, RAIL_LOCAL, RAIL_SEARCH, RAIL_COUNT };
 
 static const struct ui_color color_card = UI_RGBA(17, 18, 22, 240);
 static const struct ui_color color_border = UI_RGBA(255, 255, 255, 18);
@@ -222,6 +269,8 @@ static int slot_entry(const struct browser_ui *ui, int slot)
 
 static int rail_active(const struct browser_ui *ui)
 {
+    if (strncmp(ui->location, "jf:search:", 10) == 0)
+        return RAIL_SEARCH;
     if (strncmp(ui->location, "jf:", 3) == 0)
         return RAIL_JELLYFIN;
     if (!ui->location[0] || strcmp(ui->location, "root:") == 0)
@@ -328,6 +377,7 @@ static void draw_rail(struct browser_ui *ui, struct ui_canvas *canvas,
         {UI_ICON_HOME, "Start"},
         {UI_ICON_SERVER, "Jellyfin"},
         {UI_ICON_DISK, "Lokale Dateien"},
+        {UI_ICON_SEARCH, "Suchen"},
     };
     int active = rail_active(ui);
     for (int i = 0; i < RAIL_COUNT; ++i)
@@ -748,6 +798,52 @@ static void draw_detail(struct browser_ui *ui, struct ui_canvas *canvas)
                              "Trigger drücken zum Abspielen");
 }
 
+static void draw_keyboard(struct browser_ui *ui, struct ui_canvas *canvas,
+                          int hover)
+{
+    ui_fill_round_rect(canvas, CENTER_X, CARD_Y, CENTER_W, CARD_H, 28,
+                       UI_RGBA(0, 0, 0, 150));
+    ui_shadow_round_rect(canvas, KB_X, KB_Y + 8, KB_W, KB_H, 26, 28,
+                         color_shadow);
+    ui_fill_round_rect(canvas, KB_X, KB_Y, KB_W, KB_H, 26,
+                       UI_RGBA(30, 32, 39, 255));
+    ui_stroke_round_rect(canvas, KB_X, KB_Y, KB_W, KB_H, 26, 2,
+                         color_border);
+    /* Text field with the query (or a placeholder) and a caret. */
+    ui_fill_round_rect(canvas, KB_X + 26, KB_Y + 24, KB_W - 52, 72, 20,
+                       color_tile);
+    ui_draw_icon(canvas, UI_ICON_SEARCH, KB_X + 66, KB_Y + 60, 34,
+                 color_dim);
+    char shown[80];
+    snprintf(shown, sizeof(shown), "%s|", ui->query);
+    ui_draw_text(canvas, ui->font, 32, KB_X + 100, KB_Y + 40, KB_W - 160,
+                 UI_ALIGN_LEFT, ui->query[0] ? color_text : color_dim,
+                 ui->query[0] ? shown : "Titel in Jellyfin suchen …");
+    for (int id = ID_KEY; id <= ID_KEY_SEARCH; ++id) {
+        int x, y, width;
+        if (!key_rect(id, &x, &y, &width))
+            continue;
+        bool focused = hover == id;
+        bool primary = id == ID_KEY_SEARCH;
+        ui_fill_round_rect(canvas, x, y, width, KEY_H, 14,
+                           primary ? (focused ? UI_RGBA(90, 180, 255, 255)
+                                              : color_accent)
+                           : focused ? color_tile_hover
+                                     : color_chip);
+        const char *label =
+            id < ID_KEY_SPACE
+                ? keyboard_keys[(id - ID_KEY) / KEY_COLUMNS]
+                               [(id - ID_KEY) % KEY_COLUMNS]
+            : id == ID_KEY_SPACE     ? "Leerzeichen"
+            : id == ID_KEY_BACKSPACE ? "Löschen"
+            : id == ID_KEY_CANCEL    ? "Abbrechen"
+                                     : "Suchen";
+        ui_draw_text(canvas, id < ID_KEY_SPACE ? ui->bold : ui->font, 28,
+                     x + width / 2, y + 14, width - 12, UI_ALIGN_CENTER,
+                     color_text, label);
+    }
+}
+
 static void draw_resume_prompt(struct browser_ui *ui,
                                struct ui_canvas *canvas, int hover)
 {
@@ -850,6 +946,8 @@ void browser_ui_render(struct browser_ui *ui, uint32_t *pixels, bool bgra)
     if (ui->resume_prompt >= 0 &&
         (size_t)ui->resume_prompt < ui->listing.entry_count)
         draw_resume_prompt(ui, &canvas, hover);
+    if (ui->keyboard_open)
+        draw_keyboard(ui, &canvas, hover);
     ui->dirty = false;
 }
 
@@ -861,6 +959,9 @@ void browser_ui_render(struct browser_ui *ui, uint32_t *pixels, bool bgra)
  * when they are closed. */
 static int hit_test(int x, int y, int layers)
 {
+    if ((layers & HIT_KEYBOARD) && x >= KB_X && x < KB_X + KB_W &&
+        y >= KB_Y && y < KB_Y + KB_H)
+        return ID_KEYBOARD_AREA;
     if ((layers & HIT_PROMPT) && x >= PROMPT_X && x < PROMPT_X + PROMPT_W &&
         y >= PROMPT_Y && y < PROMPT_Y + PROMPT_H)
         return ID_PROMPT_AREA;
@@ -907,7 +1008,7 @@ static int hit_test(int x, int y, int layers)
 int browser_ui_hit_test(float u, float v)
 {
     return hit_test((int)(u * BROWSER_UI_WIDTH), (int)(v * BROWSER_UI_HEIGHT),
-                    HIT_MENU | HIT_PROMPT | HIT_FILTER);
+                    HIT_MENU | HIT_PROMPT | HIT_FILTER | HIT_KEYBOARD);
 }
 
 /* Page buttons depend on the page count, which the stateless hit test does
@@ -930,6 +1031,29 @@ static int resolve_page_button(const struct browser_ui *ui, int x)
 void browser_ui_set_pointer(struct browser_ui *ui, bool visible, int x, int y,
                             int hover)
 {
+    if (ui->keyboard_open) {
+        /* Modal: keys only; a click elsewhere closes the keyboard. */
+        int key = -1;
+        for (int id = ID_KEY; hover == ID_KEYBOARD_AREA && id <= ID_KEY_SEARCH;
+             ++id) {
+            int kx, ky, width;
+            if (key_rect(id, &kx, &ky, &width) && x >= kx &&
+                x < kx + width && y >= ky && y < ky + KEY_H)
+                key = id;
+        }
+        hover = key >= 0 ? key
+                         : hover == ID_KEYBOARD_AREA ? ID_KEYBOARD_AREA : -1;
+        if (hover != ui->hover) {
+            ui->hover = hover;
+            ui->dirty = true;
+        }
+        ui->pointer_visible = visible;
+        ui->pointer_x = x;
+        ui->pointer_y = y;
+        return;
+    }
+    if (hover == ID_KEYBOARD_AREA)
+        hover = hit_test(x, y, HIT_MENU | HIT_PROMPT | HIT_FILTER);
     if (ui->resume_prompt >= 0) {
         /* Modal: only its buttons react; any other click closes it. */
         bool on_button = y >= PROMPT_BUTTON_Y &&
@@ -1116,11 +1240,50 @@ static void set_page(struct browser_ui *ui, size_t page)
 void browser_ui_close_menus(struct browser_ui *ui)
 {
     if (ui->sort_menu_open || ui->filter_menu_open ||
-        ui->resume_prompt >= 0) {
+        ui->resume_prompt >= 0 || ui->keyboard_open) {
         ui->sort_menu_open = false;
         ui->filter_menu_open = false;
+        ui->keyboard_open = false;
         ui->resume_prompt = -1;
         ui->dirty = true;
+    }
+}
+
+/* A key of the search keyboard (or a click outside it, which closes it). */
+static void type_key(struct browser_ui *ui, int hover)
+{
+    size_t length = strlen(ui->query);
+    ui->dirty = true;
+    if (hover >= ID_KEY && hover < ID_KEY + KEY_ROWS * KEY_COLUMNS) {
+        const char *key = keyboard_keys[(hover - ID_KEY) / KEY_COLUMNS]
+                                       [(hover - ID_KEY) % KEY_COLUMNS];
+        if (length + strlen(key) < sizeof(ui->query))
+            memcpy(ui->query + length, key, strlen(key) + 1);
+    } else if (hover == ID_KEY_SPACE) {
+        if (length && ui->query[length - 1] != ' ' &&
+            length + 1 < sizeof(ui->query))
+            memcpy(ui->query + length, " ", 2);
+    } else if (hover == ID_KEY_BACKSPACE) {
+        /* Drop one UTF-8 character (continuation bytes are 10xxxxxx). */
+        while (length && (ui->query[length - 1] & 0xC0) == 0x80)
+            --length;
+        if (length)
+            --length;
+        ui->query[length] = '\0';
+    } else if (hover == ID_KEY_SEARCH) {
+        while (length && ui->query[length - 1] == ' ')
+            ui->query[--length] = '\0';
+        if (!length)
+            return;
+        char location[96];
+        snprintf(location, sizeof(location), "jf:search:%s", ui->query);
+        ui->keyboard_open = false;
+        ui->hover = -1;
+        ui->restore_page = 0;
+        request(ui, location);
+    } else if (hover != ID_KEYBOARD_AREA) {
+        ui->keyboard_open = false; /* "Abbrechen" or a click outside */
+        ui->hover = -1;
     }
 }
 
@@ -1140,7 +1303,7 @@ static enum browser_ui_action select_title(struct browser_ui *ui, int index,
 void browser_ui_flip(struct browser_ui *ui, int direction)
 {
     if (ui->sort_menu_open || ui->filter_menu_open ||
-        ui->resume_prompt >= 0)
+        ui->resume_prompt >= 0 || ui->keyboard_open)
         return;
     if (direction < 0 && ui->page > 0)
         set_page(ui, ui->page - 1);
@@ -1152,6 +1315,10 @@ enum browser_ui_action browser_ui_activate(struct browser_ui *ui, char *path,
                                            size_t path_size)
 {
     int hover = ui->hover;
+    if (ui->keyboard_open) {
+        type_key(ui, hover);
+        return BROWSER_UI_NONE;
+    }
     if (ui->resume_prompt >= 0) {
         int index = ui->resume_prompt;
         ui->resume_prompt = -1;
@@ -1240,6 +1407,11 @@ enum browser_ui_action browser_ui_activate(struct browser_ui *ui, char *path,
         request(ui, "root:");
     } else if (hover == ID_RAIL + RAIL_JELLYFIN) {
         request(ui, "jf:");
+    } else if (hover == ID_RAIL + RAIL_SEARCH) {
+        ui->keyboard_open = true;
+        ui->sort_menu_open = ui->filter_menu_open = false;
+        ui->hover = -1;
+        ui->dirty = true;
     } else if (hover == ID_RAIL + RAIL_LOCAL) {
         const char *home = getenv("HOME");
         request(ui, home && home[0] ? home : "/");

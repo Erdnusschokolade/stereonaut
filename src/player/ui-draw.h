@@ -96,6 +96,7 @@ enum ui_icon {
     UI_ICON_ARROW_UP,
     UI_ICON_ARROW_DOWN,
     UI_ICON_CHEVRON_DOWN,
+    UI_ICON_SEARCH,
 };
 /* Icon centred at (cx, cy), fitted into a `size` x `size` square. */
 void ui_draw_icon(struct ui_canvas *canvas, enum ui_icon icon, float cx,

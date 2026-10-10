@@ -299,6 +299,13 @@ int main(int argc, char **argv)
         ui.sort = 4;
         ui.sort_descending = true;
     }
+    if (hover == 150) { /* search keyboard, key "g" focused */
+        ui.keyboard_open = true;
+        snprintf(ui.query, sizeof(ui.query), "genshin imp");
+        px = 464 + 26 + 4 * 98 + 40;
+        py = 180 + 120 + 2 * 76 + 30;
+        hover = 148;
+    }
     if (hover >= 84 && hover <= 87) { /* filter menu, item focused */
         ui.filter_menu_open = true;
         px = 1406 + 190 - 360 + 60;

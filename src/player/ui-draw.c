@@ -623,6 +623,12 @@ void ui_draw_icon(struct ui_canvas *canvas, enum ui_icon icon, float cx,
         icon_arc(canvas, cx, cy, size, 0.5f, 0.92f, 0.32f, pi, 2.0f * pi,
                  stroke * 1.6f, color);
         break;
+    case UI_ICON_SEARCH:
+        icon_arc(canvas, cx, cy, size, 0.42f, 0.42f, 0.26f, 0.0f, 2.0f * pi,
+                 stroke, color);
+        icon_line(canvas, cx, cy, size, 0.62f, 0.62f, 0.86f, 0.86f,
+                  stroke * 1.3f, color);
+        break;
     }
 }
 
