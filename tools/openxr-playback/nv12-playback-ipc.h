@@ -38,6 +38,14 @@ enum nv12_ipc_type {
     NV12_IPC_VIEW = 13,
 };
 
+/* INIT pixel_format: how the decoder buffers are laid out. */
+enum nv12_pixel_format {
+    NV12_FORMAT_NV12 = 0,
+    /* Iris Q10C: TP10 (three 10-bit samples per 32-bit word) with UBWC;
+     * needs the patched Turnip (STEREONAUT_TP10, tools/mesa-tp10). */
+    NV12_FORMAT_TP10 = 1,
+};
+
 enum nv12_player_state {
     NV12_PLAYER_PLAYING = 1,
     NV12_PLAYER_PAUSED = 2,
@@ -76,6 +84,10 @@ struct nv12_ipc_message {
     float panel_x, panel_y, panel_z, panel_yaw;
     uint32_t panel_visible;
     uint32_t panel_valid;
+    /* INIT: enum nv12_pixel_format and the decoder's padded picture size. */
+    uint32_t pixel_format;
+    uint32_t coded_width;
+    uint32_t coded_height;
 };
 
 #endif

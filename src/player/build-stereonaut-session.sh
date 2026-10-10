@@ -45,3 +45,6 @@ glslc -fshader-stage=vert \
 glslc -fshader-stage=frag \
   "$project_dir/tools/openxr-playback/nv12-projection.frag" \
   -o "$build_dir/nv12-projection.frag.spv"
+glslc -fshader-stage=frag \
+  "$project_dir/tools/openxr-playback/tp10-projection.frag" \
+  -o "$build_dir/tp10-projection.frag.spv"

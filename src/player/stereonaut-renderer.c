@@ -34,6 +34,7 @@
 #define VIDEO_BUFFER_COUNT 12U
 #define UBO_STRIDE 256U
 #define DRM_FORMAT_MOD_LINEAR UINT64_C(0)
+#define DRM_FORMAT_MOD_QCOM_COMPRESSED UINT64_C(0x0500000000000001)
 #define UI_WIDTH PLAYER_UI_WIDTH
 #define UI_HEIGHT PLAYER_UI_HEIGHT
 #define UI_BYTES (UI_WIDTH * UI_HEIGHT * 4U)
@@ -57,6 +58,7 @@ struct view_uniform {
     float fov_tangents[4];
     int32_t modes[4];
     float source_info[4];
+    float video_scale[4]; /* TP10: visible / padded size of the planes */
 };
 
 _Static_assert(sizeof(struct view_uniform) <= UBO_STRIDE,
@@ -64,9 +66,13 @@ _Static_assert(sizeof(struct view_uniform) <= UBO_STRIDE,
 
 struct video_buffer {
     int dma_buf_fd;
-    VkImage image;
+    bool tp10;
+    VkImage image;          /* NV12, or the TP10 luma plane */
     VkDeviceMemory memory;
     VkImageView view;
+    VkImage image_uv;       /* TP10 chroma plane */
+    VkDeviceMemory memory_uv;
+    VkImageView view_uv;
     VkSemaphore producer_semaphore;
     VkDescriptorSet descriptor_set;
     bool producer_wait_pending;
@@ -93,10 +99,12 @@ struct app {
     VkRenderPass render_pass;
     VkPipelineLayout pipeline_layout;
     VkPipeline pipeline;
+    VkPipeline pipeline_tp10;
     VkDescriptorSetLayout descriptor_layout;
     VkDescriptorPool descriptor_pool;
     VkSamplerYcbcrConversion conversion;
     VkSampler video_sampler;
+    VkSampler plane_sampler; /* TP10 planes: plain linear sampling */
     struct video_buffer video_buffers[NV12_IPC_MAX_BUFFERS];
     /* Last frame kept on screen while the session restarts after a seek. */
     struct video_buffer held;
@@ -136,6 +144,8 @@ struct app {
     PFN_vkGetImageDrmFormatModifierPropertiesEXT get_modifier_properties;
     VkDeviceSize dma_buf_size;
     uint32_t video_width, video_height, video_stride;
+    uint32_t video_format; /* enum nv12_pixel_format */
+    uint32_t coded_width, coded_height;
     uint32_t projection_mode, stereo_layout;
     bool swap_eyes;
     XrActionSet action_set;
@@ -423,12 +433,23 @@ static void apply_init(struct app *app, const struct nv12_ipc_message *message,
     app->video_stride = message->stride;
     app->dma_buf_size = message->size;
     app->uv_offset = message->uv_offset;
+    app->video_format = message->pixel_format;
+    app->coded_width = message->coded_width;
+    app->coded_height = message->coded_height;
+    need(app->video_format == NV12_FORMAT_NV12 ||
+             (app->video_format == NV12_FORMAT_TP10 &&
+              app->coded_width >= app->video_width &&
+              app->coded_height >= app->video_height &&
+              app->coded_width % 3U == 0 &&
+              app->video_stride == app->coded_width / 3U * 4U),
+         "unsupported video pixel format in IPC contract");
     app->projection_mode = message->projection_mode;
     app->stereo_layout = message->stereo_layout;
     app->swap_eyes = message->swap_eyes != 0;
     need(app->video_width > 0 && app->video_height > 0 &&
              !(app->video_width & 1U) && !(app->video_height & 1U) &&
-             app->video_stride >= app->video_width &&
+             (app->video_format == NV12_FORMAT_TP10 ||
+              app->video_stride >= app->video_width) &&
              app->uv_offset >=
                  (uint64_t)app->video_stride * app->video_height &&
              app->dma_buf_size >= app->uv_offset +
@@ -962,8 +983,115 @@ static void initialize_swapchain(struct app *app)
     printf("openxr_swapchain format=%d dimensions=%ux%u images=%u\n", app->color_format, app->width, app->height, app->image_count);
 }
 
+/* One TP10 plane as a 32-bpp UBWC image: TP10 packs three 10-bit samples
+ * per word, so the plane has the byte geometry (and Turnip's UBWC layout) of
+ * an RGBA8 image a third as wide. The patched Turnip samples such views as
+ * FMT6_TP10_Y (RGBA8) or FMT6_TP10_UV (RGB10A2) when STEREONAUT_TP10 is set
+ * (tools/mesa-tp10). */
+static void import_tp10_plane(struct app *app, struct video_buffer *buffer,
+                              VkFormat format, VkDeviceSize offset,
+                              uint32_t rows, VkImage *image,
+                              VkDeviceMemory *memory, VkImageView *view)
+{
+    const VkSubresourceLayout plane = {
+        .offset = offset, .rowPitch = app->video_stride,
+    };
+    VkImageDrmFormatModifierExplicitCreateInfoEXT modifier = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT,
+        .drmFormatModifier = DRM_FORMAT_MOD_QCOM_COMPRESSED,
+        .drmFormatModifierPlaneCount = 1, .pPlaneLayouts = &plane,
+    };
+    VkExternalMemoryImageCreateInfo external = {
+        .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO,
+        .pNext = &modifier,
+        .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+    };
+    VkImageCreateInfo info = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .pNext = &external,
+        .imageType = VK_IMAGE_TYPE_2D, .format = format,
+        .extent = {app->coded_width / 3U, rows, 1},
+        .mipLevels = 1, .arrayLayers = 1,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT,
+        .usage = VK_IMAGE_USAGE_SAMPLED_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+    };
+    need_vk("vkCreateImage(TP10 plane)",
+            vkCreateImage(app->device, &info, NULL, image));
+    VkImageDrmFormatModifierPropertiesEXT chosen = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_PROPERTIES_EXT,
+    };
+    need_vk("vkGetImageDrmFormatModifierPropertiesEXT(TP10)",
+            app->get_modifier_properties(app->device, *image, &chosen));
+    need(chosen.drmFormatModifier == DRM_FORMAT_MOD_QCOM_COMPRESSED,
+         "Vulkan substituted the TP10 modifier");
+    VkMemoryRequirements requirements;
+    vkGetImageMemoryRequirements(app->device, *image, &requirements);
+    need(requirements.size <= app->dma_buf_size,
+         "TP10 plane layout exceeds the DMA-BUF");
+    VkMemoryFdPropertiesKHR fd_properties = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR,
+    };
+    need_vk("vkGetMemoryFdPropertiesKHR(TP10)",
+            app->get_memory_fd_properties(
+                app->device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+                buffer->dma_buf_fd, &fd_properties));
+    uint32_t bits = requirements.memoryTypeBits & fd_properties.memoryTypeBits;
+    need(bits != 0, "TP10 DMA-BUF memory-type intersection is empty");
+    int imported_fd = dup(buffer->dma_buf_fd);
+    if (imported_fd < 0) { perror("dup TP10 DMA-BUF"); exit(2); }
+    VkImportMemoryFdInfoKHR import = {
+        .sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR,
+        .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+        .fd = imported_fd,
+    };
+    VkMemoryDedicatedAllocateInfo dedicated = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO,
+        .pNext = &import, .image = *image,
+    };
+    VkMemoryAllocateInfo allocation = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .pNext = &dedicated, .allocationSize = app->dma_buf_size,
+        .memoryTypeIndex = memory_type(app->physical, bits, 0),
+    };
+    need_vk("vkAllocateMemory(import TP10)",
+            vkAllocateMemory(app->device, &allocation, NULL, memory));
+    need_vk("vkBindImageMemory(import TP10)",
+            vkBindImageMemory(app->device, *image, *memory, 0));
+    VkImageViewCreateInfo view_info = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .image = *image, .viewType = VK_IMAGE_VIEW_TYPE_2D, .format = format,
+        .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                             .levelCount = 1, .layerCount = 1},
+    };
+    need_vk("vkCreateImageView(TP10)",
+            vkCreateImageView(app->device, &view_info, NULL, view));
+}
+
 static void import_video_buffer(struct app *app, uint32_t i)
 {
+    struct video_buffer *tp10_buffer = &app->video_buffers[i];
+    tp10_buffer->tp10 = app->video_format == NV12_FORMAT_TP10;
+    if (tp10_buffer->tp10) {
+        import_tp10_plane(app, tp10_buffer, VK_FORMAT_R8G8B8A8_UNORM, 0,
+                          app->coded_height, &tp10_buffer->image,
+                          &tp10_buffer->memory, &tp10_buffer->view);
+        import_tp10_plane(app, tp10_buffer,
+                          VK_FORMAT_A2B10G10R10_UNORM_PACK32, app->uv_offset,
+                          (app->coded_height + 1U) / 2U,
+                          &tp10_buffer->image_uv, &tp10_buffer->memory_uv,
+                          &tp10_buffer->view_uv);
+        VkSemaphoreCreateInfo semaphore = {
+            .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
+        };
+        need_vk("vkCreateSemaphore(producer)",
+                vkCreateSemaphore(app->device, &semaphore, NULL,
+                                  &tp10_buffer->producer_semaphore));
+        printf("tp10_import index=%u coded=%ux%u\n", i, app->coded_width,
+               app->coded_height);
+        return;
+    }
     VkSamplerYcbcrConversionInfo conversion_info = {
         .sType = VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_INFO,
         .conversion = app->conversion,
@@ -1141,6 +1269,11 @@ static void create_video_sampler(struct app *app)
     need_vk("vkCreateSampler(NV12)",
             vkCreateSampler(app->device, &sampler, NULL,
                             &app->video_sampler));
+    VkSamplerCreateInfo plane_sampler = sampler;
+    plane_sampler.pNext = NULL;
+    need_vk("vkCreateSampler(TP10)",
+            vkCreateSampler(app->device, &plane_sampler, NULL,
+                            &app->plane_sampler));
 
     printf("nv12_sampler format=%d ycbcr_709=1 range=narrow"
            " chroma_location=%s\n",
@@ -1169,7 +1302,9 @@ static void create_pipeline(struct app *app)
             .renderPass = app->render_pass, .attachmentCount = 1, .pAttachments = &app->image_views[image][eye], .width = app->width, .height = app->height, .layers = 1};
         need_vk("vkCreateFramebuffer", vkCreateFramebuffer(app->device, &fb, NULL, &app->framebuffers[image][eye]));
     }
-    VkDescriptorSetLayoutBinding bindings[2] = {
+    /* Binding 1 is the NV12 frame (immutable YCbCr sampler), 2 and 3 the
+     * TP10 luma and chroma planes; each pipeline uses only its own. */
+    VkDescriptorSetLayoutBinding bindings[4] = {
         {.binding = 0, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
          .descriptorCount = 1,
          .stageFlags = VK_SHADER_STAGE_VERTEX_BIT |
@@ -1177,8 +1312,12 @@ static void create_pipeline(struct app *app)
         {.binding = 1, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
          .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
          .pImmutableSamplers = &app->video_sampler},
+        {.binding = 2, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+         .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT},
+        {.binding = 3, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+         .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT},
     };
-    VkDescriptorSetLayoutCreateInfo layout = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 2, .pBindings = bindings};
+    VkDescriptorSetLayoutCreateInfo layout = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 4, .pBindings = bindings};
     need_vk("vkCreateDescriptorSetLayout", vkCreateDescriptorSetLayout(app->device, &layout, NULL, &app->descriptor_layout));
     VkPipelineLayoutCreateInfo pipeline_layout = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, .setLayoutCount = 1, .pSetLayouts = &app->descriptor_layout};
     need_vk("vkCreatePipelineLayout", vkCreatePipelineLayout(app->device, &pipeline_layout, NULL, &app->pipeline_layout));
@@ -1195,7 +1334,11 @@ static void create_pipeline(struct app *app)
     VkPipelineColorBlendStateCreateInfo blend = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, .attachmentCount = 1, .pAttachments = &blend_attachment};
     VkGraphicsPipelineCreateInfo pipeline = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, .stageCount = 2, .pStages = stages, .pVertexInputState = &vertex, .pInputAssemblyState = &assembly, .pViewportState = &view, .pRasterizationState = &raster, .pMultisampleState = &multisample, .pColorBlendState = &blend, .layout = app->pipeline_layout, .renderPass = app->render_pass};
     need_vk("vkCreateGraphicsPipelines", vkCreateGraphicsPipelines(app->device, VK_NULL_HANDLE, 1, &pipeline, NULL, &app->pipeline));
+    VkShaderModule tp10_frag = shader(app->device, "tp10-projection.frag.spv");
+    stages[1].module = tp10_frag;
+    need_vk("vkCreateGraphicsPipelines(TP10)", vkCreateGraphicsPipelines(app->device, VK_NULL_HANDLE, 1, &pipeline, NULL, &app->pipeline_tp10));
     vkDestroyShaderModule(app->device, vert, NULL); vkDestroyShaderModule(app->device, frag, NULL);
+    vkDestroyShaderModule(app->device, tp10_frag, NULL);
 }
 
 static struct player_ui_state player_state(const struct app *app)
@@ -1412,8 +1555,9 @@ static void upload_ui(struct app *app)
 }
 
 static void write_video_descriptor(struct app *app, VkDescriptorSet set,
-                                   VkImageView view)
+                                   const struct video_buffer *buffer)
 {
+    VkImageView view = buffer->view;
     VkDescriptorBufferInfo descriptor_buffer = {
         .buffer = app->uniform_buffer,
         .offset = 0,
@@ -1424,7 +1568,13 @@ static void write_video_descriptor(struct app *app, VkDescriptorSet set,
         .imageView = view,
         .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
     };
-    VkWriteDescriptorSet writes[2] = {
+    VkDescriptorImageInfo planes[2] = {
+        {.sampler = app->plane_sampler, .imageView = buffer->view,
+         .imageLayout = VK_IMAGE_LAYOUT_GENERAL},
+        {.sampler = app->plane_sampler, .imageView = buffer->view_uv,
+         .imageLayout = VK_IMAGE_LAYOUT_GENERAL},
+    };
+    VkWriteDescriptorSet writes[3] = {
         {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
          .dstSet = set, .dstBinding = 0, .descriptorCount = 1,
          .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
@@ -1433,8 +1583,17 @@ static void write_video_descriptor(struct app *app, VkDescriptorSet set,
          .dstSet = set, .dstBinding = 1, .descriptorCount = 1,
          .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
          .pImageInfo = &descriptor_image},
+        {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+         .dstSet = set, .dstBinding = 2, .descriptorCount = 2,
+         .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+         .pImageInfo = planes},
     };
-    vkUpdateDescriptorSets(app->device, 2, writes, 0, NULL);
+    if (buffer->tp10) {
+        vkUpdateDescriptorSets(app->device, 1, &writes[0], 0, NULL);
+        vkUpdateDescriptorSets(app->device, 1, &writes[2], 0, NULL);
+    } else {
+        vkUpdateDescriptorSets(app->device, 2, writes, 0, NULL);
+    }
 }
 
 static void create_render_resources(struct app *app)
@@ -1469,7 +1628,7 @@ static void create_render_resources(struct app *app)
         {.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC,
          .descriptorCount = set_count},
         {.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-         .descriptorCount = set_count},
+         .descriptorCount = 3U * set_count},
     };
     VkDescriptorPoolCreateInfo descriptor_pool = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
         .maxSets = set_count, .poolSizeCount = 2,
@@ -1502,6 +1661,12 @@ static void destroy_video_buffer(struct app *app, struct video_buffer *buffer)
         vkDestroyImage(app->device, buffer->image, NULL);
     if (buffer->memory)
         vkFreeMemory(app->device, buffer->memory, NULL);
+    if (buffer->view_uv)
+        vkDestroyImageView(app->device, buffer->view_uv, NULL);
+    if (buffer->image_uv)
+        vkDestroyImage(app->device, buffer->image_uv, NULL);
+    if (buffer->memory_uv)
+        vkFreeMemory(app->device, buffer->memory_uv, NULL);
     if (buffer->dma_buf_fd >= 0)
         close(buffer->dma_buf_fd);
     *buffer = (struct video_buffer){.dma_buf_fd = -1, .descriptor_set = set};
@@ -1552,7 +1717,7 @@ static void reinitialize_video(struct app *app,
     for (uint32_t i = 0; i < app->video_buffer_count; ++i) {
         import_video_buffer(app, i);
         write_video_descriptor(app, app->video_buffers[i].descriptor_set,
-                               app->video_buffers[i].view);
+                               &app->video_buffers[i]);
     }
     app->current_video_index = -1;
     app->eos_received = false;
@@ -2639,6 +2804,13 @@ static void render_frame(struct app *app)
                 app->video_width ? 1.0f / (float)app->video_width : 0.0f,
                 app->video_height ? 1.0f / (float)app->video_height : 0.0f,
             },
+            .video_scale = {
+                app->coded_width ? (float)app->video_width /
+                                       (float)app->coded_width : 1.0f,
+                app->coded_height ? (float)app->video_height /
+                                        (float)app->coded_height : 1.0f,
+                0.0f, 0.0f,
+            },
         };
         memcpy((uint8_t *)app->uniform_mapping + eye * UBO_STRIDE,
                &uniform, sizeof(uniform));
@@ -2665,10 +2837,14 @@ static void render_frame(struct app *app)
         .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                              .levelCount = 1, .layerCount = 1},
     };
+    VkImageMemoryBarrier video_acquires[2] = {video_acquire, video_acquire};
+    uint32_t video_images = video && video->tp10 ? 2U : 1U;
+    if (video_images == 2U)
+        video_acquires[1].image = video->image_uv;
     if (video)
         vkCmdPipelineBarrier(app->command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
                              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL,
-                             0, NULL, 1, &video_acquire);
+                             0, NULL, video_images, video_acquires);
     for (uint32_t eye = 0; eye < 2; ++eye) {
         VkClearValue clear = {.color = {{0.005f, 0.005f, 0.008f, 1.0f}}};
         VkRenderPassBeginInfo pass = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
@@ -2676,7 +2852,8 @@ static void render_frame(struct app *app)
             .renderArea = {.extent = {app->width, app->height}}, .clearValueCount = 1, .pClearValues = &clear};
         vkCmdBeginRenderPass(app->command, &pass, VK_SUBPASS_CONTENTS_INLINE);
         if (video) {
-            vkCmdBindPipeline(app->command, VK_PIPELINE_BIND_POINT_GRAPHICS, app->pipeline);
+            vkCmdBindPipeline(app->command, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              video->tp10 ? app->pipeline_tp10 : app->pipeline);
             uint32_t offset = eye * UBO_STRIDE;
             vkCmdBindDescriptorSets(app->command, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     app->pipeline_layout, 0, 1,
@@ -2690,10 +2867,13 @@ static void render_frame(struct app *app)
     video_release.dstAccessMask = 0;
     video_release.srcQueueFamilyIndex = app->queue_family;
     video_release.dstQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
+    VkImageMemoryBarrier video_releases[2] = {video_release, video_release};
+    if (video_images == 2U)
+        video_releases[1].image = video->image_uv;
     if (video)
         vkCmdPipelineBarrier(app->command, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                              VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, NULL,
-                             0, NULL, 1, &video_release);
+                             0, NULL, video_images, video_releases);
     need_vk("vkEndCommandBuffer(render)", vkEndCommandBuffer(app->command));
     VkPipelineStageFlags producer_stage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
     VkSubmitInfo submit = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,

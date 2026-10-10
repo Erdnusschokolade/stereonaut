@@ -99,6 +99,7 @@ struct vulkan_context {
 };
 
 struct video_layout {
+    bool tp10;               /* Q10C instead of NV12 */
     uint32_t width;
     uint32_t coded_height;
     uint32_t visible_width;
@@ -367,6 +368,9 @@ static void start_renderer(
         .panel_yaw = options->panel.yaw,
         .panel_visible = options->panel.visible,
         .panel_valid = options->panel.valid,
+        .pixel_format = layout->tp10 ? NV12_FORMAT_TP10 : NV12_FORMAT_NV12,
+        .coded_width = layout->width,
+        .coded_height = layout->coded_height,
     };
     int fds[MAX_CAPTURE_BUFFERS];
     for (unsigned i = 0; i < count; ++i)
@@ -1554,19 +1558,57 @@ static void query_capture_contract(struct capture_contract *contract)
     contract->compose = selection.r;
 }
 
+static uint64_t align_up(uint64_t value, uint64_t alignment)
+{
+    return (value + alignment - 1U) / alignment * alignment;
+}
+
+/* Q10C: Iris writes TP10 with UBWC as Y metadata, Y data, UV metadata and
+ * UV data, each 4 KiB aligned (Venus/Iris msm_media_info layout). The
+ * renderer imports both planes through the patched Turnip; validated bit
+ * exact from 1920x1080 to 8192x4096 (docs/main10-linear-output.md). */
+static void validate_tp10_contract(const struct capture_contract *contract,
+                                   struct video_layout *layout)
+{
+    uint32_t width = layout->width, height = layout->coded_height;
+    uint64_t meta_pitch = align_up((width + 47U) / 48U, 64U);
+    uint64_t y_meta = align_up(meta_pitch * align_up((height + 3U) / 4U, 16U),
+                               4096U);
+    uint64_t y_data = align_up((uint64_t)layout->stride * align_up(height, 16U),
+                               4096U);
+    uint32_t uv_height = (height + 1U) / 2U;
+    uint64_t uv_meta = align_up(meta_pitch *
+                                    align_up((uv_height + 3U) / 4U, 16U),
+                                4096U);
+    uint64_t uv_data = align_up((uint64_t)layout->stride *
+                                    align_up(uv_height, 16U),
+                                4096U);
+    layout->uv_offset = y_meta + y_data;
+    uint64_t required = layout->uv_offset + uv_meta + uv_data;
+    if (width % 3U || layout->stride != width / 3U * 4U ||
+        required > contract->sizeimage ||
+        contract->sizeimage - required >= 65536U)
+        fail_message("Q10C sizeimage does not match the TP10 UBWC layout");
+    printf("tp10_contract modifier=QCOM_COMPRESSED coded=%ux%u stride=%u"
+           " uv_offset=%" PRIu64 " required_bytes=%" PRIu64 "\n",
+           width, height, layout->stride, layout->uv_offset, required);
+}
+
 static void validate_capture_contract(const struct capture_contract *contract,
                                       struct video_layout *layout,
                                       uint32_t expected_width,
                                       uint32_t expected_visible_height)
 {
-    if (contract->pixel_format != V4L2_PIX_FMT_NV12 ||
+    bool tp10 = contract->pixel_format == v4l2_fourcc('Q', '1', '0', 'C');
+    if ((contract->pixel_format != V4L2_PIX_FMT_NV12 && !tp10) ||
         contract->memory_planes != 1)
-        fail_message("Iris did not negotiate one-memory-plane NV12");
+        fail_message("Iris did not negotiate one-memory-plane NV12 or Q10C");
     if (contract->compose.left != 0 || contract->compose.top != 0 ||
         contract->compose.width != expected_width ||
         contract->compose.height != expected_visible_height)
         fail_message("Iris visible rectangle differs from input metadata");
 
+    layout->tp10 = tp10;
     layout->width = contract->coded_width;
     layout->coded_height = contract->coded_height;
     layout->visible_width = contract->compose.width;
@@ -1577,8 +1619,13 @@ static void validate_capture_contract(const struct capture_contract *contract,
      * renderer samples only the visible rectangle. */
     if (layout->width < layout->visible_width || (layout->width & 1U) ||
         layout->coded_height < layout->visible_height ||
-        (layout->coded_height & 1U) || layout->stride < layout->width)
+        (layout->coded_height & 1U) ||
+        (!tp10 && layout->stride < layout->width))
         fail_message("unsupported NV12 dimensions or stride");
+    if (tp10) {
+        validate_tp10_contract(contract, layout);
+        return;
+    }
     layout->uv_offset = (uint64_t)layout->stride * layout->coded_height;
     uint64_t required = layout->uv_offset +
                         (uint64_t)layout->stride * layout->coded_height / 2U;

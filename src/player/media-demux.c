@@ -53,10 +53,18 @@ static int64_t packet_time_us(int64_t value, AVRational time_base)
     return av_rescale_q(value, time_base, AV_TIME_BASE_Q);
 }
 
-/* Iris decodes HEVC Main and the 8-bit 4:2:0 H.264 profiles to NV12. */
+/* Iris decodes HEVC Main and the 8-bit 4:2:0 H.264 profiles to NV12 and
+ * HEVC Main10 to Q10C. */
 static bool is_supported_video(const AVCodecParameters *parameters)
 {
     if (parameters->codec_id == AV_CODEC_ID_HEVC) {
+        /* Main10 arrives as Q10C, which only the patched Turnip can sample;
+         * the launcher sets STEREONAUT_TP10 when that driver is installed. */
+        if (parameters->profile == AV_PROFILE_HEVC_MAIN_10 &&
+            getenv("STEREONAUT_TP10"))
+            return (parameters->format == AV_PIX_FMT_NONE ||
+                     parameters->format == AV_PIX_FMT_YUV420P10LE) &&
+                   parameters->bits_per_raw_sample <= 10;
         if (parameters->profile != AV_PROFILE_HEVC_MAIN)
             return false;
     } else if (parameters->codec_id == AV_CODEC_ID_H264) {

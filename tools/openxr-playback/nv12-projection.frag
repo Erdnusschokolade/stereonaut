@@ -10,6 +10,7 @@ layout(set = 0, binding = 0, std140) uniform ViewUniform {
     vec4 fov_tangents;
     ivec4 modes;       /* projection, stereo, eye, swap-eyes */
     vec4 source_info;  /* width, height, inverse width, inverse height */
+    vec4 video_scale;  /* TP10 only (tp10-projection.frag) */
 } view;
 
 layout(location = 0) in vec2 flat_uv;

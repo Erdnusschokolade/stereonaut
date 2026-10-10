@@ -18,9 +18,11 @@
 #define RESPONSE_LIMIT (48U * 1024U * 1024U)
 #define LIST_LIMIT 5000
 
-/* Direct Play HEVC Main 8 bit and 8-bit 4:2:0 H.264 (Baseline, Main, High) in
- * mkv/mp4; everything else becomes an HLS transcode to HEVC Main 8 bit. */
-static const char DEVICE_PROFILE[] =
+/* Direct Play HEVC Main 8 bit (plus Main10 with the patched Turnip, see
+ * STEREONAUT_TP10) and 8-bit 4:2:0 H.264 (Baseline, Main, High) in mkv/mp4;
+ * everything else becomes an HLS transcode to HEVC. The HEVC profile list
+ * and bit depth are filled in by device_profile(). */
+static const char DEVICE_PROFILE_FORMAT[] =
     "{\"Name\":\"Stereonaut\",\"MaxStreamingBitrate\":200000000,"
     "\"DirectPlayProfiles\":[{\"Type\":\"Video\",\"Container\":\"mkv,mp4\","
     "\"VideoCodec\":\"hevc,h264\",\"AudioCodec\":\"aac,ac3,eac3,mp3,opus\"}],"
@@ -30,9 +32,9 @@ static const char DEVICE_PROFILE[] =
     "\"BreakOnNonKeyFrames\":true}],"
     "\"CodecProfiles\":[{\"Type\":\"Video\",\"Codec\":\"hevc\","
     "\"Conditions\":[{\"Condition\":\"EqualsAny\","
-    "\"Property\":\"VideoProfile\",\"Value\":\"main\",\"IsRequired\":true},"
+    "\"Property\":\"VideoProfile\",\"Value\":\"%s\",\"IsRequired\":true},"
     "{\"Condition\":\"LessThanEqual\",\"Property\":\"VideoBitDepth\","
-    "\"Value\":\"8\",\"IsRequired\":true}]},"
+    "\"Value\":\"%s\",\"IsRequired\":true}]},"
     "{\"Type\":\"Video\",\"Codec\":\"h264\","
     "\"Conditions\":[{\"Condition\":\"EqualsAny\","
     "\"Property\":\"VideoProfile\","
@@ -612,12 +614,19 @@ int jf_resolve_playback(const struct jf_config *config, const char *item_id,
                         size_t error_size)
 {
     memset(playback, 0, sizeof(*playback));
-    char path[256], body[2048];
+    char path[256], body[2304];
     snprintf(path, sizeof(path), "/Items/%s/PlaybackInfo?UserId=%s", item_id,
              config->user_id);
+    bool main10 = getenv("STEREONAUT_TP10") != NULL;
+    char profile[2048];
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-nonliteral"
+    snprintf(profile, sizeof(profile), DEVICE_PROFILE_FORMAT,
+             main10 ? "main|main 10" : "main", main10 ? "10" : "8");
+#pragma GCC diagnostic pop
     snprintf(body, sizeof(body),
              "{\"DeviceProfile\":%s,\"AutoOpenLiveStream\":false}",
-             DEVICE_PROFILE);
+             profile);
     json_object *root = NULL;
     int result = json_call(config, "POST", path, body, &root, error,
                            error_size);
