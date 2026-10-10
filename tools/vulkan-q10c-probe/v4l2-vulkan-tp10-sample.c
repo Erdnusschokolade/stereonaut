@@ -22,23 +22,19 @@
 #include <unistd.h>
 #include <vulkan/vulkan.h>
 
-#define WIDTH 1920U
-#define CODED_HEIGHT 1088U
-#define VISIBLE_HEIGHT 1080U
-#define CHROMA_WIDTH 960U
-#define CHROMA_HEIGHT 544U
-#define Q10C_STRIDE 2560U
-#define Q10C_SIZE UINT64_C(4210688)
-/* TP10 planes as 32-bpp images: width 1920 / 3 words. */
-#define WORDS 640U
-#define SAMPLE_COUNT (1920U * 1080U + 2U * 960U * 540U)
+/* Stream geometry, taken from SOURCE_CHANGE. */
+static uint32_t g_width, g_height;         /* visible */
+static uint32_t g_coded_height, g_stride;  /* CAPTURE format */
+static uint64_t g_size, g_uv_offset;
+static uint32_t g_words;                   /* 32-bit words per TP10 row */
+/* TP10 planes are imported as 32-bpp images of g_words x rows. */
+#define SAMPLE_COUNT (g_width * g_height + 2U * (g_width / 2U) * (g_height / 2U))
 #define SAMPLE_BYTES ((VkDeviceSize)SAMPLE_COUNT * 4U)
-#define UV_PLANE_OFFSET UINT64_C(2805760) /* Y metadata + Y data */
 #define QCOM_COMPRESSED UINT64_C(0x0500000000000001)
 #define Q10C_FOURCC v4l2_fourcc('Q', '1', '0', 'C')
 #define MAX_OUTPUT_BUFFERS 8U
 #define MAX_CAPTURE_BUFFERS 32U
-#define MAX_PACKETS 60U
+#define MAX_PACKETS 64U
 
 struct output_buffer {
     void *mapping;
@@ -55,6 +51,16 @@ struct packet {
 };
 
 static int video_fd = -1;
+
+static uint32_t align_up(uint32_t value, uint32_t alignment)
+{
+    return (value + alignment - 1) / alignment * alignment;
+}
+
+static uint64_t align_up64(uint64_t value, uint64_t alignment)
+{
+    return (value + alignment - 1) / alignment * alignment;
+}
 
 static void fail_errno(const char *what)
 {
@@ -113,7 +119,7 @@ static unsigned split_access_units(const uint8_t *data, size_t size,
         if (prefix) {
             if (((data[i + prefix] >> 1) & 63) == 35) {
                 if (count == MAX_PACKETS)
-                    fail_message("fixture has more than 60 access units");
+                    break;
                 starts[count++] = i;
             }
             i += prefix + 2;
@@ -154,8 +160,8 @@ static uint8_t *read_fixture(const char *path, size_t *size_out,
         fail_errno("close fixture");
 
     *packet_count_out = split_access_units(data, (size_t)length, packets);
-    if (*packet_count_out != MAX_PACKETS)
-        fail_message("fixture must contain exactly 60 access units");
+    if (*packet_count_out < 2)
+        fail_message("fixture must contain at least two access units");
     *size_out = (size_t)length;
     return data;
 }
@@ -248,7 +254,7 @@ static unsigned allocate_capture_buffers(
             .m.planes = &plane,
         };
         must_ioctl(VIDIOC_QUERYBUF, &buffer, "VIDIOC_QUERYBUF CAPTURE");
-        if (buffer.length != 1 || plane.length != Q10C_SIZE)
+        if (buffer.length != 1 || plane.length != g_size)
             fail_message("unexpected CAPTURE allocation layout");
         buffers[i].length = plane.length;
         must_ioctl(VIDIOC_QBUF, &buffer, "VIDIOC_QBUF CAPTURE");
@@ -346,7 +352,7 @@ static struct imported_plane import_plane(
 {
     VkResult result;
     const VkSubresourceLayout layout = {
-        .offset = offset, .size = 0, .rowPitch = Q10C_STRIDE,
+        .offset = offset, .size = 0, .rowPitch = g_stride,
     };
     VkImageDrmFormatModifierExplicitCreateInfoEXT modifier_info = {
         .sType =
@@ -365,7 +371,7 @@ static struct imported_plane import_plane(
         .pNext = &external_info,
         .imageType = VK_IMAGE_TYPE_2D,
         .format = format,
-        .extent = {WORDS, height, 1},
+        .extent = {g_words, height, 1},
         .mipLevels = 1,
         .arrayLayers = 1,
         .samples = VK_SAMPLE_COUNT_1_BIT,
@@ -410,16 +416,16 @@ static struct imported_plane import_plane(
     vkGetImageMemoryRequirements2(device, &requirements_info, &requirements);
     printf("plane=%s offset=%" PRIu64 " extent=%ux%u memory size=%" PRIu64
            " alignment=%" PRIu64 " dedicated_required=%u\n",
-           name, offset, WORDS, height, requirements.memoryRequirements.size,
+           name, offset, g_words, height, requirements.memoryRequirements.size,
            requirements.memoryRequirements.alignment,
            dedicated_requirements.requiresDedicatedAllocation);
     /* Turnip's own RGBA8 UBWC layout must end exactly where the Iris plane
      * ends; anything else means the geometry assumption is wrong. */
-    uint64_t expected_end = offset == 0 ? UV_PLANE_OFFSET : Q10C_SIZE;
+    uint64_t expected_end = offset == 0 ? g_uv_offset : g_size;
     printf("plane=%s layout_end_matches=%u expected_end=%" PRIu64 "\n", name,
            requirements.memoryRequirements.size == expected_end,
            expected_end);
-    if (requirements.memoryRequirements.size > Q10C_SIZE)
+    if (requirements.memoryRequirements.size > g_size)
         fail_message("RGBA8 UBWC plane would exceed the Iris allocation");
 
     VkMemoryFdPropertiesKHR fd_properties = {
@@ -454,7 +460,7 @@ static struct imported_plane import_plane(
     VkMemoryAllocateInfo allocate_info = {
         .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
         .pNext = &dedicated_info,
-        .allocationSize = Q10C_SIZE,
+        .allocationSize = g_size,
         .memoryTypeIndex = type,
     };
     result = vkAllocateMemory(device, &allocate_info, NULL, &plane.memory);
@@ -568,10 +574,11 @@ static void vulkan_sample(int dma_buf_fd, const char *spirv_path,
     vkGetDeviceQueue(device, queue_family, 0, &queue);
 
     struct imported_plane planes[2] = {
-        import_plane(physical, device, dma_buf_fd, 0, CODED_HEIGHT,
+        import_plane(physical, device, dma_buf_fd, 0, g_coded_height,
                      VK_FORMAT_R8G8B8A8_UNORM, "y"),
-        import_plane(physical, device, dma_buf_fd, UV_PLANE_OFFSET,
-                     CHROMA_HEIGHT, VK_FORMAT_A2B10G10R10_UNORM_PACK32, "uv"),
+        import_plane(physical, device, dma_buf_fd, g_uv_offset,
+                     (g_coded_height + 1) / 2,
+                     VK_FORMAT_A2B10G10R10_UNORM_PACK32, "uv"),
     };
     const VkFormat view_formats[2] = {VK_FORMAT_R8G8B8A8_UNORM,
                                       VK_FORMAT_A2B10G10R10_UNORM_PACK32};
@@ -653,10 +660,13 @@ static void vulkan_sample(int dma_buf_fd, const char *spirv_path,
                                          &set_layout);
     if (result != VK_SUCCESS)
         fail_vk("vkCreateDescriptorSetLayout", result);
+    VkPushConstantRange push_range = {VK_SHADER_STAGE_COMPUTE_BIT, 0, 8};
     VkPipelineLayoutCreateInfo pipeline_layout_info = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
         .setLayoutCount = 1,
         .pSetLayouts = &set_layout,
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &push_range,
     };
     VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
     result = vkCreatePipelineLayout(device, &pipeline_layout_info, NULL,
@@ -780,7 +790,10 @@ static void vulkan_sample(int dma_buf_fd, const char *spirv_path,
     vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
     vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
                             pipeline_layout, 0, 1, &set, 0, NULL);
-    vkCmdDispatch(command_buffer, WIDTH / 16, (VISIBLE_HEIGHT + 15) / 16, 1);
+    int32_t size[2] = {(int32_t)g_width, (int32_t)g_height};
+    vkCmdPushConstants(command_buffer, pipeline_layout,
+                       VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(size), size);
+    vkCmdDispatch(command_buffer, (g_width + 15) / 16, (g_height + 15) / 16, 1);
     VkBufferMemoryBarrier host_barrier = {
         .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER,
         .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
@@ -843,11 +856,16 @@ static void vulkan_sample(int dma_buf_fd, const char *spirv_path,
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
-    if (argc != 4) {
-        fprintf(stderr, "usage: %s MAIN10_FIXTURE.hevc tp10-sample.spv"
-                " samples.bin\n", argv[0]);
+    if (argc != 6) {
+        fprintf(stderr, "usage: %s MAIN10_FIXTURE.hevc WIDTH HEIGHT"
+                " tp10-sample.spv samples.bin\n", argv[0]);
         return 2;
     }
+    g_width = (uint32_t)strtoul(argv[2], NULL, 10);
+    g_height = (uint32_t)strtoul(argv[3], NULL, 10);
+    if (!g_width || !g_height || g_width > 8192 || g_height > 8192 ||
+        (g_width & 1) || (g_height & 1))
+        fail_message("invalid WIDTH/HEIGHT");
 
     size_t fixture_size = 0;
     struct packet packets[MAX_PACKETS];
@@ -874,12 +892,12 @@ int main(int argc, char **argv)
     struct v4l2_format output_format = {
         .type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
     };
-    output_format.fmt.pix_mp.width = WIDTH;
-    output_format.fmt.pix_mp.height = VISIBLE_HEIGHT;
+    output_format.fmt.pix_mp.width = g_width;
+    output_format.fmt.pix_mp.height = g_height;
     output_format.fmt.pix_mp.pixelformat = V4L2_PIX_FMT_HEVC;
     output_format.fmt.pix_mp.field = V4L2_FIELD_NONE;
     output_format.fmt.pix_mp.num_planes = 1;
-    output_format.fmt.pix_mp.plane_fmt[0].sizeimage = 1024 * 1024;
+    output_format.fmt.pix_mp.plane_fmt[0].sizeimage = 8 * 1024 * 1024;
     must_ioctl(VIDIOC_S_FMT, &output_format, "VIDIOC_S_FMT OUTPUT HEVC");
     if (output_format.fmt.pix_mp.pixelformat != V4L2_PIX_FMT_HEVC ||
         output_format.fmt.pix_mp.num_planes != 1)
@@ -888,8 +906,8 @@ int main(int argc, char **argv)
     struct v4l2_format capture_format = {
         .type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE,
     };
-    capture_format.fmt.pix_mp.width = WIDTH;
-    capture_format.fmt.pix_mp.height = VISIBLE_HEIGHT;
+    capture_format.fmt.pix_mp.width = g_width;
+    capture_format.fmt.pix_mp.height = g_height;
     capture_format.fmt.pix_mp.pixelformat = Q10C_FOURCC;
     capture_format.fmt.pix_mp.field = V4L2_FIELD_NONE;
     capture_format.fmt.pix_mp.num_planes = 1;
@@ -941,13 +959,33 @@ int main(int argc, char **argv)
                    capture_format.fmt.pix_mp.plane_fmt[0].bytesperline,
                    capture_format.fmt.pix_mp.plane_fmt[0].sizeimage);
             if (capture_format.fmt.pix_mp.pixelformat != Q10C_FOURCC ||
-                capture_format.fmt.pix_mp.width != WIDTH ||
-                capture_format.fmt.pix_mp.height != CODED_HEIGHT ||
-                capture_format.fmt.pix_mp.num_planes != 1 ||
-                capture_format.fmt.pix_mp.plane_fmt[0].bytesperline !=
-                    Q10C_STRIDE ||
-                capture_format.fmt.pix_mp.plane_fmt[0].sizeimage != Q10C_SIZE)
-                fail_message("SOURCE_CHANGE format does not match approved Q10C layout");
+                capture_format.fmt.pix_mp.width != g_width ||
+                capture_format.fmt.pix_mp.num_planes != 1)
+                fail_message("SOURCE_CHANGE format is not single-plane Q10C");
+            g_coded_height = capture_format.fmt.pix_mp.height;
+            g_stride = capture_format.fmt.pix_mp.plane_fmt[0].bytesperline;
+            g_size = capture_format.fmt.pix_mp.plane_fmt[0].sizeimage;
+            g_words = (g_width + 2) / 3;
+            /* Venus/Iris TP10 UBWC layout: Y metadata, Y data, UV metadata,
+             * UV data, each 4 KiB aligned (msm_media_info). */
+            uint32_t y_meta_pitch = align_up((g_width + 47) / 48, 64);
+            uint32_t y_meta_rows = align_up((g_coded_height + 3) / 4, 16);
+            uint64_t y_meta = align_up64((uint64_t)y_meta_pitch * y_meta_rows, 4096);
+            uint64_t y_data = align_up64((uint64_t)g_stride *
+                                         align_up(g_coded_height, 16), 4096);
+            uint32_t uv_height = (g_coded_height + 1) / 2;
+            uint64_t uv_meta = align_up64((uint64_t)y_meta_pitch *
+                                          align_up((uv_height + 3) / 4, 16), 4096);
+            uint64_t uv_data = align_up64((uint64_t)g_stride *
+                                          align_up(uv_height, 16), 4096);
+            g_uv_offset = y_meta + y_data;
+            printf("tp10_layout words=%u y_meta=%" PRIu64 " y_data=%" PRIu64
+                   " uv_offset=%" PRIu64 " uv_meta=%" PRIu64 " uv_data=%" PRIu64
+                   " computed_total=%" PRIu64 " sizeimage=%" PRIu64 "\n",
+                   g_words, y_meta, y_data, g_uv_offset, uv_meta, uv_data,
+                   g_uv_offset + uv_meta + uv_data, g_size);
+            if (g_uv_offset + uv_meta + uv_data > g_size)
+                fail_message("computed TP10 layout exceeds sizeimage");
 
             struct v4l2_selection selection = {
                 .type = V4L2_BUF_TYPE_VIDEO_CAPTURE,
@@ -959,8 +997,8 @@ int main(int argc, char **argv)
                    selection.r.left, selection.r.top, selection.r.width,
                    selection.r.height);
             if (selection.r.left != 0 || selection.r.top != 0 ||
-                selection.r.width != WIDTH ||
-                selection.r.height != VISIBLE_HEIGHT)
+                selection.r.width != g_width ||
+                selection.r.height != g_height)
                 fail_message("unexpected visible rectangle");
 
             capture_count = allocate_capture_buffers(capture_buffers);
@@ -1004,7 +1042,7 @@ int main(int argc, char **argv)
             };
             if (xioctl(VIDIOC_DQBUF, &dequeued) == 0) {
                 if (dequeued.index >= capture_count ||
-                    capture_buffers[dequeued.index].length != Q10C_SIZE ||
+                    capture_buffers[dequeued.index].length != g_size ||
                     (dequeued.flags & V4L2_BUF_FLAG_ERROR) ||
                     !plane.bytesused)
                     fail_message("invalid first Q10C CAPTURE buffer");
@@ -1013,7 +1051,7 @@ int main(int argc, char **argv)
                        dequeued.index, dequeued.sequence, plane.bytesused,
                        dequeued.flags, next_packet);
                 int dma_buf_fd = export_dequeued_capture(dequeued.index);
-                vulkan_sample(dma_buf_fd, argv[2], argv[3]);
+                vulkan_sample(dma_buf_fd, argv[4], argv[5]);
                 if (close(dma_buf_fd) < 0)
                     fail_errno("close exported DMA-BUF");
 

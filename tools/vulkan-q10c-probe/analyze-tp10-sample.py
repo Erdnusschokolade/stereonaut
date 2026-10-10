@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 """Compare the planar 10-bit words written by v4l2-vulkan-tp10-sample with
-the software-decoded reference (planar yuv420p10le, 1920x1080)."""
+the software-decoded reference (planar yuv420p10le).
+usage: analyze-tp10-sample.py SAMPLES REFERENCE [JSON] [--size WxH]"""
 import array
 import json
 import sys
+
+args = [a for a in sys.argv[1:] if not a.startswith('--size')]
+size = [a for a in sys.argv[1:] if a.startswith('--size')]
+W, H = (map(int, size[0].split('=')[1].split('x')) if size else (1920, 1080))
+sys.argv = [sys.argv[0]] + args
 
 samples = array.array('I')
 samples.frombytes(open(sys.argv[1], 'rb').read())
@@ -12,12 +18,12 @@ ref.frombytes(open(sys.argv[2], 'rb').read())
 if sys.byteorder != 'little':
     samples.byteswap()
     ref.byteswap()
-assert len(samples) == len(ref) == 1920 * 1080 * 3 // 2
-n = 1920 * 1080
+assert len(samples) == len(ref) == W * H * 3 // 2, (len(samples), len(ref))
+n = W * H
 report = {}
-for name, start, end, width in (('y', 0, n, 1920),
-                                ('u', n, n + n // 4, 960),
-                                ('v', n + n // 4, n * 3 // 2, 960)):
+for name, start, end, width in (('y', 0, n, W),
+                                ('u', n, n + n // 4, W // 2),
+                                ('v', n + n // 4, n * 3 // 2, W // 2)):
     bad = worst = 0
     first = None
     for i in range(start, end):
