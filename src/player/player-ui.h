@@ -6,7 +6,7 @@
 
 /* Layout and CPU rasterizer of the playback panel: a control card (title,
  * seek bar, transport buttons) and, above it, the optional view popup
- * (projection, stereo layout, eye order; scrub preview style). The host owns all state and
+ * (projection, stereo layout, eye order, levels; scrub preview style). The host owns all state and
  * passes it in; nothing here knows about OpenXR or Vulkan. */
 
 #define PLAYER_UI_WIDTH 1600U
@@ -26,6 +26,7 @@ enum player_ui_control {
     PLAYER_UI_PROJECTION = 20, /* + enum nv12_projection_mode */
     PLAYER_UI_STEREO = 30,     /* + enum nv12_stereo_layout */
     PLAYER_UI_SWAP_EYES = 40,
+    PLAYER_UI_LEVELS = 45,       /* + enum nv12_video_levels */
     PLAYER_UI_PREVIEW_MODE = 50, /* + 0 original, + 1 perspective */
     PLAYER_UI_PREVIEW_FOV = 60,  /* + index into player_ui_preview_fovs */
 };
@@ -45,6 +46,7 @@ struct player_ui_state {
     bool popup_open;
     uint32_t projection_mode, stereo_layout;
     bool swap_eyes;
+    uint32_t video_levels;
     int hover;         /* enum player_ui_control */
     /* Scrub preview above the seek bar (while hovered or dragged): the
      * position and, if the server has trickplay tiles, its picture. */

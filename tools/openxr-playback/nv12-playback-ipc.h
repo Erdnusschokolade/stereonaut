@@ -17,6 +17,15 @@ enum nv12_stereo_layout {
     NV12_STEREO_TB = 2,
 };
 
+/* Code values of black and white (per title): NORMAL is BT.709 limited
+ * range (16-235), DEEP keeps limited white but puts black at 0 for masters
+ * graded below video black, FULL is full range (0-255). */
+enum nv12_video_levels {
+    NV12_LEVELS_NORMAL = 0,
+    NV12_LEVELS_DEEP = 1,
+    NV12_LEVELS_FULL = 2,
+};
+
 enum nv12_ipc_type {
     NV12_IPC_INIT = 1,
     NV12_IPC_FRAME = 2,
@@ -33,8 +42,9 @@ enum nv12_ipc_type {
      * process survives the session re-exec. */
     NV12_IPC_HOLD = 11,
     NV12_IPC_HELD = 12,
-    /* Renderer -> session: the viewer changed projection, stereo layout or
-     * eye order on the panel (projection_mode, stereo_layout, swap_eyes). */
+    /* Renderer -> session: the viewer changed projection, stereo layout,
+     * eye order or levels on the panel (projection_mode, stereo_layout,
+     * swap_eyes, video_levels). */
     NV12_IPC_VIEW = 13,
 };
 
@@ -88,6 +98,8 @@ struct nv12_ipc_message {
     uint32_t pixel_format;
     uint32_t coded_width;
     uint32_t coded_height;
+    /* INIT and VIEW: enum nv12_video_levels. */
+    uint32_t video_levels;
 };
 
 #endif

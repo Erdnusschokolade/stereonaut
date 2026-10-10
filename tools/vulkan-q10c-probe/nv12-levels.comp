@@ -1,0 +1,34 @@
+#version 450
+/* Samples the NV12 test image on a 256x256 grid (between texels too).
+ * mode 0: the former YCBCR_709 / ITU_NARROW sampler, raw result.
+ * mode 1: RGB_IDENTITY sampler plus the levels conversion of
+ * nv12-projection.frag with the "normal" levels. */
+layout(local_size_x = 16, local_size_y = 16) in;
+layout(set = 0, binding = 0) uniform sampler2D frame;
+layout(set = 0, binding = 1, std430) writeonly buffer Result { vec4 rgb[]; } result;
+layout(push_constant) uniform Push { int mode; int offset; } push;
+
+const vec4 levels = vec4(16.0, 235.0, 224.0, 0.0);
+
+vec3 ycbcr_to_rgb(float y, vec2 cbcr)
+{
+    float luma = (y - levels.x) / (levels.y - levels.x);
+    vec2 chroma = (cbcr - 128.0) / levels.z;
+    vec3 rgb = vec3(luma + 1.5748 * chroma.y,
+                    luma - 0.18733 * chroma.x - 0.46813 * chroma.y,
+                    luma + 1.8556 * chroma.x);
+    return clamp(rgb, 0.0, 1.0);
+}
+
+void main()
+{
+    uvec2 p = gl_GlobalInvocationID.xy;
+    vec2 uv = (vec2(p) + 0.5) / 256.0;
+    vec3 c = textureLod(frame, uv, 0.0).rgb;
+    vec3 rgb = c;
+    if (push.mode == 1) {
+        vec3 crycb = c * 255.0;
+        rgb = ycbcr_to_rgb(crycb.g, crycb.br);
+    }
+    result.rgb[push.offset + p.y * 256u + p.x] = vec4(rgb, 1.0);
+}

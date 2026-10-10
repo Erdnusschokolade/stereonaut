@@ -1,7 +1,9 @@
 #version 450
 
-/* The immutable VkSampler owns a VkSamplerYcbcrConversion. Sampling performs
- * the NV12 to RGB conversion directly, without an intermediate 8K image. */
+/* The immutable VkSampler owns a VkSamplerYcbcrConversion with the
+ * RGB_IDENTITY model: sampling reconstructs chroma (r = Cr, g = Y, b = Cb)
+ * without an intermediate 8K image, the levels and BT.709 are applied
+ * here. */
 layout(set = 0, binding = 1) uniform sampler2D video_frame;
 
 layout(set = 0, binding = 0, std140) uniform ViewUniform {
@@ -11,6 +13,7 @@ layout(set = 0, binding = 0, std140) uniform ViewUniform {
     ivec4 modes;       /* projection, stereo, eye, swap-eyes */
     vec4 source_info;  /* width, height, inverse width, inverse height */
     vec4 video_scale;  /* TP10 only (tp10-projection.frag) */
+    vec4 levels;       /* black, white, chroma range (8-bit code values) */
 } view;
 
 layout(location = 0) in vec2 flat_uv;
@@ -65,6 +68,17 @@ vec2 projection_uv_to_stereo_uv(vec2 uv, out vec2 region_min,
     return uv;
 }
 
+/* BT.709 with the title's levels; code values on the 8-bit scale. */
+vec3 ycbcr_to_rgb(float y, vec2 cbcr)
+{
+    float luma = (y - view.levels.x) / (view.levels.y - view.levels.x);
+    vec2 chroma = (cbcr - 128.0) / view.levels.z;
+    vec3 rgb = vec3(luma + 1.5748 * chroma.y,
+                    luma - 0.18733 * chroma.x - 0.46813 * chroma.y,
+                    luma + 1.8556 * chroma.x);
+    return clamp(rgb, 0.0, 1.0);
+}
+
 void main()
 {
     bool valid = true;
@@ -83,5 +97,6 @@ void main()
     vec2 half_texel = 0.5 * view.source_info.zw;
     source_uv = clamp(source_uv, region_min + half_texel,
                       region_max - half_texel);
-    output_color = vec4(texture(video_frame, source_uv).rgb, 1.0);
+    vec3 crycb = texture(video_frame, source_uv).rgb * 255.0;
+    output_color = vec4(ycbcr_to_rgb(crycb.g, crycb.br), 1.0);
 }

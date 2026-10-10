@@ -14,6 +14,7 @@ struct title_settings {
     uint32_t projection_mode; /* enum nv12_projection_mode */
     uint32_t stereo_layout;   /* enum nv12_stereo_layout */
     bool swap_eyes;
+    uint32_t video_levels;    /* enum nv12_video_levels */
 };
 
 #define TITLE_KEY_SIZE 4200

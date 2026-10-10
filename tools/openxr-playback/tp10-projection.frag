@@ -3,8 +3,8 @@
 /* HEVC Main10 frames from Iris (Q10C = TP10 + UBWC), sampled through the
  * patched Turnip as two 10-bit planes (FMT6_TP10_Y / FMT6_TP10_UV, see
  * tools/mesa-tp10). The planes are padded to whole 192-pixel tiles, so
- * coordinates are scaled by video_scale. BT.709 limited range is converted
- * here with the same result the NV12 YCbCr sampler produces. */
+ * coordinates are scaled by video_scale. Levels and BT.709 are applied as
+ * in nv12-projection.frag. */
 layout(set = 0, binding = 2) uniform sampler2D luma_plane;
 layout(set = 0, binding = 3) uniform sampler2D chroma_plane;
 
@@ -15,6 +15,7 @@ layout(set = 0, binding = 0, std140) uniform ViewUniform {
     ivec4 modes;       /* projection, stereo, eye, swap-eyes */
     vec4 source_info;  /* width, height, inverse width, inverse height */
     vec4 video_scale;  /* visible / padded plane size */
+    vec4 levels;       /* black, white, chroma range (8-bit code values) */
 } view;
 
 layout(location = 0) in vec2 flat_uv;
@@ -69,6 +70,17 @@ vec2 projection_uv_to_stereo_uv(vec2 uv, out vec2 region_min,
     return uv;
 }
 
+/* BT.709 with the title's levels; code values on the 8-bit scale. */
+vec3 ycbcr_to_rgb(float y, vec2 cbcr)
+{
+    float luma = (y - view.levels.x) / (view.levels.y - view.levels.x);
+    vec2 chroma = (cbcr - 128.0) / view.levels.z;
+    vec3 rgb = vec3(luma + 1.5748 * chroma.y,
+                    luma - 0.18733 * chroma.x - 0.46813 * chroma.y,
+                    luma + 1.8556 * chroma.x);
+    return clamp(rgb, 0.0, 1.0);
+}
+
 void main()
 {
     bool valid = true;
@@ -90,11 +102,7 @@ void main()
     vec2 plane_uv = source_uv * view.video_scale.xy;
     float y = texture(luma_plane, plane_uv).r;
     vec2 cbcr = texture(chroma_plane, plane_uv).rg;
-    /* Normalized 10-bit codes -> BT.709 narrow range. */
-    float luma = (y * 1023.0 - 64.0) / 876.0;
-    vec2 chroma = (cbcr * 1023.0 - 512.0) / 896.0;
-    vec3 rgb = vec3(luma + 1.5748 * chroma.y,
-                    luma - 0.18733 * chroma.x - 0.46813 * chroma.y,
-                    luma + 1.8556 * chroma.x);
-    output_color = vec4(clamp(rgb, 0.0, 1.0), 1.0);
+    /* Normalized 10-bit codes on the 8-bit scale. */
+    output_color = vec4(ycbcr_to_rgb(y * 1023.0 / 4.0, cbcr * 1023.0 / 4.0),
+                        1.0);
 }

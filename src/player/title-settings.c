@@ -14,12 +14,14 @@
 
 static const char *const projection_names[] = {"flat", "180", "360"};
 static const char *const stereo_names[] = {"mono", "sbs", "tb"};
+static const char *const levels_names[] = {"normal", "deep", "full"};
 
 void title_settings_defaults(struct title_settings *settings)
 {
     settings->projection_mode = NV12_PROJECTION_EQUIRECT_180;
     settings->stereo_layout = NV12_STEREO_SBS;
     settings->swap_eyes = false;
+    settings->video_levels = NV12_LEVELS_NORMAL;
 }
 
 void title_settings_key(const char *input, char *key, size_t key_size)
@@ -111,6 +113,11 @@ int title_settings_load(const char *key, struct title_settings *settings)
         if (json_object_object_get_ex(entry, "swap_eyes", &value) &&
             json_object_is_type(value, json_type_boolean))
             settings->swap_eyes = json_object_get_boolean(value);
+        if (json_object_object_get_ex(entry, "levels", &value) &&
+            json_object_is_type(value, json_type_string))
+            settings->video_levels = lookup(
+                levels_names, 3, json_object_get_string(value),
+                settings->video_levels);
         result = 1;
     }
     json_object_put(root);
@@ -120,7 +127,8 @@ int title_settings_load(const char *key, struct title_settings *settings)
 int title_settings_save(const char *key, const struct title_settings *settings)
 {
     if (settings->projection_mode > NV12_PROJECTION_EQUIRECT_360 ||
-        settings->stereo_layout > NV12_STEREO_TB)
+        settings->stereo_layout > NV12_STEREO_TB ||
+        settings->video_levels > NV12_LEVELS_FULL)
         return -1;
     char path[PATH_MAX];
     if (store_path(path, sizeof(path), true) < 0)
@@ -142,6 +150,9 @@ int title_settings_save(const char *key, const struct title_settings *settings)
         json_object_new_string(stereo_names[settings->stereo_layout]));
     json_object_object_add(entry, "swap_eyes",
                            json_object_new_boolean(settings->swap_eyes));
+    json_object_object_add(
+        entry, "levels",
+        json_object_new_string(levels_names[settings->video_levels]));
     char temporary[PATH_MAX + 8];
     snprintf(temporary, sizeof(temporary), "%s.tmp", path);
     int result = -1;

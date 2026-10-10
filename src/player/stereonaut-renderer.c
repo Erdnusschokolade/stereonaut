@@ -61,6 +61,7 @@ struct view_uniform {
     int32_t modes[4];
     float source_info[4];
     float video_scale[4]; /* TP10: visible / padded size of the planes */
+    float levels[4];      /* black, white, chroma range (8-bit codes) */
 };
 
 _Static_assert(sizeof(struct view_uniform) <= UBO_STRIDE,
@@ -150,6 +151,7 @@ struct app {
     uint32_t coded_width, coded_height;
     uint32_t projection_mode, stereo_layout;
     bool swap_eyes;
+    uint32_t video_levels; /* enum nv12_video_levels */
     XrActionSet action_set;
     XrAction aim_action;
     XrAction select_action;
@@ -455,6 +457,7 @@ static void apply_init(struct app *app, const struct nv12_ipc_message *message,
     app->projection_mode = message->projection_mode;
     app->stereo_layout = message->stereo_layout;
     app->swap_eyes = message->swap_eyes != 0;
+    app->video_levels = message->video_levels;
     need(app->video_width > 0 && app->video_height > 0 &&
              !(app->video_width & 1U) && !(app->video_height & 1U) &&
              (app->video_format == NV12_FORMAT_TP10 ||
@@ -468,10 +471,13 @@ static void apply_init(struct app *app, const struct nv12_ipc_message *message,
          "invalid projection mode in IPC contract");
     need(app->stereo_layout <= NV12_STEREO_TB,
          "invalid stereo layout in IPC contract");
+    need(app->video_levels <= NV12_LEVELS_FULL,
+         "invalid video levels in IPC contract");
     /* The host owns the panel placement for its whole lifetime. */
-    printf("render_config projection=%u stereo=%u swap_eyes=%u"
+    printf("render_config projection=%u stereo=%u swap_eyes=%u levels=%u"
            " view0=left view1=right\n",
-           app->projection_mode, app->stereo_layout, app->swap_eyes);
+           app->projection_mode, app->stereo_layout, app->swap_eyes,
+           app->video_levels);
 }
 
 static void send_message(struct app *app, const struct nv12_ipc_message *message)
@@ -516,6 +522,9 @@ static void change_view(struct app *app, int control)
         app->stereo_layout = (uint32_t)(control - PLAYER_UI_STEREO);
     else if (control == PLAYER_UI_SWAP_EYES)
         app->swap_eyes = !app->swap_eyes;
+    else if (control >= PLAYER_UI_LEVELS &&
+             control <= PLAYER_UI_LEVELS + NV12_LEVELS_FULL)
+        app->video_levels = (uint32_t)(control - PLAYER_UI_LEVELS);
     else
         return;
     app->ui_dirty = true;
@@ -524,10 +533,12 @@ static void change_view(struct app *app, int control)
         .projection_mode = app->projection_mode,
         .stereo_layout = app->stereo_layout,
         .swap_eyes = app->swap_eyes,
+        .video_levels = app->video_levels,
     };
     send_message(app, &message);
-    printf("player_view projection=%u stereo=%u swap_eyes=%u\n",
-           app->projection_mode, app->stereo_layout, app->swap_eyes);
+    printf("player_view projection=%u stereo=%u swap_eyes=%u levels=%u\n",
+           app->projection_mode, app->stereo_layout, app->swap_eyes,
+           app->video_levels);
 }
 
 /* Scrub preview settings from the view popup; global, kept in
@@ -1236,7 +1247,22 @@ static void import_video_buffer(struct app *app, uint32_t i)
     printf("nv12_import index=%u memory_type=%u\n", i, type);
 }
 
-/* Format check and the YCbCr sampler shared by every imported frame. */
+/* Shader levels (enum nv12_video_levels): black and white luma and the
+ * chroma range in 8-bit code values. */
+static void video_levels_uniform(uint32_t levels, float out[4])
+{
+    static const float table[3][4] = {
+        [NV12_LEVELS_NORMAL] = {16.0f, 235.0f, 224.0f, 0.0f},
+        [NV12_LEVELS_DEEP] = {0.0f, 235.0f, 224.0f, 0.0f},
+        [NV12_LEVELS_FULL] = {0.0f, 255.0f, 255.0f, 0.0f},
+    };
+    memcpy(out, table[levels <= NV12_LEVELS_FULL ? levels : 0],
+           sizeof(table[0]));
+}
+
+/* Format check and the YCbCr sampler shared by every imported frame. The
+ * sampler only reconstructs chroma (RGB_IDENTITY: r = Cr, g = Y, b = Cb);
+ * the shader applies the title's levels and BT.709. */
 static void create_video_sampler(struct app *app)
 {
     VkDrmFormatModifierPropertiesListEXT list = {
@@ -1282,8 +1308,8 @@ static void create_video_sampler(struct app *app)
     VkSamplerYcbcrConversionCreateInfo conversion = {
         .sType = VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_CREATE_INFO,
         .format = VK_FORMAT_G8_B8R8_2PLANE_420_UNORM,
-        .ycbcrModel = VK_SAMPLER_YCBCR_MODEL_CONVERSION_YCBCR_709,
-        .ycbcrRange = VK_SAMPLER_YCBCR_RANGE_ITU_NARROW,
+        .ycbcrModel = VK_SAMPLER_YCBCR_MODEL_CONVERSION_RGB_IDENTITY,
+        .ycbcrRange = VK_SAMPLER_YCBCR_RANGE_ITU_FULL,
         .components = {VK_COMPONENT_SWIZZLE_IDENTITY,
                        VK_COMPONENT_SWIZZLE_IDENTITY,
                        VK_COMPONENT_SWIZZLE_IDENTITY,
@@ -1318,7 +1344,7 @@ static void create_video_sampler(struct app *app)
             vkCreateSampler(app->device, &plane_sampler, NULL,
                             &app->plane_sampler));
 
-    printf("nv12_sampler format=%d ycbcr_709=1 range=narrow"
+    printf("nv12_sampler format=%d model=rgb_identity levels=shader"
            " chroma_location=%s\n",
            VK_FORMAT_G8_B8R8_2PLANE_420_UNORM,
            chroma_location == VK_CHROMA_LOCATION_MIDPOINT ? "midpoint"
@@ -1399,6 +1425,7 @@ static struct player_ui_state player_state(const struct app *app)
         .projection_mode = app->projection_mode,
         .stereo_layout = app->stereo_layout,
         .swap_eyes = app->swap_eyes,
+        .video_levels = app->video_levels,
         .hover = app->ui_hover,
         .preview_visible = app->preview_visible,
         .preview_us = app->preview_us,
@@ -2901,6 +2928,7 @@ static void render_frame(struct app *app)
                 0.0f, 0.0f,
             },
         };
+        video_levels_uniform(app->video_levels, uniform.levels);
         memcpy((uint8_t *)app->uniform_mapping + eye * UBO_STRIDE,
                &uniform, sizeof(uniform));
     }

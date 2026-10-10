@@ -120,9 +120,10 @@ struct playback_options {
     uint32_t projection_mode;
     uint32_t stereo_layout;
     bool swap_eyes;
+    uint32_t video_levels;
     /* Set by explicit command-line flags; those win over the stored title
      * settings (a seek restart passes the current values explicitly). */
-    bool projection_set, stereo_set, swap_eyes_set;
+    bool projection_set, stereo_set, swap_eyes_set, levels_set;
     uint32_t frame_limit;
     int64_t start_us;
     struct panel_state panel;
@@ -373,6 +374,7 @@ static void start_renderer(
         .projection_mode = options->projection_mode,
         .stereo_layout = options->stereo_layout,
         .swap_eyes = options->swap_eyes,
+        .video_levels = options->video_levels,
         .panel_x = options->panel.x,
         .panel_y = options->panel.y,
         .panel_z = options->panel.z,
@@ -477,19 +479,22 @@ static bool process_renderer_messages(
             renderer_action_position_us = message.position_us;
         } else if (message.type == NV12_IPC_VIEW) {
             if (message.projection_mode > NV12_PROJECTION_EQUIRECT_360 ||
-                message.stereo_layout > NV12_STEREO_TB)
+                message.stereo_layout > NV12_STEREO_TB ||
+                message.video_levels > NV12_LEVELS_FULL)
                 fail_message("invalid renderer view settings");
             view_state = (struct title_settings){
                 .projection_mode = message.projection_mode,
                 .stereo_layout = message.stereo_layout,
                 .swap_eyes = message.swap_eyes != 0,
+                .video_levels = message.video_levels,
             };
             view_state_valid = true;
             if (title_settings_save(title_key, &view_state) < 0)
                 fprintf(stderr, "title settings could not be saved\n");
-            printf("title_view projection=%u stereo=%u swap_eyes=%u key=%s\n",
+            printf("title_view projection=%u stereo=%u swap_eyes=%u"
+                   " levels=%u key=%s\n",
                    view_state.projection_mode, view_state.stereo_layout,
-                   view_state.swap_eyes, title_key);
+                   view_state.swap_eyes, view_state.video_levels, title_key);
         } else if (message.type == NV12_IPC_HELD) {
             renderer_held = true;
         } else if (message.type == NV12_IPC_PANEL) {
@@ -640,6 +645,18 @@ static struct playback_options parse_playback_options(int argc, char **argv)
             else
                 fail_message("invalid --stereo value");
             options.stereo_set = true;
+        } else if (strcmp(argv[i], "--levels") == 0) {
+            if (++i >= argc)
+                fail_message("--levels requires normal, deep, or full");
+            if (strcmp(argv[i], "normal") == 0)
+                options.video_levels = NV12_LEVELS_NORMAL;
+            else if (strcmp(argv[i], "deep") == 0)
+                options.video_levels = NV12_LEVELS_DEEP;
+            else if (strcmp(argv[i], "full") == 0)
+                options.video_levels = NV12_LEVELS_FULL;
+            else
+                fail_message("invalid --levels value");
+            options.levels_set = true;
         } else if (strcmp(argv[i], "--frames") == 0) {
             if (++i >= argc)
                 fail_message("--frames requires a positive frame count");
@@ -1824,6 +1841,7 @@ int main(int argc, char **argv)
                 "usage: %s INPUT.mkv|INPUT.mp4"
                 " [--projection flat|180|360]"
                 " [--stereo mono|sbs|tb] [--swap-eyes|--no-swap-eyes]"
+                " [--levels normal|deep|full]"
                 " [--frames N]"
                 " [--start-us TIMESTAMP]\n",
                 argv[0]);
@@ -1846,6 +1864,8 @@ int main(int argc, char **argv)
             options.stereo_layout = stored.stereo_layout;
         if (!options.swap_eyes_set)
             options.swap_eyes = stored.swap_eyes;
+        if (!options.levels_set)
+            options.video_levels = stored.video_levels;
     }
     char pipeline_error[512] = {0};
     struct media_pipeline *pipeline = NULL;
@@ -1896,10 +1916,10 @@ int main(int argc, char **argv)
     printf("source width=%u visible_height=%u fps=%u/%u duration_s=%.6f\n",
            expected_width, expected_height, fps_numerator, fps_denominator,
            source_duration);
-    printf("playback_config projection=%u stereo=%u swap_eyes=%u"
+    printf("playback_config projection=%u stereo=%u swap_eyes=%u levels=%u"
            " frame_limit=%u\n",
            options.projection_mode, options.stereo_layout,
-           options.swap_eyes, options.frame_limit);
+           options.swap_eyes, options.video_levels, options.frame_limit);
     if (options.start_us)
         printf("playback_start_target_us=%" PRId64 "\n", options.start_us);
 
@@ -2497,6 +2517,7 @@ int main(int argc, char **argv)
             options.projection_mode = view_state.projection_mode;
             options.stereo_layout = view_state.stereo_layout;
             options.swap_eyes = view_state.swap_eyes;
+            options.video_levels = view_state.video_levels;
         }
         const char *projection = options.projection_mode ==
                                          NV12_PROJECTION_EQUIRECT_180
@@ -2508,8 +2529,13 @@ int main(int argc, char **argv)
                                  ? "sbs"
                              : options.stereo_layout == NV12_STEREO_TB
                                  ? "tb" : "mono";
-        printf("player_restart target_us=%s projection=%s stereo=%s\n",
-               start_text, projection, stereo);
+        static const char *const levels_names[] = {"normal", "deep", "full"};
+        const char *levels = options.video_levels <= NV12_LEVELS_FULL
+                                 ? levels_names[options.video_levels]
+                                 : "normal";
+        printf("player_restart target_us=%s projection=%s stereo=%s"
+               " levels=%s\n",
+               start_text, projection, stereo, levels);
         char panel_text[96] = {0};
         if (panel_state.valid)
             snprintf(panel_text, sizeof(panel_text), "%.6f,%.6f,%.6f,%.6f,%u",
@@ -2537,6 +2563,8 @@ int main(int argc, char **argv)
         restart_argv[restart_argc++] = (char *)stereo;
         restart_argv[restart_argc++] =
             options.swap_eyes ? "--swap-eyes" : "--no-swap-eyes";
+        restart_argv[restart_argc++] = "--levels";
+        restart_argv[restart_argc++] = (char *)levels;
         restart_argv[restart_argc++] = "--start-us";
         restart_argv[restart_argc++] = start_text;
         if (panel_state.valid) {
