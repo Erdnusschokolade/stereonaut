@@ -138,6 +138,8 @@ struct playback_options {
      * name and trickplay detection already ran. */
     uint32_t format_source;
     bool format_source_set;
+    /* Seek restart while paused: show the target frame and stay paused. */
+    bool start_paused;
 };
 
 struct capture_contract {
@@ -949,6 +951,8 @@ static struct playback_options parse_playback_options(int argc, char **argv)
             else
                 fail_message("invalid --levels value");
             options.levels_set = true;
+        } else if (strcmp(argv[i], "--paused") == 0) {
+            options.start_paused = true;
         } else if (strcmp(argv[i], "--format-source") == 0) {
             static const char *const sources[] = {"default", "name", "image",
                                                   "user"};
@@ -2147,7 +2151,7 @@ int main(int argc, char **argv)
                 " [--projection flat|180|360]"
                 " [--stereo mono|sbs|tb] [--swap-eyes|--no-swap-eyes]"
                 " [--levels normal|deep|full]"
-                " [--format-source default|name|image|user]"
+                " [--format-source default|name|image|user] [--paused]"
                 " [--frames N]"
                 " [--start-us TIMESTAMP]\n",
                 argv[0]);
@@ -2690,7 +2694,15 @@ int main(int argc, char **argv)
                         queue_capture(dequeued.index,
                                       captures[dequeued.index].length);
                     } else {
-                    if (!audio_started) {
+                    if (!audio_started && options.start_paused) {
+                        /* The audio clock starts with the next "play". */
+                        playback_paused = true;
+                        pause_started = monotonic_seconds();
+                        audio_started = true;
+                        printf("player_state=PAUSED start_paused=1"
+                               " first_video_pts_us=%" PRId64 "\n",
+                               frame_pts_us);
+                    } else if (!audio_started) {
                         if (media_pipeline_pause(
                                 pipeline, false, pipeline_error,
                                 sizeof(pipeline_error)) < 0) {
@@ -2772,6 +2784,8 @@ int main(int argc, char **argv)
                 if (!plane.bytesused)
                     queue_capture(dequeued.index,
                                   captures[dequeued.index].length);
+                if (playback_paused)
+                    break; /* started paused: one frame is shown */
             }
             if (capture_generation_last && source_change_pending) {
                 if (last_capture_index >= capture_count)
@@ -2925,6 +2939,8 @@ int main(int argc, char **argv)
         }
         if (strncmp(argv[1], "jf:item:", 8) == 0)
             restart_argv[restart_argc++] = "--jellyfin-resumed";
+        if (playback_paused)
+            restart_argv[restart_argc++] = "--paused";
         restart_argv[restart_argc] = NULL;
         execv(argv[0], restart_argv);
         fail_errno("restart stereonaut-session after seek");
