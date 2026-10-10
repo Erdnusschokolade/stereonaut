@@ -91,6 +91,14 @@ const struct player_adjust_info player_adjust_info[PLAYER_ADJUST_COUNT] = {
                                    0.1f, 0.0f, 100.0f, "%.0f %%", true},
     [PLAYER_ADJUST_AUTOFOCUS] = {"Autofokus", "autofocus", 0.0f, 1.0f, 0.1f,
                                  0.0f, 100.0f, "%.0f %%", true},
+    [PLAYER_ADJUST_FOCUS_DISTANCE] = {"Näher als", "focus_distance", 0.2f,
+                                      1.0f, 0.05f, 0.6f, 100.0f, "%.0f cm",
+                                      true},
+    [PLAYER_ADJUST_FOCUS_HYSTERESIS] = {"Hysterese", "focus_hysteresis",
+                                        0.0f, 0.5f, 0.05f, 0.15f, 100.0f,
+                                        "%.0f %%", true},
+    [PLAYER_ADJUST_FOCUS_FADE] = {"Überblenden", "focus_fade", 0.0f, 3.0f,
+                                  0.1f, 1.0f, 1.0f, "%.1f s", true},
     [PLAYER_ADJUST_BRIGHTNESS] = {"Helligkeit", "brightness", -0.3f, 0.3f,
                                   0.02f, 0.0f, 100.0f, "%+.0f", false},
     [PLAYER_ADJUST_CONTRAST] = {"Kontrast", "contrast", 0.5f, 1.5f, 0.05f,
@@ -207,8 +215,13 @@ static void format_adjust(char text[32], enum player_adjust adjust,
 {
     const struct player_adjust_info *info = &player_adjust_info[adjust];
     if ((adjust == PLAYER_ADJUST_HEAD_MOTION ||
-         adjust == PLAYER_ADJUST_AUTOFOCUS) && value <= 0.0f) {
+         adjust == PLAYER_ADJUST_AUTOFOCUS ||
+         adjust == PLAYER_ADJUST_FOCUS_HYSTERESIS) && value <= 0.0f) {
         snprintf(text, 32, "Aus");
+        return;
+    }
+    if (adjust == PLAYER_ADJUST_FOCUS_FADE && value <= 0.0f) {
+        snprintf(text, 32, "Sofort");
         return;
     }
     float shown = value * info->display_scale;
@@ -247,7 +260,7 @@ static void layout_popup(const struct player_ui_state *state,
 {
     layout->count = 0;
     static const char *const tabs[PLAYER_UI_TAB_COUNT] = {
-        "Ansicht", "Position", "Bild", "Info",
+        "Ansicht", "Position", "Bild", "Fokus", "Info",
     };
     for (int i = 0; i < PLAYER_UI_TAB_COUNT; ++i)
         add_chip(layout, PLAYER_UI_TAB + i,
@@ -294,14 +307,9 @@ static void layout_popup(const struct player_ui_state *state,
         add_stepper(layout, state, 1, ROW_CHIP_Y(0),
                     PLAYER_ADJUST_HEAD_MOTION, NULL);
         add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(1), 0,
-                   "Ausrichtung und Test");
-        int half = (COLUMN_W - CHIP_GAP) / 2;
+                   "Ausrichtung");
         add_chip(layout, PLAYER_UI_RECENTER, COLUMN_X(1), ROW_CHIP_Y(1),
-                 half, "Zentrieren", false);
-        add_chip(layout, PLAYER_UI_GAZE_DEBUG, COLUMN_X(1) + half + CHIP_GAP,
-                 ROW_CHIP_Y(1), half, "Blick anzeigen", state->gaze_debug);
-        add_stepper(layout, state, 1, ROW_CHIP_Y(2),
-                    PLAYER_ADJUST_AUTOFOCUS, NULL);
+                 COLUMN_W, "Zentrieren", false);
 
         static const char *const projection_labels[] = {
             [NV12_FORMAT_SOURCE_DEFAULT] = "Projektion (Standard)",
@@ -377,6 +385,42 @@ static void layout_popup(const struct player_ui_state *state,
                     NULL);
         add_chip(layout, PLAYER_UI_RESET_PICTURE, COLUMN_X(2), STEPPER_Y(2),
                  COLUMN_W, "Zurücksetzen", false);
+    } else if (state->popup_tab == PLAYER_UI_TAB_FOCUS) {
+        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(0), 0,
+                   "Autofokus (nur 180°/360° mit SBS/TB)");
+        add_stepper(layout, state, 0, ROW_CHIP_Y(0),
+                    PLAYER_ADJUST_AUTOFOCUS, "Stärke");
+        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(1), 0,
+                   "Dauer eines Fokuswechsels");
+        add_stepper(layout, state, 0, ROW_CHIP_Y(1),
+                    PLAYER_ADJUST_FOCUS_FADE, NULL);
+        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(2), 0,
+                   "Neu fokussieren ab Abstandsänderung");
+        add_stepper(layout, state, 0, ROW_CHIP_Y(2),
+                    PLAYER_ADJUST_FOCUS_HYSTERESIS, NULL);
+
+        static const char *const thresholds[2] = {"Immer", "Nur nah"};
+        add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(0), 0,
+                   "Auslösen");
+        add_chip_row(layout, 1, 0, 2, PLAYER_UI_FOCUS_THRESHOLD, thresholds,
+                     state->focus_threshold ? 1 : 0);
+        add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(1), 0,
+                   state->focus_threshold
+                       ? "Weiter weg: Video unverändert"
+                       : "Grenze (nur bei „Nur nah“)");
+        add_stepper(layout, state, 1, ROW_CHIP_Y(1),
+                    PLAYER_ADJUST_FOCUS_DISTANCE, NULL);
+
+        add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(0), 0,
+                   "Messung prüfen");
+        add_chip(layout, PLAYER_UI_GAZE_DEBUG, COLUMN_X(2), ROW_CHIP_Y(0),
+                 COLUMN_W, "Blick anzeigen", state->gaze_debug);
+        add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(1) + 6, 0,
+                   "Nahe Motive werden auf etwa");
+        add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(1) + 36, 0,
+                   "1 m zurückgeschoben.");
+        add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(1) + 66, 0,
+                   "Gilt für alle Titel.");
     }
 }
 

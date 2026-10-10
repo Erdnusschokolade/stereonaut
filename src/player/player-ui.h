@@ -6,10 +6,11 @@
 
 /* Layout and CPU rasterizer of the playback panel: a control card (title,
  * seek bar, transport buttons) and, above it, the optional settings popup
- * with three tabs: view (scrub preview, head motion, projection, stereo
- * layout, eye order), position (zoom, height, rotation, stereo offsets) and
- * picture (levels, brightness, contrast, saturation, gamma). The host owns
- * all state and passes it in; nothing here knows about OpenXR or Vulkan. */
+ * with the tabs view (scrub preview, head motion, projection, stereo
+ * layout, eye order), position (zoom, height, rotation, stereo offsets),
+ * picture (levels, brightness, contrast, saturation, gamma), focus
+ * (autofocus) and information. The host owns all state and passes it in;
+ * nothing here knows about OpenXR or Vulkan. */
 
 #define PLAYER_UI_WIDTH 1600U
 #define PLAYER_UI_HEIGHT 680U
@@ -29,6 +30,12 @@ enum player_adjust {
     PLAYER_ADJUST_STEREO_Y,   /* degrees the right picture moves up */
     PLAYER_ADJUST_HEAD_MOTION, /* 6DoF: share of head translation (global) */
     PLAYER_ADJUST_AUTOFOCUS,  /* share of near disparity removed (global) */
+    /* Autofocus only for subjects nearer than this (metres), if
+     * player_ui_state.focus_threshold is set (global). */
+    PLAYER_ADJUST_FOCUS_DISTANCE,
+    /* Relative change of the subject distance that refocuses (global). */
+    PLAYER_ADJUST_FOCUS_HYSTERESIS,
+    PLAYER_ADJUST_FOCUS_FADE, /* seconds a refocus takes (global) */
     PLAYER_ADJUST_BRIGHTNESS,
     PLAYER_ADJUST_CONTRAST,
     PLAYER_ADJUST_SATURATION,
@@ -53,6 +60,7 @@ enum player_ui_tab {
     PLAYER_UI_TAB_VIEW,
     PLAYER_UI_TAB_POSITION,
     PLAYER_UI_TAB_PICTURE,
+    PLAYER_UI_TAB_FOCUS,
     PLAYER_UI_TAB_INFO,     /* description from Jellyfin, read only */
     PLAYER_UI_TAB_COUNT,
 };
@@ -89,6 +97,7 @@ enum player_ui_control {
     PLAYER_UI_VOLUME_UP = 91,
     PLAYER_UI_END_ACTION = 92,   /* cycles enum player_end_action */
     PLAYER_UI_AUTOHIDE = 93,     /* + index into player_ui_autohide */
+    PLAYER_UI_FOCUS_THRESHOLD = 96, /* + 0 always, + 1 only near subjects */
     /* + 2 * enum player_adjust: decrease; + 1: increase. */
     PLAYER_UI_ADJUST = 100,
     PLAYER_UI_ADJUST_END = PLAYER_UI_ADJUST + 2 * PLAYER_ADJUST_COUNT,
@@ -125,6 +134,7 @@ struct player_ui_state {
     const struct jf_details *details;
     const float *adjust; /* PLAYER_ADJUST_COUNT values */
     bool gaze_debug;
+    bool focus_threshold; /* autofocus only below FOCUS_DISTANCE */
     const char *debug_text; /* line at the bottom of the card, or NULL */
     int hover;         /* enum player_ui_control */
     /* Scrub preview above the seek bar (while hovered or dragged): the

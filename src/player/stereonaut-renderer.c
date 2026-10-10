@@ -139,9 +139,15 @@ struct app {
     void *disparity_mapping;
     bool disparity_pending;
     uint64_t disparity_frames;
-    double disparity_time;
     double autofocus_log_time;
     float autofocus_offset; /* degrees the eye pictures are moved apart */
+    float autofocus_speed;  /* degrees per second of the offset */
+    double autofocus_time;  /* last advance of the offset */
+    /* Subject the focus is set to (distance in metres and its disparity
+     * in degrees); none: the video is shown unchanged. */
+    bool autofocus_focused;
+    float autofocus_distance, autofocus_focus_disparity;
+    bool focus_threshold;   /* only subjects nearer than FOCUS_DISTANCE */
     bool autofocus_gaze;    /* last window followed the eye tracking */
     /* Last measurement, for the debug display. */
     bool autofocus_valid;
@@ -766,7 +772,7 @@ static void reset_adjust(struct app *app, bool picture)
     for (int i = 0; i < PLAYER_ADJUST_COUNT; ++i) {
         bool is_picture = i >= PLAYER_ADJUST_BRIGHTNESS;
         if (is_picture != picture || i == PLAYER_ADJUST_HEAD_MOTION ||
-            i == PLAYER_ADJUST_AUTOFOCUS)
+            (i >= PLAYER_ADJUST_AUTOFOCUS && i <= PLAYER_ADJUST_FOCUS_FADE))
             continue;
         app->adjust[i] = player_adjust_info[i].standard;
         save_adjust(app, i);
@@ -818,6 +824,7 @@ static void load_preview_settings(struct app *app)
                           : PLAYER_END_STOP;
     double volume = settings_get_double("volume", 1.0);
     app->volume = volume < 0.0 ? 0.0f : volume > 1.5 ? 1.5f : (float)volume;
+    app->focus_threshold = settings_get_bool("focus_threshold", false);
 }
 
 static void send_panel_state(struct app *app)
@@ -1760,6 +1767,7 @@ static struct player_ui_state player_state(const struct app *app)
         .popup_tab = app->popup_tab,
         .adjust = app->adjust,
         .gaze_debug = app->gaze_debug,
+        .focus_threshold = app->focus_threshold,
         .debug_text = app->gaze_debug ? app->debug_text : NULL,
         .projection_mode = app->projection_mode,
         .stereo_layout = app->stereo_layout,
@@ -2597,6 +2605,12 @@ static void sync_player_input(struct app *app, XrTime time)
         } else if (action == PLAYER_UI_VOLUME_DOWN ||
                    action == PLAYER_UI_VOLUME_UP) {
             change_volume(app, action == PLAYER_UI_VOLUME_UP ? 1 : -1);
+        } else if (action == PLAYER_UI_FOCUS_THRESHOLD ||
+                   action == PLAYER_UI_FOCUS_THRESHOLD + 1) {
+            app->focus_threshold = action == PLAYER_UI_FOCUS_THRESHOLD + 1;
+            settings_set_bool("focus_threshold", app->focus_threshold);
+            app->ui_dirty = true;
+            printf("focus_threshold=%d\n", app->focus_threshold);
         } else if (action == PLAYER_UI_GAZE_DEBUG) {
             app->gaze_debug = !app->gaze_debug;
             app->debug_text[0] = '\0';
@@ -3143,7 +3157,9 @@ static void begin_playback(struct app *app, int fd, const char *location)
     app->recenter_yaw = false;
     app->dome_yaw = 0.0f;
     app->autofocus_offset = 0.0f;
-    app->disparity_time = 0.0;
+    app->autofocus_speed = 0.0f;
+    app->autofocus_time = 0.0;
+    app->autofocus_focused = false;
     app->ipc_fd = fd;
     app->playing = true;
     app->awaiting_command = false;
@@ -3300,11 +3316,14 @@ static void sync_browser_input(struct app *app, XrTime time)
  * Close subjects in stereo video need strong convergence and easily split
  * into double images. The measurement finds the disparity of the picture
  * where the viewer looks; the eye pictures are then moved apart so that
- * near subjects keep at most the disparity of AUTOFOCUS_TARGET_DEGREES,
- * smoothed over AUTOFOCUS_SECONDS. */
+ * near subjects keep at most the disparity of AUTOFOCUS_TARGET_DEGREES.
+ * The focus is set to a subject distance and only changes when the
+ * distance changes by more than the hysteresis; with the threshold on,
+ * subjects farther than FOCUS_DISTANCE leave the video unchanged. The
+ * offset moves to a new focus over the fade time. */
 #define AUTOFOCUS_TARGET_DEGREES 3.6f /* about 1 m at 63 mm baseline */
+#define AUTOFOCUS_BASELINE_METERS 0.063f
 #define AUTOFOCUS_MAX_DEGREES 12.0f
-#define AUTOFOCUS_SECONDS 0.6
 #define AUTOFOCUS_MIN_SCORE 0.6f
 #define AUTOFOCUS_MIN_VARIANCE 2e-4f
 #define AUTOFOCUS_EVERY_FRAMES 3U
@@ -3399,14 +3418,27 @@ static bool disparity_window(struct app *app, XrVector3f direction,
     return true;
 }
 
-/* Reads the last measurement and moves the autofocus offset towards it. */
+/* Subject distance of a disparity (degrees). */
+static float focus_distance(float disparity)
+{
+    const float degrees = PI_F / 180.0f;
+    return AUTOFOCUS_BASELINE_METERS /
+           (2.0f * tanf(0.5f * fmaxf(disparity, 0.05f) * degrees));
+}
+
+/* Sets the focus to the subject at `disparity`, or none. */
+static void set_focus(struct app *app, bool focused, float disparity)
+{
+    app->autofocus_focused = focused;
+    app->autofocus_focus_disparity = focused ? disparity : 0.0f;
+    app->autofocus_distance = focused ? focus_distance(disparity) : 0.0f;
+}
+
+/* Reads the last measurement and decides whether to refocus. */
 static void update_autofocus(struct app *app)
 {
     const struct disparity_result *result = app->disparity_mapping;
     double now = monotonic_seconds();
-    double elapsed = app->disparity_time > 0.0 ? now - app->disparity_time
-                                               : 0.0;
-    app->disparity_time = now;
     int best = 0;
     for (int i = 1; i < DISPARITY_CANDIDATES; ++i)
         if (result->score[i] > result->score[best])
@@ -3427,19 +3459,64 @@ static void update_autofocus(struct app *app)
         disparity = ((float)best + refine - (float)DISPARITY_ZERO) *
                     DISPARITY_STEP_DEGREES;
         app->autofocus_disparity = disparity;
-        float target = app->adjust[PLAYER_ADJUST_AUTOFOCUS] *
-                       fmaxf(0.0f, disparity - AUTOFOCUS_TARGET_DEGREES);
-        target = fminf(target, AUTOFOCUS_MAX_DEGREES);
-        float blend = (float)(1.0 - exp(-elapsed / AUTOFOCUS_SECONDS));
-        app->autofocus_offset += (target - app->autofocus_offset) * blend;
+        float distance = focus_distance(disparity);
+        float limit = app->adjust[PLAYER_ADJUST_FOCUS_DISTANCE];
+        float hysteresis = app->adjust[PLAYER_ADJUST_FOCUS_HYSTERESIS];
+        if (!app->autofocus_focused) {
+            if (!app->focus_threshold || distance <= limit)
+                set_focus(app, true, disparity);
+        } else if (app->focus_threshold &&
+                   distance > limit * (1.0f + hysteresis)) {
+            /* Released a little beyond the limit so that a subject right at
+             * it does not switch back and forth. */
+            set_focus(app, false, 0.0f);
+        } else if (fabsf(distance - app->autofocus_distance) >
+                   hysteresis * app->autofocus_distance) {
+            set_focus(app, true, disparity);
+        }
     }
     if (now - app->autofocus_log_time >= 1.0) {
         app->autofocus_log_time = now;
         printf("autofocus gaze=%d valid=%d disparity=%.2f score=%.2f"
-               " variance=%.5f offset=%.2f\n",
+               " variance=%.5f focus=%.2f offset=%.2f\n",
                app->autofocus_gaze, valid, disparity, score,
-               result->left_variance, app->autofocus_offset);
+               result->left_variance, app->autofocus_distance,
+               app->autofocus_offset);
     }
+}
+
+/* Moves the offset towards the current focus, once per frame. A critically
+ * damped spring: it starts and ends smoothly, is about 95 % there after
+ * the fade time, and a refocus on the way keeps its speed. */
+static void advance_autofocus(struct app *app)
+{
+    double now = monotonic_seconds();
+    float elapsed = app->autofocus_time > 0.0
+                        ? (float)(now - app->autofocus_time)
+                        : 0.0f;
+    app->autofocus_time = now;
+    float strength = app->adjust[PLAYER_ADJUST_AUTOFOCUS];
+    if (strength <= 0.0f) {
+        app->autofocus_offset = app->autofocus_speed = 0.0f;
+        set_focus(app, false, 0.0f);
+        return;
+    }
+    float target = fminf(strength * fmaxf(0.0f,
+                                          app->autofocus_focus_disparity -
+                                              AUTOFOCUS_TARGET_DEGREES),
+                         AUTOFOCUS_MAX_DEGREES);
+    float fade = app->adjust[PLAYER_ADJUST_FOCUS_FADE];
+    if (fade <= 0.0f) {
+        app->autofocus_offset = target;
+        app->autofocus_speed = 0.0f;
+        return;
+    }
+    float omega = 4.74f / fade; /* (1 + w t) e^(-w t) = 0.05 at w t = 4.74 */
+    float away = app->autofocus_offset - target;
+    float push = (app->autofocus_speed + omega * away) * elapsed;
+    float decay = expf(-omega * elapsed);
+    app->autofocus_offset = target + (away + push) * decay;
+    app->autofocus_speed = (app->autofocus_speed - omega * push) * decay;
 }
 
 /* Gaze marker textures: the measurement window (4 x 3 degrees) with a
@@ -3511,6 +3588,9 @@ static void update_debug_text(struct app *app)
     const char *source = app->autofocus_gaze ? "Auge"
                          : app->has_eye_gaze ? "Kopf (kein Blick)"
                                              : "Kopf (kein Eye Tracking)";
+    char focus[24] = "aus";
+    if (app->autofocus_focused)
+        snprintf(focus, sizeof(focus), "%.2f m", app->autofocus_distance);
     if (app->projection_mode == NV12_PROJECTION_FLAT ||
         app->projection_mode == NV12_PROJECTION_FISHEYE ||
         app->stereo_layout == NV12_STEREO_MONO)
@@ -3519,10 +3599,10 @@ static void update_debug_text(struct app *app)
     else
         snprintf(text, sizeof(text),
                  "Blick: %s · Disparität %+.2f° · Score %.2f · Struktur %.4f"
-                 " · %s · Versatz %.2f°",
+                 " · %s · Fokus %s · Versatz %.2f°",
                  source, app->autofocus_disparity, app->autofocus_score,
                  app->autofocus_variance,
-                 app->autofocus_valid ? "gültig" : "verworfen",
+                 app->autofocus_valid ? "gültig" : "verworfen", focus,
                  app->autofocus_offset);
     if (strcmp(text, app->debug_text) != 0) {
         snprintf(app->debug_text, sizeof(app->debug_text), "%s", text);
@@ -3672,8 +3752,7 @@ static void render_frame(struct app *app)
                                  0, 0, 1, 0, 0, 0, 0, 1}};
     screen_model = multiply(screen_model, screen_scale);
     /* Autofocus: measure every few frames where the viewer looks. */
-    if (app->adjust[PLAYER_ADJUST_AUTOFOCUS] <= 0.0f)
-        app->autofocus_offset = 0.0f;
+    advance_autofocus(app);
     bool gaze = false;
     XrVector3f look = view_direction(app, center.pose,
                                      frame_state.predictedDisplayTime, &gaze);
