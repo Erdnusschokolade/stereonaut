@@ -1,0 +1,54 @@
+{
+  "low-first": {
+    "y": {
+      "mismatch": 2037846,
+      "samples": 2073600,
+      "max_abs": 915,
+      "first": [
+        0,
+        0,
+        216,
+        823
+      ],
+      "nonzero_padding_words": 664753
+    },
+    "uv": {
+      "mismatch": 997689,
+      "samples": 1036800,
+      "max_abs": 972,
+      "first": [
+        "u",
+        0,
+        0,
+        913,
+        469
+      ]
+    }
+  },
+  "high-first": {
+    "y": {
+      "mismatch": 2059496,
+      "samples": 2073600,
+      "max_abs": 915,
+      "first": [
+        0,
+        0,
+        216,
+        334
+      ],
+      "nonzero_padding_words": 664753
+    },
+    "uv": {
+      "mismatch": 1020366,
+      "samples": 1036800,
+      "max_abs": 972,
+      "first": [
+        "u",
+        0,
+        0,
+        913,
+        587
+      ]
+    }
+  }
+}

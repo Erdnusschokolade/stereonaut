@@ -53,3 +53,47 @@ Es gibt keine V4L2-Control für Ausgabebittiefe oder Dithering.
    freigegeben werden.
 4. Bis dahin bleibt Main10 auf die Jellyfin-Transkodierung nach HEVC Main 8
    angewiesen (bis 4096 px Breite).
+
+## Nachtrag: SteamOS-Update und TP10 über 32-bpp-UBWC (2026-10-10)
+
+**Update** auf Build `20261007.6125817` (vorher `20260922.6101926`): Kernel
+`6.18.0-ge66bc2ca6f8c` mit neuem `iris.ko` (SHA-256 `7a5647a0…`, vorher
+`0b96e219…`), Mesa `26.3.0_devel+gitabc426bb` (`libvulkan_freedreno.so`
+`dfed0652…`), Firmware `vpu33_4v.mbn` unverändert (`7b829fc1…`). Das
+Iris-Verhalten ist gleich geblieben: P010 nach den Headern → Q10C, NV12-Dump
+bytegleich mit dem Stand vor dem Update. Die Benutzerinstallation
+(`~/.local/lib|bin|share/…stereonaut`, Konfiguration, SteamVR-Manifest,
+`appconfig.json`-Eintrag) hat das Update unverändert überstanden; der Player
+lief danach (8K-HEVC, 4K-H.264). Ein erster Start 45 s nach dem Booten
+scheiterte einmalig mit `VIDIOC_REQBUFS OUTPUT: ENOMEM` (`current session
+not supported(-12)`), der Wiederholungsversuch lief.
+
+**Probe** `tools/vulkan-q10c-probe/v4l2-vulkan-tp10-rgba.c` (freigegeben):
+Q10C-Frame → DMA-BUF → je TP10-Ebene ein Vulkan-Bild eines 32-bpp-Formats mit
+QCOM-UBWC-Modifier (640×1088 bzw. 640×544, Pitch 2560) → `vkCmdCopyImageToBuffer`
+→ Auswertung `analyze-tp10-rgba.py` (drei 10-Bit-Werte je Wort, beide
+Reihenfolgen).
+
+| Format | Layout | Ergebnis |
+| --- | --- | --- |
+| R8G8B8A8_UNORM | Turnips UBWC-Layout endet exakt an den Iris-Ebenengrenzen (2.805.760 / 4.210.688 B) | GPU-Lauf sauber, Werte falsch (Y 2.071.584/2.073.600 abweichend) |
+| A2B10G10R10_UNORM_PACK32 | dito | Werte falsch, andere Bytes als RGBA8 |
+| R32_UINT | dito | Werte falsch, wieder andere Bytes |
+
+Die Rohdaten sind komprimiert (Metadaten überwiegend `0x11`), der Readback
+unterscheidet sich vom Rohpuffer und spaltenweise Struktur bleibt teilweise
+erhalten: Die GPU dekomprimiert, rekonstruiert aber formatabhängig. Die
+Bytegeometrie stimmt, die UBWC-Kodierung von TP10 entspricht keinem der
+getesteten 32-bpp-Farbformate. Belege:
+[tp10-ubwc-20261010](main10-diagnostics/tp10-ubwc-20261010/).
+
+**Stand:** Mit Kernel und Mesa des Systems gibt es keinen bekannten Weg,
+Iris-Main10 korrekt auf die GPU zu bringen. Verbleibende Möglichkeiten,
+jeweils nicht begonnen:
+
+1. Eigene Turnip-Build (nur im Prozess über `VK_ICD_FILENAMES`, keine
+   Systemänderung) mit einem TP10-Hardwareformat, falls Adreno eines hat –
+   nicht geprüft, größerer Aufwand.
+2. Kerneltreiber: P010 freischalten oder 10→8-Bit-Wandlung konfigurieren
+   (Systemeingriff, Rücksprache).
+3. Jellyfin-Transkodierung nach HEVC Main 8 (vorhanden, ≤ 4096 px).
