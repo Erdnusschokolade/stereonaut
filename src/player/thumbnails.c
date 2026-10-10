@@ -2,6 +2,7 @@
 #include "thumbnails.h"
 
 #include "jellyfin.h"
+#include "local-thumbnail.h"
 #include "ui-draw.h"
 
 #include <errno.h>
@@ -289,9 +290,45 @@ static struct ui_image *fetch(const struct jf_config *config,
 
 /* `source` is "ITEM|IMAGE[|FALLBACK]"; the fallback (the poster) replaces
  * images that are missing or mostly border. */
+/* "file:PATH": a local video's picture, cached under a hash of the path
+ * with its modification time and size as the tag. */
+static struct ui_image *load_local(const char *path)
+{
+    struct stat status;
+    if (stat(path, &status) < 0)
+        return NULL;
+    uint64_t hash = 1469598103934665603ULL; /* FNV-1a */
+    for (const unsigned char *c = (const unsigned char *)path; *c; ++c)
+        hash = (hash ^ *c) * 1099511628211ULL;
+    char item[32], image[64], cache[PATH_MAX];
+    snprintf(item, sizeof(item), "local%016llx", (unsigned long long)hash);
+    snprintf(image, sizeof(image), "Local?tag=%lldx%lld",
+             (long long)status.st_mtime, (long long)status.st_size);
+    bool cacheable = cache_path(item, image, cache, sizeof(cache));
+    size_t size = 0;
+    char *data = cacheable ? read_file(cache, &size) : NULL;
+    if (!data) {
+        if (local_thumbnail_jpeg(path, DOWNLOAD_WIDTH, &data, &size) < 0) {
+            printf("local_thumbnail path=%s available=0\n", path);
+            return NULL;
+        }
+        if (cacheable)
+            write_file(cache, data, size);
+    }
+    struct ui_image *decoded = thumbnail_decode_jpeg(data, size);
+    free(data);
+    if (!decoded)
+        return NULL;
+    bool small = false;
+    decoded = trim_border(decoded, &small);
+    return decoded ? prepare(decoded) : NULL;
+}
+
 static struct ui_image *load(const struct jf_config *config,
                              const char *source, bool *stale)
 {
+    if (strncmp(source, "file:", 5) == 0)
+        return load_local(source + 5);
     const char *separator = strchr(source, '|');
     if (!separator)
         return NULL;

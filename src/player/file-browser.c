@@ -212,6 +212,13 @@ static struct file_browser_listing read_directory(const char *requested,
         }
         if (append_entry(&listing, kind, item->d_name, path) < 0)
             goto allocation_failure;
+        if (kind == FILE_BROWSER_MEDIA) {
+            size_t length = strlen(path) + 6U;
+            char *image = malloc(length);
+            if (image)
+                snprintf(image, length, "file:%s", path);
+            listing.entries[listing.entry_count - 1U].image = image;
+        }
         listing.entries[listing.entry_count - 1U].modified =
             (int64_t)status.st_mtime;
         listing.entries[listing.entry_count - 1U].size =
