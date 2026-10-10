@@ -142,6 +142,18 @@ struct app {
     double autofocus_log_time;
     float autofocus_offset; /* degrees the eye pictures are moved apart */
     bool autofocus_gaze;    /* last window followed the eye tracking */
+    /* Last measurement, for the debug display. */
+    bool autofocus_valid;
+    float autofocus_disparity, autofocus_score, autofocus_variance;
+    /* Debug display ("Blick anzeigen"): a frame of the measurement window
+     * along the gaze (green: eye tracking, orange: head direction) and a
+     * text line on the panel. */
+    bool gaze_debug;
+    XrSwapchain gaze_marker[2]; /* eye tracking, head direction */
+    XrPosef gaze_marker_pose;
+    bool gaze_marker_visible;
+    double debug_text_time;
+    char debug_text[192];
     VkDescriptorSetLayout descriptor_layout;
     VkDescriptorPool descriptor_pool;
     VkSamplerYcbcrConversion conversion;
@@ -1667,6 +1679,8 @@ static struct player_ui_state player_state(const struct app *app)
         .popup_open = app->popup_open,
         .popup_tab = app->popup_tab,
         .adjust = app->adjust,
+        .gaze_debug = app->gaze_debug,
+        .debug_text = app->gaze_debug ? app->debug_text : NULL,
         .projection_mode = app->projection_mode,
         .stereo_layout = app->stereo_layout,
         .swap_eyes = app->swap_eyes,
@@ -2451,6 +2465,11 @@ static void sync_player_input(struct app *app, XrTime time)
                    action < PLAYER_UI_TAB + PLAYER_UI_TAB_COUNT) {
             app->popup_tab = action - PLAYER_UI_TAB;
             app->ui_dirty = true;
+        } else if (action == PLAYER_UI_GAZE_DEBUG) {
+            app->gaze_debug = !app->gaze_debug;
+            app->debug_text[0] = '\0';
+            app->ui_dirty = true;
+            printf("gaze_debug=%d\n", app->gaze_debug);
         } else if (action == PLAYER_UI_RECENTER) {
             app->recenter_pending = true;
             app->recenter_yaw = true;
@@ -3231,6 +3250,9 @@ static void update_autofocus(struct app *app)
     bool valid = best > 0 && best < DISPARITY_CANDIDATES - 1 &&
                  score >= AUTOFOCUS_MIN_SCORE &&
                  result->left_variance >= AUTOFOCUS_MIN_VARIANCE;
+    app->autofocus_valid = valid;
+    app->autofocus_score = score;
+    app->autofocus_variance = result->left_variance;
     float disparity = 0.0f;
     if (valid) {
         /* Parabola through the peak and its neighbours. */
@@ -3239,6 +3261,7 @@ static void update_autofocus(struct app *app)
         float refine = curvature < 0.0f ? 0.5f * (a - c) / curvature : 0.0f;
         disparity = ((float)best + refine - (float)DISPARITY_ZERO) *
                     DISPARITY_STEP_DEGREES;
+        app->autofocus_disparity = disparity;
         float target = app->adjust[PLAYER_ADJUST_AUTOFOCUS] *
                        fmaxf(0.0f, disparity - AUTOFOCUS_TARGET_DEGREES);
         target = fminf(target, AUTOFOCUS_MAX_DEGREES);
@@ -3251,6 +3274,93 @@ static void update_autofocus(struct app *app)
                " variance=%.5f offset=%.2f\n",
                app->autofocus_gaze, valid, disparity, score,
                result->left_variance, app->autofocus_offset);
+    }
+}
+
+/* Gaze marker textures: the measurement window (4 x 3 degrees) with a
+ * centre dot. */
+#define GAZE_MARKER_WIDTH 128U
+#define GAZE_MARKER_HEIGHT 96U
+#define GAZE_MARKER_DISTANCE 1.5f
+
+static void create_gaze_markers(struct app *app)
+{
+    static const struct ui_color colors[2] = {
+        UI_RGBA(80, 230, 120, 255), UI_RGBA(255, 170, 50, 255),
+    };
+    for (int i = 0; i < 2; ++i) {
+        XrSwapchainCreateInfo info = {
+            .type = XR_TYPE_SWAPCHAIN_CREATE_INFO,
+            .usageFlags = XR_SWAPCHAIN_USAGE_SAMPLED_BIT |
+                          XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT,
+            .format = app->ui_format, .sampleCount = 1,
+            .width = GAZE_MARKER_WIDTH, .height = GAZE_MARKER_HEIGHT,
+            .faceCount = 1, .arraySize = 1, .mipCount = 1,
+        };
+        need_xr("xrCreateSwapchain(gaze marker)",
+                xrCreateSwapchain(app->session, &info,
+                                  &app->gaze_marker[i]));
+        static uint8_t pixels[GAZE_MARKER_WIDTH * GAZE_MARKER_HEIGHT * 4];
+        memset(pixels, 0, sizeof(pixels));
+        struct ui_canvas canvas = {pixels, GAZE_MARKER_WIDTH,
+                                   GAZE_MARKER_HEIGHT, app->ui_bgra};
+        ui_stroke_round_rect(&canvas, 3, 3, GAZE_MARKER_WIDTH - 6,
+                             GAZE_MARKER_HEIGHT - 6, 8, 4, colors[i]);
+        ui_fill_circle(&canvas, GAZE_MARKER_WIDTH / 2.0f,
+                       GAZE_MARKER_HEIGHT / 2.0f, 6, UI_RGBA(0, 0, 0, 140));
+        ui_fill_circle(&canvas, GAZE_MARKER_WIDTH / 2.0f,
+                       GAZE_MARKER_HEIGHT / 2.0f, 4, colors[i]);
+        fill_static_swapchain(app, app->gaze_marker[i], pixels,
+                              GAZE_MARKER_WIDTH, GAZE_MARKER_HEIGHT);
+    }
+}
+
+static XrCompositionLayerQuad make_gaze_marker_layer(const struct app *app)
+{
+    const float degrees = PI_F / 180.0f;
+    return (XrCompositionLayerQuad){
+        .type = XR_TYPE_COMPOSITION_LAYER_QUAD,
+        .layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT,
+        .space = app->space,
+        .eyeVisibility = XR_EYE_VISIBILITY_BOTH,
+        .subImage = {
+            .swapchain = app->gaze_marker[app->autofocus_gaze ? 0 : 1],
+            .imageRect = {.extent = {GAZE_MARKER_WIDTH, GAZE_MARKER_HEIGHT}},
+        },
+        .pose = app->gaze_marker_pose,
+        .size = {2.0f * GAZE_MARKER_DISTANCE *
+                     tanf(0.5f * DISPARITY_WINDOW_DEGREES_X * degrees),
+                 2.0f * GAZE_MARKER_DISTANCE *
+                     tanf(0.5f * DISPARITY_WINDOW_DEGREES_Y * degrees)},
+    };
+}
+
+/* Debug line on the panel, refreshed four times a second. */
+static void update_debug_text(struct app *app)
+{
+    double now = monotonic_seconds();
+    if (!app->gaze_debug || now - app->debug_text_time < 0.25)
+        return;
+    app->debug_text_time = now;
+    char text[sizeof(app->debug_text)];
+    const char *source = app->autofocus_gaze ? "Auge"
+                         : app->has_eye_gaze ? "Kopf (kein Blick)"
+                                             : "Kopf (kein Eye Tracking)";
+    if (app->projection_mode == NV12_PROJECTION_FLAT ||
+        app->stereo_layout == NV12_STEREO_MONO)
+        snprintf(text, sizeof(text), "Blick: %s · Messung nur bei 180/360 "
+                 "mit SBS/TB", source);
+    else
+        snprintf(text, sizeof(text),
+                 "Blick: %s · Disparität %+.2f° · Score %.2f · Struktur %.4f"
+                 " · %s · Versatz %.2f°",
+                 source, app->autofocus_disparity, app->autofocus_score,
+                 app->autofocus_variance,
+                 app->autofocus_valid ? "gültig" : "verworfen",
+                 app->autofocus_offset);
+    if (strcmp(text, app->debug_text) != 0) {
+        snprintf(app->debug_text, sizeof(app->debug_text), "%s", text);
+        app->ui_dirty = true;
     }
 }
 
@@ -3402,9 +3512,19 @@ static void render_frame(struct app *app)
     XrVector3f look = view_direction(app, center.pose,
                                      frame_state.predictedDisplayTime, &gaze);
     app->autofocus_gaze = gaze;
+    app->gaze_marker_visible = app->gaze_debug && video;
+    if (app->gaze_marker_visible) {
+        app->gaze_marker_pose = (XrPosef){
+            center.pose.orientation,
+            {center.pose.position.x + look.x * GAZE_MARKER_DISTANCE,
+             center.pose.position.y + look.y * GAZE_MARKER_DISTANCE,
+             center.pose.position.z + look.z * GAZE_MARKER_DISTANCE}};
+    }
+    update_debug_text(app);
     struct disparity_push disparity_push;
     bool measure =
-        video && app->adjust[PLAYER_ADJUST_AUTOFOCUS] > 0.0f &&
+        video &&
+        (app->adjust[PLAYER_ADJUST_AUTOFOCUS] > 0.0f || app->gaze_debug) &&
         ++app->disparity_frames % AUTOFOCUS_EVERY_FRAMES == 0U &&
         disparity_window(app, look, world_to_dome, eye_position,
                          app->adjust[PLAYER_ADJUST_STEREO_X] +
@@ -3594,15 +3714,20 @@ static void render_frame(struct app *app)
                                           ? make_ui_layer(app)
                                           : make_browser_layer(app);
     XrCompositionLayerQuad pointer_layer = make_pointer_layer(app);
-    const XrCompositionLayerBaseHeader *layers[] = {
+    XrCompositionLayerQuad gaze_layer = make_gaze_marker_layer(app);
+    const XrCompositionLayerBaseHeader *layers[4] = {
         (const XrCompositionLayerBaseHeader *)&layer,
-        (const XrCompositionLayerBaseHeader *)&ui_layer,
-        (const XrCompositionLayerBaseHeader *)&pointer_layer,
     };
-    bool show_ui = app->playing ? app->ui_visible : true;
     uint32_t layer_count = 1;
-    if (show_ui)
-        layer_count = app->pointer_layer_visible ? 3U : 2U;
+    if (app->playing && app->gaze_marker_visible)
+        layers[layer_count++] = (const XrCompositionLayerBaseHeader *)&gaze_layer;
+    bool show_ui = app->playing ? app->ui_visible : true;
+    if (show_ui) {
+        layers[layer_count++] = (const XrCompositionLayerBaseHeader *)&ui_layer;
+        if (app->pointer_layer_visible)
+            layers[layer_count++] =
+                (const XrCompositionLayerBaseHeader *)&pointer_layer;
+    }
     XrFrameEndInfo end = {.type = XR_TYPE_FRAME_END_INFO, .displayTime = frame_state.predictedDisplayTime,
         .environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE,
         .layerCount = layer_count,
@@ -3681,6 +3806,7 @@ int main(int argc, char **argv)
     create_ui_resources(&app);
     create_browser_texture(&app);
     create_pointer_texture(&app);
+    create_gaze_markers(&app);
     printf("host_ready\n");
     while (!app.quit) {
         handle_control(&app);

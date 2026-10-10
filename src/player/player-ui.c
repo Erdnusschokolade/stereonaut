@@ -272,9 +272,12 @@ static void layout_popup(const struct player_ui_state *state,
         add_stepper(layout, state, 1, ROW_CHIP_Y(0),
                     PLAYER_ADJUST_HEAD_MOTION, NULL);
         add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(1), 0,
-                   "Ausrichtung");
+                   "Ausrichtung und Test");
+        int half = (COLUMN_W - CHIP_GAP) / 2;
         add_chip(layout, PLAYER_UI_RECENTER, COLUMN_X(1), ROW_CHIP_Y(1),
-                 COLUMN_W, "Bild auf Blick zentrieren", false);
+                 half, "Zentrieren", false);
+        add_chip(layout, PLAYER_UI_GAZE_DEBUG, COLUMN_X(1) + half + CHIP_GAP,
+                 ROW_CHIP_Y(1), half, "Blick anzeigen", state->gaze_debug);
         add_stepper(layout, state, 1, ROW_CHIP_Y(2),
                     PLAYER_ADJUST_AUTOFOCUS, NULL);
 
@@ -522,6 +525,10 @@ void player_ui_render(struct player_ui *ui, const struct player_ui_state *state,
     round_button(&canvas, VIEW_X, SMALL_R, hover == PLAYER_UI_VIEW_POPUP,
                  state->popup_open);
     ui_draw_icon(&canvas, UI_ICON_CUBE, VIEW_X, ROW_Y, 38, color_text);
+
+    if (state->debug_text && state->debug_text[0])
+        ui_draw_text(&canvas, ui->font, 20, CARD_X + 40, CARD_Y + CARD_H - 34,
+                     CARD_W - 80, UI_ALIGN_LEFT, color_dim, state->debug_text);
 
     if (state->preview_visible && state->duration_us > 0)
         draw_preview(ui, &canvas, state);

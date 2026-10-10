@@ -75,6 +75,7 @@ enum player_ui_control {
     PLAYER_UI_RECENTER = 75,     /* centre the picture on the gaze */
     PLAYER_UI_RESET_POSITION = 76,
     PLAYER_UI_RESET_PICTURE = 77,
+    PLAYER_UI_GAZE_DEBUG = 78,   /* show the gaze and autofocus values */
     /* + 2 * enum player_adjust: decrease; + 1: increase. */
     PLAYER_UI_ADJUST = 100,
     PLAYER_UI_ADJUST_END = PLAYER_UI_ADJUST + 2 * PLAYER_ADJUST_COUNT,
@@ -98,6 +99,8 @@ struct player_ui_state {
     bool swap_eyes;
     uint32_t video_levels;
     const float *adjust; /* PLAYER_ADJUST_COUNT values */
+    bool gaze_debug;
+    const char *debug_text; /* line at the bottom of the card, or NULL */
     int hover;         /* enum player_ui_control */
     /* Scrub preview above the seek bar (while hovered or dragged): the
      * position and, if the server has trickplay tiles, its picture. */

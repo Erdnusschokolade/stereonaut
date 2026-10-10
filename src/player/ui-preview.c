@@ -165,6 +165,9 @@ static int preview_player(const char *path, int hover, bool popup, int tab)
         .video_levels = 1,
         .popup_tab = tab,
         .adjust = adjust,
+        .gaze_debug = true,
+        .debug_text = "Blick: Auge · Disparität +11.40° · Score 0.98 · "
+                      "Struktur 0.0020 · gültig · Versatz 7.80°",
     };
     /* Hovering the seek bar shows the scrub preview (a stand-in picture of
      * one SBS eye). */
