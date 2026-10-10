@@ -383,6 +383,9 @@ static struct file_browser_listing read_jellyfin(const char *request,
         }
         entry->duration_us = items[i].runtime_ticks / 10;
         entry->year = items[i].year;
+        snprintf(entry->codec, sizeof(entry->codec), "%s", items[i].codec);
+        entry->width = items[i].width;
+        entry->height = items[i].height;
     }
     free(items);
     return listing;

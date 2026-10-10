@@ -20,6 +20,8 @@ struct file_browser_entry {
     char *image;
     int64_t duration_us; /* 0 if unknown */
     int year;            /* 0 if unknown */
+    char codec[32];      /* e.g. "HEVC Main 10", "" if unknown */
+    int width, height;   /* 0 if unknown */
 };
 
 struct file_browser_listing {

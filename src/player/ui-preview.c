@@ -97,10 +97,17 @@ static void add(struct file_browser_listing *listing,
     listing->entries = realloc(listing->entries,
                                (listing->entry_count + 1) *
                                    sizeof(*listing->entries));
-    listing->entries[listing->entry_count++] = (struct file_browser_entry){
-        kind, strdup(name), strdup(path), NULL,
-        kind == FILE_BROWSER_MEDIA ? (int64_t)(1234 + listing->entry_count * 517) * 1000000 : 0,
-        kind == FILE_BROWSER_MEDIA ? 2023 : 0};
+    struct file_browser_entry *entry =
+        &listing->entries[listing->entry_count++];
+    *entry = (struct file_browser_entry){
+        .kind = kind, .name = strdup(name), .path = strdup(path)};
+    if (kind == FILE_BROWSER_MEDIA) {
+        entry->duration_us = (int64_t)(1234 + listing->entry_count * 517) * 1000000;
+        entry->year = 2023;
+        snprintf(entry->codec, sizeof(entry->codec), "HEVC Main 10");
+        entry->width = 7680;
+        entry->height = 3840;
+    }
 }
 
 /* Writes RGBA canvas pixels composited over a backdrop as binary PPM. */

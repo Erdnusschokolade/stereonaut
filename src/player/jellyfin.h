@@ -29,6 +29,8 @@ struct jf_item {
     char image[96];
     int64_t runtime_ticks; /* 0 if unknown; 10 000 000 ticks per second */
     int year;              /* 0 if unknown */
+    char codec[32];        /* first video stream, e.g. "HEVC Main 10" ("" if unknown) */
+    int width, height;     /* first video stream, 0 if unknown */
 };
 
 struct jf_playback {

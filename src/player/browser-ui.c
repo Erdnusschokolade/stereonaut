@@ -534,9 +534,12 @@ static void draw_detail(struct browser_ui *ui, struct ui_canvas *canvas)
                                      entry->name);
     int y = 440 + lines * 40 + 24;
     bool jellyfin = strncmp(entry->path, "jf:", 3) == 0;
-    char badge[8], duration[16], year[16] = "";
+    char badge[8], duration[16], year[16] = "", size[40] = "";
     if (entry->year > 0)
         snprintf(year, sizeof(year), "%d", entry->year);
+    if (entry->width > 0 && entry->height > 0)
+        snprintf(size, sizeof(size), "%d \xc3\x97 %d", entry->width,
+                 entry->height);
     struct {
         const char *label, *value;
     } rows[] = {
@@ -545,6 +548,8 @@ static void draw_detail(struct browser_ui *ui, struct ui_canvas *canvas)
         {"Jahr", year},
         {"Quelle", jellyfin ? "Jellyfin" : "Lokal"},
         {"Format", extension_badge(entry, badge)},
+        {"Codec", entry->codec},
+        {"Größe", size},
     };
     for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); ++i) {
         if (!rows[i].value[0])

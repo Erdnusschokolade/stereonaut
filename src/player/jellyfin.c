@@ -382,6 +382,55 @@ static void folders_first(struct jf_item *list, size_t count)
     free(ordered);
 }
 
+/* Codec, profile and size of the first video stream (needs
+ * Fields=MediaStreams in the request). */
+static void describe_video(json_object *entry, struct jf_item *item)
+{
+    json_object *streams = NULL;
+    if (!json_object_object_get_ex(entry, "MediaStreams", &streams) ||
+        !json_object_is_type(streams, json_type_array))
+        return;
+    for (size_t i = 0; i < json_object_array_length(streams); ++i) {
+        json_object *stream = json_object_array_get_idx(streams, i);
+        const char *type = json_string(stream, "Type");
+        if (!type || strcmp(type, "Video") != 0)
+            continue;
+        const char *codec = json_string(stream, "Codec");
+        const char *profile = json_string(stream, "Profile");
+        json_object *value = NULL;
+        char name[16] = "";
+        if (codec) {
+            if (strcmp(codec, "hevc") == 0)
+                snprintf(name, sizeof(name), "HEVC");
+            else if (strcmp(codec, "h264") == 0)
+                snprintf(name, sizeof(name), "H.264");
+            else if (strcmp(codec, "mpeg4") == 0)
+                snprintf(name, sizeof(name), "MPEG-4");
+            else
+                for (size_t c = 0; codec[c] && c + 1U < sizeof(name); ++c)
+                    name[c] = (char)(codec[c] >= 'a' && codec[c] <= 'z'
+                                         ? codec[c] - 32
+                                         : codec[c]);
+        }
+        int depth = 0;
+        if (json_object_object_get_ex(stream, "BitDepth", &value))
+            depth = json_object_get_int(value);
+        snprintf(item->codec, sizeof(item->codec), "%s%s%.12s", name,
+                 profile && profile[0] ? " " : "",
+                 profile && profile[0] ? profile : "");
+        if (depth >= 10 && !strstr(item->codec, "10")) {
+            size_t used = strlen(item->codec);
+            snprintf(item->codec + used, sizeof(item->codec) - used,
+                     " (%d Bit)", depth);
+        }
+        if (json_object_object_get_ex(stream, "Width", &value))
+            item->width = json_object_get_int(value);
+        if (json_object_object_get_ex(stream, "Height", &value))
+            item->height = json_object_get_int(value);
+        return;
+    }
+}
+
 static int collect_items(json_object *root, bool filter_views,
                          struct jf_item **items, size_t *count)
 {
@@ -433,6 +482,7 @@ static int collect_items(json_object *root, bool filter_views,
             list[used].runtime_ticks = json_object_get_int64(value);
         if (json_object_object_get_ex(entry, "ProductionYear", &value))
             list[used].year = json_object_get_int(value);
+        describe_video(entry, &list[used]);
         copy_string(list[used].name, sizeof(list[used].name), name);
         list[used].is_folder =
             filter_views ||
@@ -482,7 +532,8 @@ int jf_list_children(const struct jf_config *config, const char *parent_id,
     char path[512];
     snprintf(path, sizeof(path),
              "/Items?userId=%s&ParentId=%s&SortBy=%s&"
-             "SortOrder=%s&Limit=%d&EnableTotalRecordCount=false",
+             "SortOrder=%s&Limit=%d&EnableTotalRecordCount=false&"
+             "Fields=MediaStreams",
              config->user_id, parent_id, fields[sort],
              descending ? "Descending" : "Ascending", LIST_LIMIT);
     json_object *root = NULL;
