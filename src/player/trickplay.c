@@ -6,10 +6,15 @@
 #include "thumbnails.h"
 #include "ui-draw.h"
 
+#include <math.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* Horizontal field of view of the straightened 180/360 degree preview. */
+#define FORWARD_FOV_DEGREES 100.0
+#define PI 3.14159265358979323846
 
 struct trickplay {
     pthread_t thread;
@@ -22,7 +27,7 @@ struct trickplay {
     char item[JF_ID_SIZE];
     bool want_valid;
     int64_t want_us;
-    uint32_t want_layout;
+    uint32_t want_layout, want_projection;
     /* Newest finished picture, taken by trickplay_poll. */
     struct ui_image *result;
 };
@@ -40,7 +45,7 @@ struct item_state {
     int decoded_index;
     struct ui_image *decoded;
     int done_index;
-    uint32_t done_layout;
+    uint32_t done_layout, done_projection;
 };
 
 static void reset_item(struct item_state *state)
@@ -121,8 +126,56 @@ static struct ui_image *cut_thumbnail(const struct item_state *state,
     return image;
 }
 
+/* Bilinear sample of `image` at pixel coordinates (x, y), clamped. */
+static void sample(const struct ui_image *image, double x, double y,
+                   uint8_t out[4])
+{
+    x = fmin(fmax(x - 0.5, 0.0), image->width - 1.0);
+    y = fmin(fmax(y - 0.5, 0.0), image->height - 1.0);
+    int x0 = (int)x, y0 = (int)y;
+    int x1 = x0 + 1 < image->width ? x0 + 1 : x0;
+    int y1 = y0 + 1 < image->height ? y0 + 1 : y0;
+    double fx = x - x0, fy = y - y0;
+    const uint8_t *p00 = image->rgba + ((size_t)y0 * image->width + x0) * 4U;
+    const uint8_t *p01 = image->rgba + ((size_t)y0 * image->width + x1) * 4U;
+    const uint8_t *p10 = image->rgba + ((size_t)y1 * image->width + x0) * 4U;
+    const uint8_t *p11 = image->rgba + ((size_t)y1 * image->width + x1) * 4U;
+    for (int c = 0; c < 4; ++c) {
+        double top = p00[c] + (p01[c] - p00[c]) * fx;
+        double bottom = p10[c] + (p11[c] - p10[c]) * fx;
+        out[c] = (uint8_t)lround(top + (bottom - top) * fy);
+    }
+}
+
+/* Perspective view straight ahead (4:3) out of an equirectangular eye,
+ * with the same mapping as the projection shader. */
+static struct ui_image *straighten(const struct ui_image *eye,
+                                   uint32_t projection)
+{
+    int height = eye->height, width = eye->height * 4 / 3;
+    struct ui_image *view = ui_image_create(width, height);
+    if (!view)
+        return NULL;
+    double half_x = tan(FORWARD_FOV_DEGREES * PI / 360.0);
+    double half_y = half_x * height / width;
+    double span = projection == NV12_PROJECTION_EQUIRECT_360 ? 2.0 * PI : PI;
+    for (int y = 0; y < height; ++y) {
+        double dy = (1.0 - (y + 0.5) * 2.0 / height) * half_y;
+        for (int x = 0; x < width; ++x) {
+            double dx = ((x + 0.5) * 2.0 / width - 1.0) * half_x;
+            double longitude = atan2(dx, 1.0);
+            double latitude = atan2(dy, sqrt(dx * dx + 1.0));
+            double u = longitude / span + 0.5;
+            double v = 0.5 - latitude / PI;
+            sample(eye, u * eye->width, v * eye->height,
+                   view->rgba + ((size_t)y * width + x) * 4U);
+        }
+    }
+    return view;
+}
+
 static struct ui_image *make_thumbnail(struct item_state *state, int index,
-                                       uint32_t layout)
+                                       uint32_t layout, uint32_t projection)
 {
     int tile = index / (state->info.columns * state->info.rows);
     if (tile >= state->tile_count)
@@ -142,7 +195,13 @@ static struct ui_image *make_thumbnail(struct item_state *state, int index,
         if (!state->decoded)
             return NULL;
     }
-    return cut_thumbnail(state, index, layout);
+    struct ui_image *eye = cut_thumbnail(state, index, layout);
+    if (!eye || (projection != NV12_PROJECTION_EQUIRECT_180 &&
+                 projection != NV12_PROJECTION_EQUIRECT_360))
+        return eye;
+    struct ui_image *view = straighten(eye, projection);
+    ui_image_free(eye);
+    return view;
 }
 
 static void *worker(void *argument)
@@ -161,7 +220,8 @@ static void *worker(void *argument)
             if (state.info_state == 1 && trickplay->want_valid) {
                 index = thumbnail_index(&state, trickplay->want_us);
                 if (index != state.done_index ||
-                    trickplay->want_layout != state.done_layout)
+                    trickplay->want_layout != state.done_layout ||
+                    trickplay->want_projection != state.done_projection)
                     break;
             }
             index = -1;
@@ -177,16 +237,18 @@ static void *worker(void *argument)
         }
         uint64_t generation = state.generation;
         uint32_t layout = trickplay->want_layout;
+        uint32_t projection = trickplay->want_projection;
         pthread_mutex_unlock(&trickplay->mutex);
         struct ui_image *image = NULL;
         if (index < 0)
             load_info(&state);
         else
-            image = make_thumbnail(&state, index, layout);
+            image = make_thumbnail(&state, index, layout, projection);
         pthread_mutex_lock(&trickplay->mutex);
         if (index >= 0) {
             state.done_index = index;
             state.done_layout = layout;
+            state.done_projection = projection;
         }
         if (image && generation == trickplay->generation) {
             ui_image_free(trickplay->result);
@@ -249,16 +311,18 @@ void trickplay_open(struct trickplay *trickplay, const char *item_id)
 }
 
 void trickplay_request(struct trickplay *trickplay, int64_t position_us,
-                       uint32_t stereo_layout)
+                       uint32_t stereo_layout, uint32_t projection_mode)
 {
     if (!trickplay)
         return;
     pthread_mutex_lock(&trickplay->mutex);
     if (!trickplay->want_valid || trickplay->want_us != position_us ||
-        trickplay->want_layout != stereo_layout) {
+        trickplay->want_layout != stereo_layout ||
+        trickplay->want_projection != projection_mode) {
         trickplay->want_valid = true;
         trickplay->want_us = position_us;
         trickplay->want_layout = stereo_layout;
+        trickplay->want_projection = projection_mode;
         pthread_cond_signal(&trickplay->changed);
     }
     pthread_mutex_unlock(&trickplay->mutex);

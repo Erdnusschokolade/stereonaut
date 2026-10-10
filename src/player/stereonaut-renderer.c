@@ -1980,7 +1980,8 @@ static void update_preview(struct app *app, int64_t position_us)
     if (!visible)
         return;
     app->preview_us = position_us;
-    trickplay_request(app->trickplay, position_us, app->stereo_layout);
+    trickplay_request(app->trickplay, position_us, app->stereo_layout,
+                      app->projection_mode);
 }
 
 static void sync_player_input(struct app *app, XrTime time)
