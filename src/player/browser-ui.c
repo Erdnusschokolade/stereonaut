@@ -116,8 +116,8 @@ enum {
     ID_PAGE = 22, /* 22 .. 22+PAGE_BUTTONS-1 */
     ID_PAGE_AREA = 29, /* hit test only: resolved with the model */
     ID_BACK = 30,
-    ID_RAIL = 40, /* start, jellyfin, local */
-    ID_EXIT = 43,
+    ID_RAIL = 40, /* 40 .. 40+RAIL_COUNT-1 */
+    ID_EXIT = 49,
     ID_SORT = 50,       /* the chip */
     ID_SORT_ITEM = 60,  /* 60 .. 60+JF_SORT_COUNT-1 */
     ID_SORT_AREA = 79,  /* hit test only: resolved with the model */
@@ -239,6 +239,7 @@ static bool has_direction(const struct browser_ui *ui, int sort)
 }
 
 enum { RAIL_START, RAIL_JELLYFIN, RAIL_LOCAL, RAIL_SEARCH, RAIL_COUNT };
+_Static_assert(ID_RAIL + RAIL_COUNT <= ID_EXIT, "rail ids overlap");
 
 static const struct ui_color color_card = UI_RGBA(17, 18, 22, 240);
 static const struct ui_color color_border = UI_RGBA(255, 255, 255, 18);
