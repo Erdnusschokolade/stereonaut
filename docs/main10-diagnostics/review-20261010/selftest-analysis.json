@@ -1,0 +1,117 @@
+{
+  "captured_readback_after_fence": {
+    "bytes": 6266880,
+    "low_six_bits_nonzero": 0,
+    "sha256": "62a2c589de955a95f3e93dd6677f209bb2a54ac0521c866a4824d1b1cceeebe1"
+  },
+  "captured_source_after_fence": {
+    "bytes": 6266880,
+    "low_six_bits_nonzero": 0,
+    "sha256": "7192b373425caa2c4b0f1e6b3829969716a1b869ff0a39990a6c41818ee9d6c4"
+  },
+  "captured_source_vs_readback": {
+    "u": {
+      "different_10bit_samples": 0,
+      "different_16bit_words": 0,
+      "first_different_sample": null,
+      "mae_raw": 0.0,
+      "maximum_absolute_raw_difference": 0,
+      "samples": 522240
+    },
+    "v": {
+      "different_10bit_samples": 0,
+      "different_16bit_words": 0,
+      "first_different_sample": null,
+      "mae_raw": 0.0,
+      "maximum_absolute_raw_difference": 0,
+      "samples": 522240
+    },
+    "y": {
+      "different_10bit_samples": 3580,
+      "different_16bit_words": 3580,
+      "first_different_sample": {
+        "absolute_raw_difference": 59840,
+        "baseline_10bit": 0,
+        "baseline_raw": 0,
+        "candidate_10bit": 935,
+        "candidate_raw": 59840,
+        "x": 0,
+        "y": 0
+      },
+      "mae_raw": 40.61341911764706,
+      "maximum_absolute_raw_difference": 65152,
+      "samples": 2088960
+    }
+  },
+  "dimensions": {
+    "chroma_height": 544,
+    "chroma_width": 960,
+    "height": 1088,
+    "width": 1920
+  },
+  "intended_synthetic_input": {
+    "bytes": 6266880,
+    "low_six_bits_nonzero": 0,
+    "sha256": "7192b373425caa2c4b0f1e6b3829969716a1b869ff0a39990a6c41818ee9d6c4"
+  },
+  "intended_vs_captured_source": {
+    "u": {
+      "different_10bit_samples": 0,
+      "different_16bit_words": 0,
+      "first_different_sample": null,
+      "mae_raw": 0.0,
+      "maximum_absolute_raw_difference": 0,
+      "samples": 522240
+    },
+    "v": {
+      "different_10bit_samples": 0,
+      "different_16bit_words": 0,
+      "first_different_sample": null,
+      "mae_raw": 0.0,
+      "maximum_absolute_raw_difference": 0,
+      "samples": 522240
+    },
+    "y": {
+      "different_10bit_samples": 0,
+      "different_16bit_words": 0,
+      "first_different_sample": null,
+      "mae_raw": 0.0,
+      "maximum_absolute_raw_difference": 0,
+      "samples": 2088960
+    }
+  },
+  "intended_vs_readback": {
+    "u": {
+      "different_10bit_samples": 0,
+      "different_16bit_words": 0,
+      "first_different_sample": null,
+      "mae_raw": 0.0,
+      "maximum_absolute_raw_difference": 0,
+      "samples": 522240
+    },
+    "v": {
+      "different_10bit_samples": 0,
+      "different_16bit_words": 0,
+      "first_different_sample": null,
+      "mae_raw": 0.0,
+      "maximum_absolute_raw_difference": 0,
+      "samples": 522240
+    },
+    "y": {
+      "different_10bit_samples": 3580,
+      "different_16bit_words": 3580,
+      "first_different_sample": {
+        "absolute_raw_difference": 59840,
+        "baseline_10bit": 0,
+        "baseline_raw": 0,
+        "candidate_10bit": 935,
+        "candidate_raw": 59840,
+        "x": 0,
+        "y": 0
+      },
+      "mae_raw": 40.61341911764706,
+      "maximum_absolute_raw_difference": 65152,
+      "samples": 2088960
+    }
+  }
+}

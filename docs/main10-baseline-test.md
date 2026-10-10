@@ -90,3 +90,92 @@ oder die Untauglichkeit der jeweils anderen Usage abzuleiten.
 Die Quelle ist eine isolierte Ableitung der alten Selbsttestprobe. Der
 Playercode wird nicht geändert. Das alte explizite 2560-Byte-Layout wird
 wegen seiner ungeklärten Formatsemantik nicht erneut aktiv benutzt.
+
+## Ausführung und Ergebnis
+
+Quellstand `c37d7f5`, Branch `hardware/main10-baseline`:
+
+| Artefakt | SHA-256 |
+| --- | --- |
+| C-Quelle | `499fb216a3058797484c8fdff4978294fa321e8c5ac55166cd0f941f666b21d3` |
+| Shaderquelle | `b88a643cd004390af7c554f6e52e916922dfe6b4f47407dd806a5506df59561e` |
+| Frame-Binary | `def246dc3e0399065c0b2b243bb69a7234f66dee650829840ef457785d52a6eb` |
+| Auf Frame erzeugtes SPIR-V | `03409ce063934849ebd2a997201a8cd690dd97dae4409fa1a75e5e413f0e80bf` |
+
+Quellhashes auf dem Frame geprüft. C-Build und Shaderbuild Exitcode 0.
+Lokaler Shaderbuild/spirv-val ebenfalls erfolgreich; der lokale Compiler
+erzeugte einen anderen SPIR-V-Hash, weshalb hier der tatsächliche Frame-Hash
+steht. Der Shader wurde noch nicht ausgeführt.
+
+**Genau ein Copy-Lauf, Exitcode 1 wegen Nutzbit-Mismatch.** Kein Timeout,
+kein protokollierter Vulkanfehler. Ein Submit; Fence erfolgreich. Die
+Samplingprobe wurde entsprechend der Abbruchbedingung nicht gestartet.
+
+Turnip wählte 6.299.648 Byte, Alignment 4096, QCOM-Modifier und für beide
+Memory-Planes Row-Pitch 3840. Die gemeldeten Subresource-Offsets sind wie
+früher null; sie werden nicht als importierbare Producer-Offsets verwendet.
+
+| Prüfung | Ergebnis |
+| --- | --- |
+| Source vor/nach GPU | Vollständig identisch und identisch zur deterministischen Referenz |
+| Y-Nutzbits | 3.580 / 2.088.960 Samples falsch |
+| U-Nutzbits | 0 / 522.240 falsch |
+| V-Nutzbits | 0 / 522.240 falsch |
+| Erstes falsches Sample | Y(0,0): erwartet 0, erhalten 935 |
+| Maximale Nutzbit-Abweichung | 1018 |
+| Position der Fehler | Nur x=0..447, y=0..15; sieben betroffene 32×16-Rasterblöcke |
+| Vergleich mit Lauf 08 | Alle 3.580 heute falschen Samples besitzen denselben Rohwert wie an derselben Position in Lauf 08 |
+
+Die Rasterblock-Koordinaten (x,y) sind `(0,0), (2,0), (5,0), (7,0),
+(8,0), (10,0), (13,0)`. Diese räumliche Beschreibung beweist noch keine
+bestimmte Hardware-Tile- oder UBWC-Blocksemantik.
+
+| Daten | SHA-256 |
+| --- | --- |
+| Source vorher und nachher | `7192b373425caa2c4b0f1e6b3829969716a1b869ff0a39990a6c41818ee9d6c4` |
+| Neuer Copy-Readback | `62a2c589de955a95f3e93dd6677f209bb2a54ac0521c866a4824d1b1cceeebe1` |
+
+Je Datei 6.266.880 Bytes. Rohdaten lokal erhalten und über bestehende
+`.gitignore` ausgeschlossen. Belege: [Copy-Log](main10-diagnostics/review-20261010/copy.log),
+[vollständiger Referenzvergleich](main10-diagnostics/review-20261010/selftest-analysis.json),
+[räumlicher Vergleich](main10-diagnostics/review-20261010/copy-spatial-analysis.json).
+
+Offline reproduzierbar:
+
+```sh
+python3 tools/vulkan-q10c-probe/analyze-q10c-selftest.py \
+  docs/main10-diagnostics/review-20261010/copy-source-after.bin \
+  docs/main10-diagnostics/review-20261010/copy-readback.bin \
+  docs/main10-diagnostics/review-20261010
+python3 tools/vulkan-q10c-probe/analyze-p010-baseline.py \
+  docs/main10-diagnostics/review-20261010 \
+  --previous docs/vulkan-video-diagnostics/run-08/p010-selftest-readback.bin
+```
+
+## Schlussfolgerung und nächste Abgrenzung
+
+Die alten großflächigen Fehler und die Sourceveränderung reproduzieren sich
+mit dieser Baseline nicht. Das stützt den Verdacht gegen das alte explizite
+2560-Byte-Layout. Es beweist nicht, dass alleine dessen Austausch ursächlich
+war: auch Probeinstrumentierung und aktivierte YCbCr-Featuredeklaration
+unterscheiden sich vom alten Lauf.
+
+Gleichzeitig bleibt ein exakt reproduzierbarer Restfehler im gemeinsamen
+Vulkan-Test-/Upload-/Copy-/Readback-Pfad, selbst bei treibereigenem Layout.
+Eine ausschließlich falsche externe Iris-Q10C-Beschreibung kann den heutigen
+Befund nicht erklären. Ein isolierter Copy-Fehler, UBWC-Verarbeitung oder
+ein noch unerkannter Fehler der Testpipeline bleiben offen. Ein allgemeiner
+Hardwaredefekt oder fehlende 10-Bit-Fähigkeit ist nicht nachgewiesen.
+
+Der vorbereitete Samplinglauf wäre die nächste eigenständige Gegenprobe:
+er ersetzt den Image-to-Buffer-Copy durch zwei `texelFetch`-Views und SSBO-
+Writes. Derselbe Upload bleibt enthalten; identische Fehler könnten daher
+bereits beim Upload oder in gemeinsamer Image-Verarbeitung entstehen. Ein
+korrektes Ergebnis würde dagegen den Copy-out-Pfad belasten. Der Lauf
+verwendet zusätzlich MUTABLE_FORMAT und SAMPLED-Usage; deshalb darf auch
+dieser Vergleich nicht als perfekte Ein-Variablen-Isolation ausgegeben werden.
+Er ist vorbereitet, aber nach dem heutigen Copy-Mismatch **nicht ausgeführt**.
+
+Kein erneuter Iris-Q10C-Import: Seine Formatsemantik bleibt ungeklärt.
+Die bestehenden Playerdateien und die installierte Anwendung wurden durch
+diese Untersuchung nicht verändert.

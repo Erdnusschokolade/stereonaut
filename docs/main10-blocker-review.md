@@ -4,6 +4,13 @@ Stand: 2026-10-10. Ausschließlich Auswertung vorhandener Dokumente, Logs,
 Testquellen und früher gesicherter Mesa-Quellen; kein SSH-Zugriff, Decoderlauf
 oder GPU-Test. Der installierte Treiberstand wurde heute nicht neu inventarisiert.
 
+Nachtrag: Die danach freigegebene Inventur und decoderfreie Gegenprobe sind
+separat in [main10-baseline-test.md](main10-baseline-test.md) dokumentiert.
+Mit treibereigenem Layout blieben 3.580 falsche Y-Samples; Source und U/V
+waren exakt korrekt. Die angekündigte bedingte Samplingprobe wurde nach
+diesem Mismatch nicht gestartet. Die folgenden Abschnitte halten den
+ursprünglichen Reviewstand vor dieser Ausführung fest.
+
 ## Was funktioniert und was fehlt
 
 | Stufe | Nachweis aus den bisherigen Läufen |
