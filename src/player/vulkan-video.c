@@ -132,22 +132,6 @@ struct vulkan_video_support vulkan_video_probe(VkPhysicalDevice physical)
     if (!has_extension(physical, VIDEO_QUEUE_EXTENSION) ||
         !has_extension(physical, VIDEO_DECODE_EXTENSION))
         return support;
-    uint32_t count = 0;
-    vkGetPhysicalDeviceQueueFamilyProperties(physical, &count, NULL);
-    VkQueueFamilyProperties *properties = calloc(count ? count : 1U,
-                                                  sizeof(*properties));
-    if (!properties)
-        return support;
-    vkGetPhysicalDeviceQueueFamilyProperties(physical, &count, properties);
-    for (uint32_t i = 0; i < count; ++i)
-        if (properties[i].queueFlags & VK_QUEUE_VIDEO_DECODE_BIT_KHR) {
-            support.queue = true;
-            support.queue_family = i;
-            break;
-        }
-    free(properties);
-    if (!support.queue)
-        return support;
     support.h264 = has_extension(physical, VIDEO_H264_EXTENSION);
     support.hevc = has_extension(physical, VIDEO_HEVC_EXTENSION);
 #ifdef VK_KHR_VIDEO_DECODE_H264_EXTENSION_NAME
@@ -162,6 +146,50 @@ struct vulkan_video_support vulkan_video_probe(VkPhysicalDevice physical)
 #else
     support.hevc = false;
 #endif
+    if (!support.h264 && !support.hevc)
+        return support;
+    /* A device may expose dedicated queues for different codecs.  Query the
+     * operation mask attached to every family rather than assuming that the
+     * first VIDEO_DECODE queue accepts the profile checked above. */
+    uint32_t count = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties2(physical, &count, NULL);
+    VkQueueFamilyProperties2 *properties = calloc(count ? count : 1U,
+                                                   sizeof(*properties));
+    VkQueueFamilyVideoPropertiesKHR *video = calloc(count ? count : 1U,
+                                                     sizeof(*video));
+    if (!properties || !video) {
+        free(properties);
+        free(video);
+        return support;
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+        properties[i].sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2;
+        properties[i].pNext = &video[i];
+        video[i].sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_VIDEO_PROPERTIES_KHR;
+    }
+    vkGetPhysicalDeviceQueueFamilyProperties2(physical, &count, properties);
+    for (uint32_t i = 0; i < count; ++i) {
+        VkVideoCodecOperationFlagsKHR operations =
+            video[i].videoCodecOperations;
+        bool codec =
+            (support.h264 &&
+             (operations & VK_VIDEO_CODEC_OPERATION_DECODE_H264_BIT_KHR)) ||
+            (support.hevc &&
+             (operations & VK_VIDEO_CODEC_OPERATION_DECODE_H265_BIT_KHR));
+        if ((properties[i].queueFamilyProperties.queueFlags &
+             VK_QUEUE_VIDEO_DECODE_BIT_KHR) && codec) {
+            support.queue = true;
+            support.queue_family = i;
+            break;
+        }
+    }
+    free(video);
+    free(properties);
+    if (!support.queue) {
+        support.h264 = false;
+        support.hevc = false;
+        return support;
+    }
     support.av1 = has_extension(physical, VIDEO_AV1_EXTENSION);
 #else
     (void)physical;
