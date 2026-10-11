@@ -147,9 +147,13 @@ struct playback_options {
     /* Seek restart while paused: show the target frame and stay paused. */
     bool start_paused;
     /* Iris refused to restart the queues after a seek in place (STREAMON
-     * ENOMEM with a kernel warning, seen with 8K Main10): later seeks of
+     * ENOMEM with a kernel warning, now and then with 8K): later seeks of
      * this title restart the session straight away. */
     bool no_seek_in_place;
+    /* Seek restart: the position the seek started from, which keeps the
+     * resume keyframe in the seek's direction (media_demux_seek); -1 if
+     * none. */
+    int64_t seek_from_us;
     /* Diagnostics: after this many frames (counted from the start), seek
      * as if from the panel; up to four seeks. */
     uint64_t test_seek_frames[4];
@@ -948,6 +952,7 @@ static struct playback_options parse_playback_options(int argc, char **argv)
 {
     struct playback_options options = {0};
     options.adopt_renderer_fd = -1;
+    options.seek_from_us = -1;
     for (int i = 2; i < argc; ++i) {
         if (strcmp(argv[i], "--swap-eyes") == 0) {
             options.swap_eyes = true;
@@ -1006,6 +1011,11 @@ static struct playback_options parse_playback_options(int argc, char **argv)
             options.start_paused = true;
         } else if (strcmp(argv[i], "--no-seek-in-place") == 0) {
             options.no_seek_in_place = true;
+        } else if (strcmp(argv[i], "--seek-from-us") == 0) {
+            if (++i >= argc)
+                fail_message("--seek-from-us requires a timestamp");
+            options.seek_from_us =
+                parse_i64_nonnegative(argv[i], "seek origin");
         } else if (strcmp(argv[i], "--format-source") == 0) {
             static const char *const sources[] = {"default", "name", "image",
                                                   "user"};
@@ -2218,6 +2228,7 @@ struct transport {
     double pause_started;
     uint32_t requested;         /* NV12_ACTION_* that ends the playback loop */
     int64_t requested_start_us; /* its seek target */
+    int64_t from_us;            /* and the position it was requested at */
     double last_status_sent;
 };
 
@@ -2288,6 +2299,7 @@ static double update_transport(struct transport *transport,
         if (info->duration_us > 0 && target >= info->duration_us)
             target = info->duration_us - 1;
         transport->requested_start_us = target;
+        transport->from_us = position;
         transport->requested = renderer_action;
         printf("player_action=%u position_us=%" PRId64 " target_us=%" PRId64
                "\n",
@@ -2384,7 +2396,7 @@ static void restart_session(char **argv, struct playback_options *options,
         snprintf(renderer_text, sizeof(renderer_text), "%d,%ld",
                  renderer_fd, (long)renderer_pid);
     }
-    char *restart_argv[24];
+    char *restart_argv[28];
     size_t restart_argc = 0;
     restart_argv[restart_argc++] = argv[0];
     restart_argv[restart_argc++] = argv[1];
@@ -2420,6 +2432,13 @@ static void restart_session(char **argv, struct playback_options *options,
         restart_argv[restart_argc++] = "--paused";
     if (options->no_seek_in_place)
         restart_argv[restart_argc++] = "--no-seek-in-place";
+    char from_text[32];
+    if (options->seek_from_us >= 0) {
+        snprintf(from_text, sizeof(from_text), "%" PRId64,
+                 options->seek_from_us);
+        restart_argv[restart_argc++] = "--seek-from-us";
+        restart_argv[restart_argc++] = from_text;
+    }
     restart_argv[restart_argc] = NULL;
     execv(argv[0], restart_argv);
     fail_errno("restart stereonaut-session after seek");
@@ -2487,6 +2506,7 @@ static int play_software(char **argv, struct playback_options *options,
             send_renderer_message(NV12_IPC_SEEKING, 0, 0);
             software_video_stop(software_video);
             if (media_pipeline_seek(pipeline, transport.requested_start_us,
+                                    transport.from_us,
                                     true, error, sizeof(error)) < 0) {
                 fprintf(stderr, "seek: %s\n", error);
                 break;
@@ -2596,6 +2616,7 @@ static int play_software(char **argv, struct playback_options *options,
         media_pipeline_close(&pipeline);
         if (transport.requested == NV12_ACTION_BACK)
             return 0;
+        options->seek_from_us = transport.from_us;
         restart_session(argv, options, transport.requested_start_us,
                         transport.paused);
     }
@@ -2689,7 +2710,8 @@ int main(int argc, char **argv)
     } else if (detect_format) {
         format_from_name(argv[1], &format_name_guess);
     }
-    if (media_pipeline_open(&pipeline, input, options.start_us, true, true,
+    if (media_pipeline_open(&pipeline, input, options.start_us,
+                            options.seek_from_us, true, true,
                             pipeline_error, sizeof(pipeline_error)) < 0) {
         if (stop_requested)
             return 0;
@@ -2877,10 +2899,12 @@ int main(int argc, char **argv)
             last_progress = now;
         if (transport.requested && transport.requested != NV12_ACTION_BACK &&
             capture_started && !source_change_pending &&
-            !options.no_seek_in_place) {
+            !options.no_seek_in_place && !layout.tp10) {
             /* Seek within the session (stateful decoder seek: both queues
              * off, coded data from the new keyframe, queues on again); a
-             * failure falls back to the restart below. */
+             * failure falls back to the restart below. Not with Main10
+             * (TP10): Iris refused STREAMON every time, also with only the
+             * OUTPUT queue stopped and restarted. */
             send_renderer_message(NV12_IPC_SEEKING, 0, 0);
             enum v4l2_buf_type output_type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
             enum v4l2_buf_type capture_type =
@@ -2902,6 +2926,7 @@ int main(int argc, char **argv)
                 have_next_packet = false;
             }
             if (media_pipeline_seek(pipeline, transport.requested_start_us,
+                                    transport.from_us,
                                     true, pipeline_error,
                                     sizeof(pipeline_error)) < 0) {
                 fprintf(stderr, "seek: %s\n", pipeline_error);
@@ -3357,6 +3382,7 @@ int main(int argc, char **argv)
         media_pipeline_close(&pipeline);
         if (transport.requested == NV12_ACTION_BACK)
             return 0;
+        options.seek_from_us = transport.from_us;
         restart_session(argv, &options, transport.requested_start_us,
                         transport.paused);
     }

@@ -19,7 +19,7 @@ int main(int argc, char **argv)
     int64_t target_us = (int64_t)(target_seconds * 1000000.0);
     char error[512] = {0};
     struct media_pipeline *pipeline = NULL;
-    if (media_pipeline_open(&pipeline, argv[1], 0, false, true,
+    if (media_pipeline_open(&pipeline, argv[1], 0, -1, false, true,
                             error, sizeof(error)) < 0) {
         fprintf(stderr, "pipeline_error=%s\n", error);
         return 1;
@@ -33,7 +33,7 @@ int main(int argc, char **argv)
     }
     int64_t before_pts = before.pts_us;
     media_packet_unref(&before);
-    if (media_pipeline_seek(pipeline, target_us, true,
+    if (media_pipeline_seek(pipeline, target_us, -1, true,
                             error, sizeof(error)) < 0) {
         fprintf(stderr, "seek_error=%s\n", error);
         media_pipeline_close(&pipeline);

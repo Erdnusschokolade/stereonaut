@@ -57,7 +57,7 @@ int main(int argc, char **argv)
     if (argc == 3) {
         int64_t target = parse_seconds(argv[2]);
         if (target < 0 ||
-            media_demux_seek(demux, target, error, sizeof(error)) < 0) {
+            media_demux_seek(demux, target, -1, error, sizeof(error)) < 0) {
             fprintf(stderr, "seek_error=%s\n", error);
             media_demux_close(&demux);
             return 1;

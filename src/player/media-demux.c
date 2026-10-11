@@ -498,6 +498,60 @@ static int64_t nearest_keyframe(AVStream *stream, int64_t target)
                : after->timestamp;
 }
 
+/* The keyframe to resume at for a seek from `from` to `target` (stream
+ * time base; `from` negative when there is no current position): the
+ * nearest to the target, unless that covers less than half the way in the
+ * seek's direction. Then the first keyframe beyond the halfway point, so a
+ * short skip over a long GOP (8K titles with one keyframe in 30 s) does
+ * not land where it started or move the wrong way. */
+static int64_t choose_keyframe(AVStream *stream, int64_t target,
+                               int64_t from)
+{
+    int64_t chosen = nearest_keyframe(stream, target);
+    if (from < 0 || target == from)
+        return chosen;
+    int64_t half = from + (target - from) / 2;
+    const AVIndexEntry *beyond = NULL;
+    if (target > from && chosen <= half)
+        beyond = avformat_index_get_entry_from_timestamp(stream, half + 1, 0);
+    else if (target < from && chosen >= half)
+        beyond = avformat_index_get_entry_from_timestamp(
+            stream, half - 1, AVSEEK_FLAG_BACKWARD);
+    return beyond ? beyond->timestamp : chosen;
+}
+
+/* To the first keyframe at or after `minimum` (stream time base), the one
+ * nearest `target` if the index knows several. Without an index entry
+ * there libavformat reads forward to find it. */
+static int seek_forward(struct media_demux *demux, int64_t minimum,
+                        int64_t target, char *error, size_t error_size)
+{
+    int result = avformat_seek_file(demux->format,
+                                    demux->info.video_stream_index,
+                                    minimum, target, INT64_MAX, 0);
+    if (result < 0) {
+        set_av_error(error, error_size, "avformat_seek_file", result);
+        return -1;
+    }
+    return 0;
+}
+
+/* To the index keyframe at `keyframe` (stream time base). Searched
+ * forwards: MP4 index entries carry decoding times, and a backward search
+ * for one of them lands a keyframe early (libavformat shifts the time by
+ * the B-frame delay first). */
+static int seek_keyframe(struct media_demux *demux, int64_t keyframe,
+                         char *error, size_t error_size)
+{
+    int result = av_seek_frame(demux->format, demux->info.video_stream_index,
+                               keyframe, 0);
+    if (result < 0) {
+        set_av_error(error, error_size, "av_seek_frame", result);
+        return -1;
+    }
+    return 0;
+}
+
 /* To the last keyframe at or before `target` (stream time base). */
 static int seek_backward(struct media_demux *demux, int64_t target,
                          char *error, size_t error_size)
@@ -519,9 +573,10 @@ int64_t media_demux_start_us(const struct media_demux *demux)
 }
 
 /* Playback resumes at the keyframe nearest to the target, before or after
- * it, so no frames have to be decoded and discarded up to the target. */
+ * it, so no frames have to be decoded and discarded up to the target (see
+ * choose_keyframe for from_us). */
 int media_demux_seek(struct media_demux *demux, int64_t target_us,
-                     char *error, size_t error_size)
+                     int64_t from_us, char *error, size_t error_size)
 {
     if (!demux || target_us < 0) {
         set_error(error, error_size, "invalid seek target");
@@ -539,22 +594,39 @@ int media_demux_seek(struct media_demux *demux, int64_t target_us,
     }
     int64_t target = av_rescale_q(target_us + demux->time_offset_us,
                                   AV_TIME_BASE_Q, stream->time_base);
+    int64_t from = from_us < 0 ? -1
+                               : av_rescale_q(from_us + demux->time_offset_us,
+                                              AV_TIME_BASE_Q,
+                                              stream->time_base);
     int64_t chosen = target;
     /* If the index already reaches past the target (MP4; Matroska after
      * its first seek, which reads the cues), one seek goes straight to the
-     * nearest keyframe. Otherwise seek back first, which completes the
-     * index, and on to the next keyframe if that one is nearer. */
+     * chosen keyframe. Otherwise seek back first, which completes the
+     * index, and on to the chosen keyframe if that is another one. */
     bool indexed = !demux->time_offset_us &&
                    avformat_index_get_entry_from_timestamp(stream, target, 0);
-    if (indexed)
-        chosen = nearest_keyframe(stream, target);
-    if (seek_backward(demux, chosen, error, error_size) < 0)
-        return -1;
-    if (!indexed && !demux->time_offset_us) {
-        int64_t keyframe = nearest_keyframe(stream, target);
-        if (keyframe > target &&
-            seek_backward(demux, keyframe, error, error_size) < 0)
+    if (indexed) {
+        chosen = choose_keyframe(stream, target, from);
+        if (seek_keyframe(demux, chosen, error, error_size) < 0)
             return -1;
+    } else if (seek_backward(demux, chosen, error, error_size) < 0) {
+        return -1;
+    }
+    if (!indexed && !demux->time_offset_us) {
+        const AVIndexEntry *reached = avformat_index_get_entry_from_timestamp(
+            stream, target, AVSEEK_FLAG_BACKWARD);
+        int64_t keyframe = choose_keyframe(stream, target, from);
+        int64_t half = from + (target - from) / 2;
+        if (from >= 0 && target > from && keyframe <= half) {
+            /* The index ends before the halfway point (Matroska without
+             * cues lists only keyframes read so far). */
+            if (seek_forward(demux, half + 1, target, error,
+                             error_size) < 0)
+                return -1;
+        } else if ((!reached || keyframe != reached->timestamp) &&
+                   seek_keyframe(demux, keyframe, error, error_size) < 0) {
+            return -1;
+        }
     }
     avformat_flush(demux->format);
     av_bsf_flush(demux->video_bsf);

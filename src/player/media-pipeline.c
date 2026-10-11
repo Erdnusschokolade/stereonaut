@@ -180,7 +180,8 @@ static void *audio_worker(void *argument)
 }
 
 int media_pipeline_open(struct media_pipeline **result, const char *path,
-                        int64_t start_us, bool enable_audio_device,
+                        int64_t start_us, int64_t from_us,
+                        bool enable_audio_device,
                         bool start_paused,
                         char *error, size_t error_size)
 {
@@ -250,7 +251,7 @@ int media_pipeline_open(struct media_pipeline **result, const char *path,
         media_pipeline_close(&pipeline);
         return -1;
     }
-    if (start_us > 0 && media_demux_seek(pipeline->demux, start_us,
+    if (start_us > 0 && media_demux_seek(pipeline->demux, start_us, from_us,
                                          error, error_size) < 0) {
         media_pipeline_close(&pipeline);
         return -1;
@@ -381,7 +382,8 @@ int media_pipeline_pause(struct media_pipeline *pipeline, bool paused,
 }
 
 int media_pipeline_seek(struct media_pipeline *pipeline, int64_t target_us,
-                        bool paused, char *error, size_t error_size)
+                        int64_t from_us, bool paused, char *error,
+                        size_t error_size)
 {
     if (!pipeline || target_us < 0) {
         set_error(error, error_size, "invalid pipeline seek target");
@@ -410,7 +412,7 @@ int media_pipeline_seek(struct media_pipeline *pipeline, int64_t target_us,
         set_error(error, error_size, "reinitialize packet queues after seek");
         return -1;
     }
-    if (media_demux_seek(pipeline->demux, target_us,
+    if (media_demux_seek(pipeline->demux, target_us, from_us,
                          error, error_size) < 0)
         return -1;
     if (media_demux_start_us(pipeline->demux) != AV_NOPTS_VALUE)
