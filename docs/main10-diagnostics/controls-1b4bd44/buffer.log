@@ -1,0 +1,17 @@
+test mode=buffer extent=1920x1088 modifier=0x0500000000000001 usage=0x3 flags=0x0 layout=driver-selected
+validation_layer=unavailable
+vulkan_device=Turnip Adreno (TM) 750 vendor=0x5143 device=0x43051401
+capability_modifier=0x0500000000000001 memory_planes=2 features=0x8ff001 transfer_src=1 transfer_dst=1
+capability_combined_usage result=0 max_extent=16384x16384 max_mips=15 max_layers=2048
+sampler_descriptors=1
+capability_preflight=supported gpu_work_not_started_yet
+image_memory size=6299648 alignment=4096 type_bits=0x7 preferred_dedicated=0 required_dedicated=0
+driver_memory_plane=0 offset=0 row_pitch=3840 size=4177920
+driver_memory_plane=1 offset=0 row_pitch=3840 size=2088960
+dedicated_allocation_selected=1 driver_required=0
+image_memory_bound type=0 flags=0x7 bytes=6299648
+staging_buffer size=6266880 memory_type=0 flags=0x7
+readback_buffer size=6266880 memory_type=0 flags=0x7
+gpu_fence=signaled submissions=1
+comparison y_different=0 u_different=0 v_different=0 raw_word_different=0 source_changes=0 max_10bit_difference=0
+result=exact_10bit_match mode=buffer

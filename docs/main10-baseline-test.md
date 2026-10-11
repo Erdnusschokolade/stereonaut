@@ -208,3 +208,29 @@ Pro Modus ein sequenzieller Prozess mit `timeout -k 3s 15s`, ein Submit und
 Fence; Source-Integrity-Prüfung und Referenz unverändert. Keine Iris-Zugriffe.
 Die Proben werden anhand ihrer Ergebnisse ausgewertet, nicht automatisch
 wiederholt. Der alte Plane-Shader bleibt als historisches Artefakt erhalten.
+
+## Abschluss der Kontrollproben zu Quellstand `1b4bd44`
+
+Die drei vorbereiteten Modi wurden jeweils einmal ausgeführt. Die kleinen
+Textlogs bleiben als historische Diagnosebelege versioniert:
+
+| Modus / Log | Ergebnis | Abweichende Y / U / V-Samples |
+| --- | --- | --- |
+| [buffer](main10-diagnostics/controls-1b4bd44/buffer.log) | Bitgenau, Exitcode 0 | 0 / 0 / 0 |
+| [linear](main10-diagnostics/controls-1b4bd44/linear.log) | Bitgenau, Exitcode 0 | 0 / 0 / 0 |
+| [sample-identity](main10-diagnostics/controls-1b4bd44/sample-identity.log) | Vergleich fehlgeschlagen, Exitcode 1 | 2.080.782 / 521.777 / 521.592 |
+
+Alle drei Fences signalisierten; die Source blieb unverändert. Beim
+Samplinglauf war das erste abweichende Sample 891 statt 0, die maximale
+10-Bit-Abweichung betrug 1023. Ein erfolgreiches Fence belegt hier keine
+korrekten Bilddaten. Die Proben verwenden synthetisches P010 ohne Iris oder
+externen DMA-BUF-Import und beweisen allein keine Ursache im Decoderpfad.
+
+Diese Testreihe ist beendet. Die inzwischen implementierte Lösung verwendet
+die Adreno-TP10-Texturformate in einem eigenen Turnip-Build; Nachweise und
+Abgrenzung stehen in [Main10 – TP10-Lösung](main10-linear-output.md#durchbruch-q10c-über-gepatchten-turnip-mit-tp10-hardwareformat-2026-10-10)
+und im [Player-Handoff](mvp-player-handoff.md#hevc-main10-nativ-2026-10-10).
+Die obigen Fehlschläge sind keine Tests dieser neuen Implementierung.
+Generierte binäre Readbacks bleiben lokal erhalten und über `.gitignore`
+ausgeschlossen. Für diesen Abschluss wurden keine weiteren Hardwaretests
+ausgeführt.
