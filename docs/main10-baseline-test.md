@@ -229,7 +229,7 @@ externen DMA-BUF-Import und beweisen allein keine Ursache im Decoderpfad.
 Diese Testreihe ist beendet. Die inzwischen implementierte Lösung verwendet
 die Adreno-TP10-Texturformate in einem eigenen Turnip-Build; Nachweise und
 Abgrenzung stehen in [Main10 – TP10-Lösung](main10-linear-output.md#durchbruch-q10c-über-gepatchten-turnip-mit-tp10-hardwareformat-2026-10-10)
-und im [Player-Handoff](mvp-player-handoff.md#hevc-main10-nativ-2026-10-10).
+und im Player-Handoff (nicht veröffentlicht).
 Die obigen Fehlschläge sind keine Tests dieser neuen Implementierung.
 Generierte binäre Readbacks bleiben lokal erhalten und über `.gitignore`
 ausgeschlossen. Für diesen Abschluss wurden keine weiteren Hardwaretests

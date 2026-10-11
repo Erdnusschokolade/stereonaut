@@ -55,8 +55,7 @@ Run syntax:
   realvideo-001
 ```
 
-The active Steam Frame command and all stop gates are specified in
-`docs/realvideo-001-plan.md`; running it requires separate approval.
+Results of the Steam Frame runs are in `docs/realvideo-001-*results.md`.
 
 `inspect-annexb.py` counts the exact AUD boundaries without invoking a video
 decoder. `compare-selected-frames.py` accepts one or more selected frames,

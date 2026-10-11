@@ -24,7 +24,7 @@ ursprünglichen Reviewstand vor dieser Ausführung fest.
 | Verlustfreier 10-Bit-Inhalt / 8K60 Main10 | Nicht nachgewiesen |
 
 Quellen: [Decoderbefunde](decoder-investigation.md),
-[Importlauf](q10c-import-test-plan.md),
+Importlauf (Ergebnis in der [Q10C-Recherche](q10c-interop-research.md)),
 [Offline- und Selbsttestbefunde](q10c-readback-offline-analysis.md).
 Die erfolgreichen 8K-8-Bit-Läufe belegen keine entsprechende Main10-Leistung.
 

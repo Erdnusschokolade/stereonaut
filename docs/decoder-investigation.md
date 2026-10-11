@@ -48,7 +48,7 @@ Der öffentliche Abruf einer Quelldatei führt zu einer GitLab-Anmeldeseite; kei
 
 Die Moduldatei unter `drivers/media/platform/qcom/vcodec/iris/iris.ko` enthält allerdings `Q10C`, `HFI_COLOR_FMT_P010`, `is_10bit_colorformat` und `vdec_set_bit_depth`. Ihr SHA-256 ist `0b96e2197272ee77aa5ddcbe08c36ab11bd1dfb65eebded93e8e82e9baa45d28`. Diese Marker belegen enthaltenen 10-Bit-Code, weder Erreichbarkeit noch Gleichheit mit der Upstream-Serie. Der abweichende Treiberpfad und Symbolnamen sprechen für einen separaten Downstream-Stand. Die Formatprobe und aktiven Tests müssen die tatsächliche API klären.
 
-Alle sechs Patches wurden gelesen und als Quellbelege unter `docs/decoder-diagnostics/upstream-v5-patch*.txt` gesichert:
+Alle sechs Patches wurden gelesen (Quelle: LKML; die lokalen Kopien sind nicht veröffentlicht):
 
 | Patch | Relevante Änderung |
 | --- | --- |

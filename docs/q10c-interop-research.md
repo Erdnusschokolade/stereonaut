@@ -372,7 +372,7 @@ beweist daher noch keinen DMA-BUF-Import, kein korrektes Bild und keinen Erhalt
 der 10-Bit-Präzision.
 
 Der notwendige echte Import- und Präzisionstest ist als
-[separater Ablauf](q10c-import-test-plan.md) vorbereitet. Der einmal
+separater Ablauf (nicht veröffentlicht) vorbereitet. Der einmal
 freigegebene Lauf erreichte das bestätigte Q10C-SOURCE_CHANGE-Layout, brach
 jedoch wegen einer zu strengen `VIDIOC_DQEVENT`-Fehlerbehandlung in der Probe
 vor `DQBUF`, DMA-BUF-Export und Vulkan-Initialisierung ab. Damit bleibt der
@@ -386,4 +386,4 @@ ausgeführt und benötigt eine neue ausdrückliche Freigabe.
 > jedoch nicht pixelgenau mit der Software-Referenz überein. Damit ist der
 > Importpfad technisch erreicht, aber die korrekte Bildinterpretation und der
 > verlustfreie 10-Bit-Pfad bleiben unbewiesen. Details stehen im
-> [Importtestbericht](q10c-import-test-plan.md).
+> Importtestbericht (nicht veröffentlicht).

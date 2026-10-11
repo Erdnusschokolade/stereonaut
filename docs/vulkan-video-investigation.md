@@ -268,7 +268,7 @@ Modifier-Memory-Planes im selben DMA-BUF. Die kleine, nicht-streamende
 `vkCreateImage`-Probe hat diese Producer-Layouts inzwischen bestätigt. Der
 nächste Schritt ist der separat freizugebende einmalige echte Import- und
 Präzisionstest aus dem
-[vorbereiteten Ablauf](q10c-import-test-plan.md). P010 bleibt ein sinnvoller
+vorbereiteten Ablauf (nicht veröffentlicht). P010 bleibt ein sinnvoller
 Alternativpfad, ist im Valve-Treiber derzeit aber nicht enumeriert.
 
 Der direkte V4L2-Decode nach Q10C und das passende explizite Vulkan-Image sind

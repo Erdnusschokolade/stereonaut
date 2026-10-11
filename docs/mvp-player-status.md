@@ -3,11 +3,10 @@
 Stand: 2026-10-11, Branch `main` (zuvor `player/mvp` und
 `hardware/main10-baseline`)
 
-Der MVP aus Entwicklungsauftrag 011 ist abgeschlossen; der Player wird
+Der erste vollständige Player (MVP) ist abgeschlossen; er wird
 seitdem im Alltag auf dem Steam Frame genutzt und um Komfortfunktionen
-erweitert. Details, Messungen und Begründungen stehen chronologisch in
-`docs/mvp-player-handoff.md`, die Architektur in `docs/mvp-player-plan.md`
-und `CLAUDE.md`.
+erweitert. Messungen und Befunde stehen in den übrigen Dokumenten unter
+`docs/`, die Architektur in `README.md` und `src/player/README.md`.
 
 ## Videopfad
 
@@ -78,5 +77,3 @@ geprüft:
 - Headset-Tests der Punkte oben.
 - Ein dokumentierter Messlauf über mehrere Minuten (Framerate, Drops,
   A/V-Sync, Speicher).
-- Funktionsideen und Aufwandsschätzungen: Tabelle „Funktionsideen“ im
-  Handoff.

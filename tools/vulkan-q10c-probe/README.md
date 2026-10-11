@@ -55,7 +55,7 @@ alignment, exactly matching the Iris allocation size. The preserved output is
 in `docs/vulkan-video-diagnostics/run-02/`. A later one-shot test imported and
 bound the Q10C DMA-BUF and produced a two-plane GPU readback, but its pixels did
 not match the software reference. See
-[`docs/q10c-import-test-plan.md`](../../docs/q10c-import-test-plan.md).
+[`docs/q10c-interop-research.md`](../../docs/q10c-interop-research.md).
 
 Build:
 

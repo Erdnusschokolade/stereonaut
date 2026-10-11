@@ -1,0 +1,82 @@
+# Stereonaut
+
+A native VR video player for the **Steam Frame** (SteamOS, aarch64,
+Snapdragon 8 Gen 3). It plays 180°, 360°, fisheye and flat videos in mono,
+side-by-side or top-bottom stereo, from local files or a Jellyfin server, up
+to 8K60 – decoded entirely in hardware.
+
+Plain C11, no engine and no software video decoder:
+
+```text
+MKV/MP4 -> libavformat (hevc_/h264_mp4toannexb)
+        -> HEVC Main 8 | H.264 8 bit 4:2:0 | HEVC Main10 (patched Turnip only)
+        -> Iris V4L2 stateful decoder -> NV12/TP10 DMA-BUF
+        -> Vulkan YCbCr import -> OpenXR (SteamVR)
+Audio:  libavcodec/libswresample -> 48 kHz S16 stereo -> ALSA (master clock)
+```
+
+This is a personal project, not affiliated with Valve. It targets the Steam
+Frame specifically and has not been tried on other headsets.
+
+## Features
+
+- Browser for local folders and Jellyfin libraries (Quick Connect login,
+  thumbnails, sorting, filters by genre/studio/person, search with an
+  on-screen keyboard, "continue watching", resume prompt).
+- Jellyfin Direct Play for the formats above, server transcoding to HEVC
+  Main 8 for everything else, playback reporting and trickplay previews on
+  the seek bar.
+- Room-fixed playback panel: seek bar with chapter marks, ±10 s, volume,
+  end action (stop/repeat/next), auto-hide.
+- Per-title projection, stereo layout, eye swap, position, 6DoF head motion
+  and picture adjustments; automatic detection of projection and stereo
+  layout from file names, Jellyfin trickplay or the first decoded frames.
+- Eye-tracked autofocus for close subjects (stereo disparity measured on the
+  GPU) with threshold, hysteresis and fade.
+- Controller bindings with button combinations, assignable in the headset.
+
+## Building
+
+The code is built on the Steam Frame itself. It needs `pkg-config` for
+libavformat, libavcodec, libavutil, libswresample, alsa, libcurl, json-c,
+freetype2 and libjpeg, plus `glslc`, Vulkan and the SteamVR OpenXR loader
+(`/opt/steamvr/bin/linuxarm64/libopenxr_loader.so`, override with
+`OPENXR_LOADER`). All builds use `-std=c11 -O2 -Wall -Wextra -Werror`.
+
+```sh
+src/player/build-stereonaut-session.sh   # session, renderer (XR host), launcher, shaders
+src/player/install-user-launcher.sh      # installs to ~/.local/lib/stereonaut and ~/.local/bin
+src/player/register-steamvr-app.sh       # once: adds "Stereonaut" to the SteamVR library
+```
+
+HEVC Main10 needs a Turnip (Mesa) build with TP10 texture formats; see
+`tools/mesa-tp10/` and `docs/main10-linear-output.md`. Without it, Main10 is
+rejected locally and transcoded by Jellyfin.
+
+The Jellyfin connection is stored in `~/.config/stereonaut/jellyfin.json`
+(created by the Quick Connect login in the browser).
+
+The panel layout can be checked on a desktop without a headset:
+`src/player/build-ui-preview.sh`, then `build/ui-preview out.ppm` or
+`build/ui-preview --player out.ppm`.
+
+## Layout
+
+- `src/player/` – the player: launcher, XR host (`stereonaut-renderer.c`,
+  browser and playback panels), per-title session (`stereonaut-session.c`,
+  Iris V4L2 state machine), media layer, Jellyfin client. See
+  `src/player/README.md`.
+- `tools/` – probes and research tools for the decoder, Vulkan/OpenXR and
+  Main10; not part of the player.
+- `docs/` – measurements and findings from the hardware investigation
+  (Iris V4L2, Vulkan import, Q10C/TP10 Main10, projection, OpenXR), mostly in
+  German. `docs/mvp-player-status.md` summarises the current state.
+  Development plans and task descriptions are not part of this repository;
+  some documents still mention them by name.
+- `tests/` – generated decoder fixtures (see
+  `tools/decoder-probe/generate-fixtures.py`).
+
+## License
+
+MIT, see `LICENSE`. The Mesa patch in `tools/mesa-tp10/` applies to Mesa,
+which is MIT-licensed as well.
