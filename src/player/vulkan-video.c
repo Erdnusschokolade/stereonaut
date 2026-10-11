@@ -11,6 +11,7 @@
 #define VIDEO_HEVC_EXTENSION "VK_KHR_video_decode_h265"
 #define VIDEO_AV1_EXTENSION "VK_KHR_video_decode_av1"
 
+#ifdef VK_QUEUE_VIDEO_DECODE_BIT_KHR
 static bool has_extension(VkPhysicalDevice physical, const char *wanted)
 {
     uint32_t count = 0;
@@ -122,6 +123,7 @@ static bool hevc_supported(VkPhysicalDevice physical)
     return profile_has_sampled_nv12(physical, &profile);
 }
 #endif
+#endif /* VK_QUEUE_VIDEO_DECODE_BIT_KHR */
 
 struct vulkan_video_support vulkan_video_probe(VkPhysicalDevice physical)
 {
