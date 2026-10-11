@@ -69,6 +69,17 @@ enum nv12_ipc_type {
      * showing the current frame (released with the next FRAME as usual)
      * and show the loading state until then. */
     NV12_IPC_SEEKING = 16,
+    /* Session -> renderer: ask whether this host can decode the requested
+     * codec through Vulkan Video.  It is sent before DMA-BUF INIT, so a PC
+     * without the Frame's V4L2 decoder can select its native path. */
+    NV12_IPC_DECODER_QUERY = 17,
+    NV12_IPC_DECODER_CAPABILITIES = 18,
+    /* PCVR path: Annex-B H.264/HEVC packets are passed as a sealed memfd.
+     * The renderer decodes and samples the resulting Vulkan image on its
+     * OpenXR device; no decoded frame crosses the process boundary. */
+    NV12_IPC_VULKAN_INIT = 19,
+    NV12_IPC_VULKAN_PACKET = 20,
+    NV12_IPC_VULKAN_FLUSH = 21,
 };
 
 /* INIT pixel_format: how the decoder buffers are laid out. */
@@ -77,6 +88,11 @@ enum nv12_pixel_format {
     /* Iris Q10C: TP10 (three 10-bit samples per 32-bit word) with UBWC;
      * needs the patched Turnip (STEREONAUT_TP10, tools/mesa-tp10). */
     NV12_FORMAT_TP10 = 1,
+};
+
+enum nv12_decoder_capability {
+    NV12_DECODER_H264_VULKAN = 1U << 0,
+    NV12_DECODER_HEVC_VULKAN = 1U << 1,
 };
 
 enum nv12_player_state {
@@ -129,6 +145,13 @@ struct nv12_ipc_message {
     float volume;
     /* INIT, VIEW and FORMAT: fisheye lens angle in degrees. */
     uint32_t fisheye_fov;
+    /* DECODER_QUERY: AVCodecID; DECODER_CAPABILITIES: bitset above.
+     * VULKAN_INIT: AVCodecID.  The protocol is local and both peers use the
+     * same FFmpeg headers, so AVCodecID is the most explicit codec identity. */
+    uint32_t video_codec;
+    uint32_t decoder_capabilities;
+    /* VULKAN_PACKET: bytes in its sole SCM_RIGHTS memfd. */
+    uint64_t packet_size;
 };
 
 #endif

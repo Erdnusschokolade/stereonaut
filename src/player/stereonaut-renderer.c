@@ -32,6 +32,7 @@
 #include "trickplay.h"
 #include "ui-draw.h"
 #include "vulkan-video.h"
+#include "pcvr-vulkan-decode.h"
 #include "nv12-playback-ipc.h"
 #include "player-ui-ipc.h"
 
@@ -174,6 +175,9 @@ struct app {
     VkQueue video_queue;
     uint32_t queue_family;
     struct vulkan_video_support vulkan_video;
+    bool vulkan_api_13;
+    const char *enabled_device_extensions[12];
+    uint32_t enabled_device_extension_count;
     bool dma_buf_import;
     VkCommandPool command_pool;
     VkCommandBuffer command;
@@ -759,6 +763,25 @@ static void send_volume(struct app *app)
     send_message(app, &message);
 }
 
+/* This is deliberately a query rather than an optimistic platform check in
+ * the session process: OpenXR selects the GPU and only this process knows
+ * whether its actual device has the matching Vulkan Video codec profile. */
+static void send_decoder_capabilities(struct app *app)
+{
+    uint32_t capabilities = 0;
+    if (app->vulkan_api_13 && app->vulkan_video.queue) {
+        if (app->vulkan_video.h264)
+            capabilities |= NV12_DECODER_H264_VULKAN;
+        if (app->vulkan_video.hevc)
+            capabilities |= NV12_DECODER_HEVC_VULKAN;
+    }
+    struct nv12_ipc_message message = {
+        .type = NV12_IPC_DECODER_CAPABILITIES,
+        .decoder_capabilities = capabilities,
+    };
+    send_message(app, &message);
+}
+
 /* Steps of 10 %; above 100 % the samples are amplified (may clip). */
 static void change_volume(struct app *app, int direction)
 {
@@ -1019,7 +1042,9 @@ static void receive_frame_messages(struct app *app)
         }
         if (bytes < 0) { perror("recv NV12 IPC message"); exit(2); }
         need((size_t)bytes == sizeof(message), "short NV12 IPC message");
-        if (message.type == NV12_IPC_FRAME) {
+        if (message.type == NV12_IPC_DECODER_QUERY) {
+            send_decoder_capabilities(app);
+        } else if (message.type == NV12_IPC_FRAME) {
             need(message.index < app->video_buffer_count,
                  "NV12 IPC frame index is invalid");
             release_current_video(app);
@@ -1396,9 +1421,17 @@ static void initialize_xr_vulkan(struct app *app)
     printf("openxr_vulkan_requirements min=%" PRIu64 " max=%" PRIu64 "\n",
            requirements.minApiVersionSupported, requirements.maxApiVersionSupported);
 
+    /* FFmpeg's public Vulkan hardware context requires Vulkan 1.3.  Keep
+     * older OpenXR runtimes usable for the established DMA-BUF path, but
+     * advertise PCVR decode only when the runtime lets us create 1.3. */
+    app->vulkan_api_13 =
+        requirements.minApiVersionSupported <= VK_API_VERSION_1_3 &&
+        requirements.maxApiVersionSupported >= VK_API_VERSION_1_3;
     VkApplicationInfo vk_app = {.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
         .pApplicationName = "stereonaut-xr-quad", .applicationVersion = 1,
-        .pEngineName = "stereonaut", .engineVersion = 1, .apiVersion = VK_API_VERSION_1_1};
+        .pEngineName = "stereonaut", .engineVersion = 1,
+        .apiVersion = app->vulkan_api_13 ? VK_API_VERSION_1_3
+                                         : VK_API_VERSION_1_1};
     VkInstanceCreateInfo vk_info = {.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
         .pApplicationInfo = &vk_app};
     XrVulkanInstanceCreateInfoKHR xr_vk_info = {
@@ -1449,20 +1482,21 @@ static void initialize_xr_vulkan(struct app *app)
              (VK_VERSION_MAJOR(physical_properties.apiVersion) == 1 &&
               VK_VERSION_MINOR(physical_properties.apiVersion) >= 1),
          "Vulkan device lacks sampler YCbCr conversion");
-    const char *device_extensions[12];
     uint32_t device_extension_count = 0;
     if (app->dma_buf_import)
         for (size_t i = 0; i < ARRAY_COUNT(dma_buf_extensions); ++i)
-            device_extensions[device_extension_count++] =
+            app->enabled_device_extensions[device_extension_count++] =
                 dma_buf_extensions[i];
     if (ycbcr_extension)
-        device_extensions[device_extension_count++] =
+        app->enabled_device_extensions[device_extension_count++] =
             VK_KHR_SAMPLER_YCBCR_CONVERSION_EXTENSION_NAME;
     device_extension_count += vulkan_video_extensions(
-        &app->vulkan_video, device_extensions + device_extension_count,
-        ARRAY_COUNT(device_extensions) - device_extension_count);
-    need(device_extension_count <= ARRAY_COUNT(device_extensions),
+        &app->vulkan_video,
+        app->enabled_device_extensions + device_extension_count,
+        ARRAY_COUNT(app->enabled_device_extensions) - device_extension_count);
+    need(device_extension_count <= ARRAY_COUNT(app->enabled_device_extensions),
          "too many Vulkan device extensions");
+    app->enabled_device_extension_count = device_extension_count;
     float priority = 1.0f;
     VkDeviceQueueCreateInfo queue_infos[2] = {{
         .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
@@ -1480,7 +1514,7 @@ static void initialize_xr_vulkan(struct app *app)
     VkDeviceCreateInfo vk_device_info = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
         .queueCreateInfoCount = queue_count, .pQueueCreateInfos = queue_infos,
         .enabledExtensionCount = device_extension_count,
-        .ppEnabledExtensionNames = device_extensions};
+        .ppEnabledExtensionNames = app->enabled_device_extensions};
     XrVulkanDeviceCreateInfoKHR xr_device_info = {
         .type = XR_TYPE_VULKAN_DEVICE_CREATE_INFO_KHR, .systemId = app->system,
         .pfnGetInstanceProcAddr = vkGetInstanceProcAddr, .vulkanPhysicalDevice = app->physical,
