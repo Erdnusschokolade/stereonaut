@@ -146,9 +146,11 @@ struct playback_options {
     bool format_source_set;
     /* Seek restart while paused: show the target frame and stay paused. */
     bool start_paused;
-    /* Diagnostics: after this many frames, seek as if from the panel. */
-    uint64_t test_seek_frames;
-    int64_t test_seek_us;
+    /* Diagnostics: after this many frames (counted from the start), seek
+     * as if from the panel; up to four seeks. */
+    uint64_t test_seek_frames[4];
+    int64_t test_seek_us[4];
+    unsigned test_seek_count, test_seek_next;
 };
 
 struct capture_contract {
@@ -1012,10 +1014,12 @@ static struct playback_options parse_playback_options(int argc, char **argv)
             long long target = 0;
             if (++i >= argc ||
                 sscanf(argv[i], "%llu:%lld", &frames_before, &target) != 2 ||
-                frames_before == 0 || target < 0)
-                fail_message("--seek-test requires FRAMES:TARGET_US");
-            options.test_seek_frames = frames_before;
-            options.test_seek_us = target;
+                frames_before == 0 || target < 0 ||
+                options.test_seek_count == 4)
+                fail_message("--seek-test requires FRAMES:TARGET_US"
+                             " (at most four)");
+            options.test_seek_frames[options.test_seek_count] = frames_before;
+            options.test_seek_us[options.test_seek_count++] = target;
         } else if (strcmp(argv[i], "--frames") == 0) {
             if (++i >= argc)
                 fail_message("--frames requires a positive frame count");
@@ -2205,16 +2209,18 @@ struct transport {
     double last_status_sent;
 };
 
-/* --seek-test: a seek to the given time once `frames` frames were shown. */
+/* --seek-test: the next seek once `frames` frames were shown. */
 static void run_test_seek(struct playback_options *options, uint64_t frames)
 {
-    if (!options->test_seek_frames || frames < options->test_seek_frames)
+    unsigned next = options->test_seek_next;
+    if (next >= options->test_seek_count ||
+        frames < options->test_seek_frames[next])
         return;
     renderer_action = NV12_ACTION_SEEK_TO;
-    renderer_action_position_us = options->test_seek_us;
-    options->test_seek_frames = 0;
+    renderer_action_position_us = options->test_seek_us[next];
+    options->test_seek_next++;
     printf("seek_test frames=%" PRIu64 " target_us=%" PRId64 "\n", frames,
-           options->test_seek_us);
+           options->test_seek_us[next]);
 }
 
 /* Applies the renderer's last player action and reports the position to
