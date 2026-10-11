@@ -44,22 +44,119 @@ if [ -f "$build_dir/libvulkan_freedreno.so" ]; then
     printf 'installed TP10 Turnip: %s\n' "$turnip_dir"
 fi
 
-cat >"$bin_dir/stereonaut" <<'EOF'
+# A copy of the sources lets the launcher rebuild itself after a SteamOS
+# update has replaced a library it was linked against (see below). Skipped
+# when this script already runs from that copy.
+source_dir="${XDG_DATA_HOME:-$HOME/.local/share}/stereonaut/source"
+project_dir=$(CDPATH= cd -- "$script_dir/../.." && pwd)
+if [ "$project_dir" != "$source_dir" ]; then
+    rm -rf "$source_dir"
+    install -d "$source_dir/src" "$source_dir/tools"
+    (cd "$project_dir" && tar -cf - --exclude=src/player/build \
+        src/player tools/openxr-playback) | tar -C "$source_dir" -xf -
+    printf 'installed sources for rebuilds: %s\n' "$source_dir"
+fi
+
+# Written to a temporary file and moved into place: this script may be run by
+# the launcher itself, which must not see its file change while it runs.
+cat >"$bin_dir/stereonaut.new" <<'EOF'
 #!/bin/sh
 set -eu
 # Without an argument the launcher opens the start page (local files and
 # Jellyfin). The log of the last run helps to diagnose stutter and failures.
 state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/stereonaut"
 mkdir -p "$state_dir"
-exec >"$state_dir/launcher.log" 2>&1
+log="$state_dir/launcher.log"
+exec >"$log" 2>&1
+source_dir="${XDG_DATA_HOME:-$HOME/.local/share}/stereonaut/source"
 cd "$HOME/.local/lib/stereonaut"
-# Own Turnip with TP10 sampling for HEVC Main10, if installed.
+
+# Libraries the given files need but the system no longer has (a SteamOS
+# update can replace a library by a new major version).
+missing_libraries() {
+    ldd "$@" 2>/dev/null | sed -n 's/^[[:space:]]*\([^[:space:]]*\).*not found.*/\1/p' |
+        sort -u | tr '\n' ' '
+}
+
+# Dialogs appear on the SteamVR desktop (visible in the headset) or the
+# desktop session; without zenity the answer is "no".
+ask() {
+    command -v zenity >/dev/null 2>&1 &&
+        zenity --question --title=Stereonaut --text="$1" \
+            --ok-label="Neu bauen" --cancel-label="Abbrechen" --timeout=120
+}
+
+report_error() {
+    echo "$1"
+    if command -v zenity >/dev/null 2>&1; then
+        zenity --error --title=Stereonaut --timeout=120 \
+            --text="$1
+
+Details: $log" || true
+    fi
+}
+
+# Builds and installs from the source copy; progress as a pulsing bar.
+rebuild() {
+    status="$state_dir/rebuild.status"
+    echo 1 >"$status"
+    {
+        if "$source_dir/src/player/build-stereonaut-session.sh" >&2 &&
+            "$source_dir/src/player/install-user-launcher.sh" >&2; then
+            echo 0 >"$status"
+        fi
+        echo 100
+    } | if command -v zenity >/dev/null 2>&1; then
+        zenity --progress --pulsate --no-cancel --auto-close \
+            --title=Stereonaut --text="Stereonaut wird neu gebaut …" || true
+    else
+        cat >/dev/null
+    fi
+    [ "$(cat "$status")" = 0 ]
+}
+
+missing=$(missing_libraries stereonaut-launcher stereonaut-session \
+                            stereonaut-renderer)
+if [ -n "$missing" ]; then
+    echo "missing libraries: $missing"
+    if [ ! -x "$source_dir/src/player/build-stereonaut-session.sh" ]; then
+        report_error "Nach einem SteamOS-Update fehlen Bibliotheken ($missing). Es liegt kein Quelltext zum Neubauen vor; bitte Stereonaut neu installieren."
+        exit 1
+    fi
+    if ! ask "Nach einem SteamOS-Update fehlen Bibliotheken:
+$missing
+
+Stereonaut jetzt neu bauen? Das dauert etwa 10 Sekunden."; then
+        echo "rebuild declined or not answered"
+        exit 1
+    fi
+    if ! rebuild; then
+        report_error "Der Neubau von Stereonaut ist fehlgeschlagen."
+        exit 1
+    fi
+    missing=$(missing_libraries stereonaut-launcher stereonaut-session \
+                                stereonaut-renderer)
+    if [ -n "$missing" ]; then
+        report_error "Auch nach dem Neubau fehlen Bibliotheken: $missing"
+        exit 1
+    fi
+    echo "rebuild finished"
+fi
+
+# Own Turnip with TP10 sampling for HEVC Main10, if installed and still
+# loadable; otherwise Main10 is transcoded by Jellyfin.
 if [ -f turnip/icd.json ]; then
-    export VK_ICD_FILENAMES="$PWD/turnip/icd.json" STEREONAUT_TP10=1
+    turnip_missing=$(missing_libraries turnip/libvulkan_freedreno.so)
+    if [ -z "$turnip_missing" ]; then
+        export VK_ICD_FILENAMES="$PWD/turnip/icd.json" STEREONAUT_TP10=1
+    else
+        echo "TP10 Turnip disabled, missing libraries: $turnip_missing"
+    fi
 fi
 exec ./stereonaut-launcher ${1:+"$1"}
 EOF
-chmod 0755 "$bin_dir/stereonaut"
+chmod 0755 "$bin_dir/stereonaut.new"
+mv "$bin_dir/stereonaut.new" "$bin_dir/stereonaut"
 
 cat >"$applications_dir/stereonaut.desktop" <<EOF
 [Desktop Entry]

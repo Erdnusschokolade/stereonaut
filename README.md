@@ -59,6 +59,13 @@ HEVC Main10 needs a Turnip (Mesa) build with TP10 texture formats; see
 `tools/mesa-tp10/` and `docs/main10-linear-output.md`. Without it, Main10 is
 rejected locally and transcoded by Jellyfin.
 
+The installer also keeps a copy of the sources in
+`~/.local/share/stereonaut/source`. If a SteamOS update removes a library the
+installed binaries were linked against (a new major version), the launcher
+notices it at start, asks in a dialog (visible in the headset) and rebuilds
+and reinstalls itself in about half a minute. The TP10 Turnip is not rebuilt;
+if its libraries are missing it is disabled for that start.
+
 The Jellyfin connection is stored in `~/.config/stereonaut/jellyfin.json`
 (created by the Quick Connect login in the browser).
 
