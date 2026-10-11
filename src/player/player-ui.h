@@ -99,6 +99,7 @@ enum player_ui_control {
     PLAYER_UI_END_ACTION = 92,   /* cycles enum player_end_action */
     PLAYER_UI_AUTOHIDE = 93,     /* + index into player_ui_autohide */
     PLAYER_UI_FOCUS_THRESHOLD = 96, /* + 0 always, + 1 only near subjects */
+    PLAYER_UI_AV1_SOFTWARE = 98,    /* + 0 off, + 1 on (experimental) */
     /* + 2 * enum player_adjust: decrease; + 1: increase. */
     PLAYER_UI_ADJUST = 100,
     PLAYER_UI_ADJUST_END = PLAYER_UI_ADJUST + 2 * PLAYER_ADJUST_COUNT,
@@ -141,6 +142,7 @@ struct player_ui_state {
     const float *adjust; /* PLAYER_ADJUST_COUNT values */
     bool gaze_debug;
     bool focus_threshold; /* autofocus only below FOCUS_DISTANCE */
+    bool av1_software;    /* decode AV1 up to 4K on the CPU (next start) */
     /* Controller bindings (BINDING_ACTION_COUNT, NULL = standard) and the
      * action waiting for buttons, or -1. */
     const struct binding *bindings;

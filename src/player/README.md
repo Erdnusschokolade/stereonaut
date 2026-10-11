@@ -126,3 +126,14 @@ bounded playback without browsing, which is what the hardware tests use.
 Jellyfin titles are addressed as `jf:item:<id>:<folder>`; `jellyfin.c` talks to
 the server (Quick Connect, listings, `PlaybackInfo`) and the session plays the
 resulting Direct Play or HLS URL.
+
+Experimental AV1 (`software-video.c`): if `av1_software` is set in
+`settings.json` (toggle "AV1 bis 4K per CPU" in the view tab), the session
+exports `STEREONAUT_AV1`, the demuxer accepts 8-bit AV1 up to 4096×2160 and
+the Jellyfin device profile offers it for Direct Play. Such titles skip Iris:
+a worker thread decodes with dav1d (`max_frame_delay=8`) and converts each
+frame to NV12 in one of eight memfd-backed `udmabuf` DMA-BUFs, which the
+renderer imports exactly like Iris CAPTURE buffers. `play_software` in the
+session reuses the renderer protocol, audio-clock pacing and seek restart of
+the Iris loop. For a test run without changing the setting, start the
+launcher with `STEREONAUT_AV1=1`.

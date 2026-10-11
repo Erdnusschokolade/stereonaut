@@ -195,6 +195,7 @@ struct app {
     bool autofocus_focused;
     float autofocus_distance, autofocus_focus_disparity;
     bool focus_threshold;   /* only subjects nearer than FOCUS_DISTANCE */
+    bool av1_software;      /* settings.json, read by the next session */
     bool autofocus_gaze;    /* last window followed the eye tracking */
     /* Last measurement, for the debug display. */
     bool autofocus_valid;
@@ -919,6 +920,7 @@ static void load_preview_settings(struct app *app)
     double volume = settings_get_double("volume", 1.0);
     app->volume = volume < 0.0 ? 0.0f : volume > 1.5 ? 1.5f : (float)volume;
     app->focus_threshold = settings_get_bool("focus_threshold", false);
+    app->av1_software = settings_get_bool("av1_software", false);
     for (int i = 0; i < BINDING_ACTION_COUNT; ++i) {
         char key[64];
         snprintf(key, sizeof(key), "binding_%s", binding_action_info[i].key);
@@ -1878,6 +1880,7 @@ static struct player_ui_state player_state(const struct app *app)
         .adjust = app->adjust,
         .gaze_debug = app->gaze_debug,
         .focus_threshold = app->focus_threshold,
+        .av1_software = app->av1_software,
         .bindings = app->bindings,
         .learn_action = app->learn_action,
         .debug_text = app->gaze_debug ? app->debug_text : NULL,
@@ -2970,6 +2973,12 @@ static void sync_player_input(struct app *app, XrTime time)
             settings_set_bool("focus_threshold", app->focus_threshold);
             app->ui_dirty = true;
             printf("focus_threshold=%d\n", app->focus_threshold);
+        } else if (action == PLAYER_UI_AV1_SOFTWARE ||
+                   action == PLAYER_UI_AV1_SOFTWARE + 1) {
+            app->av1_software = action == PLAYER_UI_AV1_SOFTWARE + 1;
+            settings_set_bool("av1_software", app->av1_software);
+            app->ui_dirty = true;
+            printf("av1_software=%d\n", app->av1_software);
         } else if (action == PLAYER_UI_GAZE_DEBUG) {
             app->gaze_debug = !app->gaze_debug;
             app->debug_text[0] = '\0';

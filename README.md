@@ -40,6 +40,8 @@ Frame specifically and has not been tried on other headsets.
 - Eye-tracked autofocus for close subjects (stereo disparity measured on the
   GPU) with threshold, hysteresis and fade.
 - Controller bindings with button combinations, assignable in the headset.
+- Experimental, off by default: AV1 (8 bit, up to 4096×2160) decoded on the
+  CPU with dav1d, since the shipped kernel exposes no AV1 hardware decoder.
 
 ## Building
 

@@ -18,7 +18,8 @@ Audio:  libavcodec/libswresample -> 48 kHz S16 -> ALSA (Master-Clock)
 ```
 
 Jellyfin liefert Direct Play für diese Formate und transkodiert alles andere
-nach HEVC Main 8 (Server-Grenze 4096 px Breite).
+nach HEVC Main 8 (Server-Grenze 4096 px Breite). Experimentell und nur nach
+Einschalten decodiert dav1d AV1 bis 4K auf der CPU (siehe unten).
 
 ## Im Headset bestätigt
 
@@ -58,6 +59,11 @@ geprüft:
   noch nicht bestätigt (`binding_learn … grip_value=` im Log).
 - Schnelleres Öffnen von Bibliotheken (Liste ohne Stream-Infos, Codec und
   Auflösung werden seitenweise nachgeladen; VR-Bibliothek 0,25 s statt 2 s).
+- Experimentell: AV1 8 Bit bis 4096×2160 per Software (dav1d), Schalter
+  „AV1 bis 4K per CPU“ im Reiter „Ansicht“ (Standard aus, gilt ab dem
+  nächsten Titel); Jellyfin spielt solche Titel dann direkt statt zu
+  transkodieren. Ohne Headset bis 60 fps ohne Verluste, siehe
+  `docs/hardware-investigation.md`.
 
 ## Bekannte Grenzen
 

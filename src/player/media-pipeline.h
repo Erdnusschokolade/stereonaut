@@ -15,6 +15,8 @@ int media_pipeline_open(struct media_pipeline **result, const char *path,
                         char *error, size_t error_size);
 const struct media_stream_info *media_pipeline_info(
     const struct media_pipeline *pipeline);
+int media_pipeline_copy_video_parameters(
+    const struct media_pipeline *pipeline, AVCodecParameters *parameters);
 int media_pipeline_pop_video(struct media_pipeline *pipeline,
                              struct media_packet *packet, int timeout_ms,
                              char *error, size_t error_size);

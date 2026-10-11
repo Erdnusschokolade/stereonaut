@@ -5,6 +5,8 @@
  * 8-bit H.264 access units with container timestamps. The session imports
  * every Iris CAPTURE allocation once, executes one two-plane Vulkan transfer
  * for every decoded frame, and requeues CAPTURE only after the Vulkan fence.
+ * 8-bit AV1 up to 4K is decoded with dav1d instead if the viewer opted in
+ * (play_software, software-video.h).
  */
 #define _POSIX_C_SOURCE 200809L
 
@@ -36,6 +38,8 @@
 #include "playback-report.h"
 #include "title-settings.h"
 #include "format-detect.h"
+#include "settings.h"
+#include "software-video.h"
 
 #define MAX_OUTPUT_BUFFERS 16U
 #define MAX_CAPTURE_BUFFERS 32U
@@ -174,6 +178,8 @@ static bool view_state_valid;
 static bool renderer_held;
 /* Pipeline whose output volume the renderer sets. */
 static struct media_pipeline *volume_pipeline;
+/* Experimental AV1 decoder; replaces Iris for the whole session. */
+static struct software_video *software_video;
 
 /* Exit codes understood by the launcher. */
 #define EXIT_UNSUPPORTED_FORMAT 3
@@ -1878,6 +1884,10 @@ static int export_capture(unsigned index, size_t expected_size)
 
 static void queue_capture(unsigned index, size_t length)
 {
+    if (software_video) { /* AV1 software path: no CAPTURE queue */
+        software_video_release(software_video, index);
+        return;
+    }
     struct v4l2_plane plane = {
         .length = (uint32_t)length,
     };
@@ -2174,6 +2184,361 @@ static void cleanup_vulkan(struct vulkan_context *vk,
         vkDestroyInstance(vk->instance, NULL);
 }
 
+/* Pause and seek state of the playing title. */
+struct transport {
+    bool paused;
+    double pause_started;
+    uint32_t requested;         /* NV12_ACTION_* that ends the playback loop */
+    int64_t requested_start_us; /* its seek target */
+    double last_status_sent;
+};
+
+/* Applies the renderer's last player action and reports the position to
+ * the renderer and Jellyfin four times a second. Returns how long a pause
+ * lasted that ended now (deadlines move by it), or -1 on failure. */
+static double update_transport(struct transport *transport,
+                               struct media_pipeline *pipeline,
+                               const struct media_stream_info *info,
+                               int64_t start_us, bool audio_started,
+                               double now)
+{
+    double resumed_after = 0.0;
+    if (renderer_action == NV12_ACTION_TOGGLE_PAUSE) {
+        char error[512] = {0};
+        transport->paused = !transport->paused;
+        if (media_pipeline_pause(pipeline, transport->paused, error,
+                                 sizeof(error)) < 0) {
+            fprintf(stderr, "change playback pause state: %s\n", error);
+            return -1.0;
+        }
+        if (transport->paused) {
+            transport->pause_started = now;
+        } else if (transport->pause_started > 0.0) {
+            resumed_after = now - transport->pause_started;
+            transport->pause_started = 0.0;
+        }
+        printf("player_state=%s position_us=%" PRId64 "\n",
+               transport->paused ? "PAUSED" : "PLAYING",
+               media_pipeline_clock_us(pipeline));
+        send_renderer_status(transport->paused,
+                             status_position_us(pipeline, start_us),
+                             info->duration_us);
+        playback_report_update(jellyfin_report,
+                               status_position_us(pipeline, start_us),
+                               transport->paused, audio_started);
+        transport->last_status_sent = now;
+    } else if (renderer_action == NV12_ACTION_SEEK_BACK ||
+               renderer_action == NV12_ACTION_SEEK_FORWARD ||
+               renderer_action == NV12_ACTION_SEEK_TO) {
+        int64_t position = media_pipeline_clock_us(pipeline);
+        if (position == AV_NOPTS_VALUE)
+            position = start_us;
+        int64_t target;
+        if (renderer_action == NV12_ACTION_SEEK_TO) {
+            target = renderer_action_position_us;
+        } else {
+            int64_t delta = renderer_action == NV12_ACTION_SEEK_BACK
+                                ? -INT64_C(10000000) : INT64_C(10000000);
+            target = position + delta;
+        }
+        if (target < 0)
+            target = 0;
+        if (info->duration_us > 0 && target >= info->duration_us)
+            target = info->duration_us - 1;
+        transport->requested_start_us = target;
+        transport->requested = renderer_action;
+        printf("player_action=%u position_us=%" PRId64 " target_us=%" PRId64
+               "\n",
+               renderer_action, position, target);
+    } else if (renderer_action == NV12_ACTION_BACK) {
+        transport->requested = renderer_action;
+        printf("player_action=back\n");
+    }
+    renderer_action = 0;
+    if (!transport->requested && renderer_fd >= 0 &&
+        now - transport->last_status_sent >= 0.25) {
+        send_renderer_status(transport->paused,
+                             status_position_us(pipeline, start_us),
+                             info->duration_us);
+        playback_report_update(jellyfin_report,
+                               status_position_us(pipeline, start_us),
+                               transport->paused, audio_started);
+        transport->last_status_sent = now;
+    }
+    return resumed_after;
+}
+
+/* Before the renderer starts: projection and layout from the name or the
+ * trickplay tiles, the title's view state, and whether the first frames
+ * are analysed (NV12 only; TP10 is UBWC-compressed). */
+static void prepare_view(struct playback_options *options,
+                         const struct video_layout *layout)
+{
+    detect_format_before_start(options, layout->visible_width,
+                               layout->visible_height);
+    if (!view_state_valid) {
+        view_state = (struct title_settings){
+            .projection_mode = options->projection_mode,
+            .fisheye_fov = options->fisheye_fov,
+            .stereo_layout = options->stereo_layout,
+            .swap_eyes = options->swap_eyes,
+            .video_levels = options->video_levels,
+            .format_source = format_source,
+        };
+        view_state_valid = true;
+    }
+    frame_detection.active =
+        format_source == NV12_FORMAT_SOURCE_DEFAULT && !layout->tp10;
+}
+
+/* Seek restart: exec this program again at the new position with the
+ * current view, panel and renderer, which the new process adopts. */
+static void restart_session(char **argv, struct playback_options *options,
+                            int64_t start_us, bool paused)
+{
+    char start_text[32];
+    snprintf(start_text, sizeof(start_text), "%" PRId64, start_us);
+    if (view_state_valid) {
+        options->projection_mode = view_state.projection_mode;
+        options->fisheye_fov = view_state.fisheye_fov;
+        options->stereo_layout = view_state.stereo_layout;
+        options->swap_eyes = view_state.swap_eyes;
+        options->video_levels = view_state.video_levels;
+    }
+    const char *projection = options->projection_mode ==
+                                     NV12_PROJECTION_EQUIRECT_180
+                                 ? "180"
+                             : options->projection_mode ==
+                                       NV12_PROJECTION_EQUIRECT_360
+                                 ? "360"
+                             : options->projection_mode ==
+                                       NV12_PROJECTION_FISHEYE
+                                 ? "fisheye" : "flat";
+    const char *stereo = options->stereo_layout == NV12_STEREO_SBS
+                             ? "sbs"
+                         : options->stereo_layout == NV12_STEREO_TB
+                             ? "tb" : "mono";
+    static const char *const levels_names[] = {"normal", "deep", "full"};
+    const char *levels = options->video_levels <= NV12_LEVELS_FULL
+                             ? levels_names[options->video_levels]
+                             : "normal";
+    printf("player_restart target_us=%s projection=%s stereo=%s"
+           " levels=%s\n",
+           start_text, projection, stereo, levels);
+    char panel_text[96] = {0};
+    if (panel_state.valid)
+        snprintf(panel_text, sizeof(panel_text), "%.6f,%.6f,%.6f,%.6f,%u",
+                 panel_state.x, panel_state.y, panel_state.z,
+                 panel_state.yaw, panel_state.visible ? 1U : 0U);
+    jellyfin_restarting = true;
+    jellyfin_cleanup();
+    char renderer_text[48] = {0};
+    bool keep_renderer = renderer_fd >= 0;
+    if (keep_renderer) {
+        int fd_flags = fcntl(renderer_fd, F_GETFD);
+        if (fd_flags < 0 ||
+            fcntl(renderer_fd, F_SETFD, fd_flags & ~FD_CLOEXEC) < 0)
+            fail_errno("keep renderer IPC across exec");
+        snprintf(renderer_text, sizeof(renderer_text), "%d,%ld",
+                 renderer_fd, (long)renderer_pid);
+    }
+    char *restart_argv[24];
+    size_t restart_argc = 0;
+    restart_argv[restart_argc++] = argv[0];
+    restart_argv[restart_argc++] = argv[1];
+    restart_argv[restart_argc++] = "--projection";
+    restart_argv[restart_argc++] = (char *)projection;
+    restart_argv[restart_argc++] = "--stereo";
+    restart_argv[restart_argc++] = (char *)stereo;
+    restart_argv[restart_argc++] =
+        options->swap_eyes ? "--swap-eyes" : "--no-swap-eyes";
+    restart_argv[restart_argc++] = "--levels";
+    restart_argv[restart_argc++] = (char *)levels;
+    restart_argv[restart_argc++] = "--start-us";
+    restart_argv[restart_argc++] = start_text;
+    char fisheye_text[16];
+    snprintf(fisheye_text, sizeof(fisheye_text), "%u",
+             options->fisheye_fov);
+    restart_argv[restart_argc++] = "--fisheye-fov";
+    restart_argv[restart_argc++] = fisheye_text;
+    restart_argv[restart_argc++] = "--format-source";
+    restart_argv[restart_argc++] =
+        (char *)format_source_names[format_source];
+    if (panel_state.valid) {
+        restart_argv[restart_argc++] = "--panel";
+        restart_argv[restart_argc++] = panel_text;
+    }
+    if (keep_renderer) {
+        restart_argv[restart_argc++] = "--renderer";
+        restart_argv[restart_argc++] = renderer_text;
+    }
+    if (strncmp(argv[1], "jf:item:", 8) == 0)
+        restart_argv[restart_argc++] = "--jellyfin-resumed";
+    if (paused)
+        restart_argv[restart_argc++] = "--paused";
+    restart_argv[restart_argc] = NULL;
+    execv(argv[0], restart_argv);
+    fail_errno("restart stereonaut-session after seek");
+}
+
+/* Playback of an AV1 title with dav1d (software-video.h): the renderer
+ * protocol, pacing against the audio clock and seek restart of the Iris
+ * loop, with frames from the decoder thread instead of CAPTURE buffers. */
+static int play_software(char **argv, struct playback_options *options,
+                         struct media_pipeline *pipeline,
+                         double source_duration)
+{
+    const struct media_stream_info *info = media_pipeline_info(pipeline);
+    char error[512] = {0};
+    if (software_video_open(&software_video, pipeline, options->start_us,
+                            error, sizeof(error)) < 0) {
+        fprintf(stderr, "open AV1 software decoder: %s\n", error);
+        return EXIT_UNSUPPORTED_FORMAT;
+    }
+    const struct software_video_layout *frames =
+        software_video_layout(software_video);
+    struct capture_buffer buffers[MAX_CAPTURE_BUFFERS];
+    memset(buffers, 0, sizeof(buffers));
+    for (unsigned i = 0; i < frames->count; ++i) {
+        buffers[i].dma_buf_fd = frames->fds[i];
+        buffers[i].length = (size_t)frames->size;
+        frame_detection.mappings[i] = frames->mappings[i];
+    }
+    struct video_layout layout = {
+        .width = frames->width,
+        .coded_height = frames->height,
+        .visible_width = frames->width,
+        .visible_height = frames->height,
+        .stride = frames->stride,
+        .sizeimage = (uint32_t)frames->size,
+        .uv_offset = frames->uv_offset,
+    };
+    printf("software_video decoder=libdav1d buffers=%u stride=%u"
+           " uv_offset=%" PRIu64 " bytes=%" PRIu64 "\n",
+           frames->count, frames->stride, frames->uv_offset, frames->size);
+    prepare_view(options, &layout);
+    start_renderer(buffers, frames->count, &layout, options);
+
+    struct transport transport = {0};
+    bool audio_started = false;
+    double playback_start = monotonic_seconds();
+    double last_progress = playback_start;
+    uint64_t shown = 0, late_drops = 0;
+    for (;;) {
+        if (stop_requested) {
+            printf("player_stop=signal\n");
+            exit(0);
+        }
+        if (process_renderer_messages(buffers, frames->count))
+            fail_message("unexpected renderer FLUSHED response");
+        double now = monotonic_seconds();
+        if (update_transport(&transport, pipeline, info, options->start_us,
+                             audio_started, now) < 0.0)
+            return 2;
+        if (transport.requested)
+            break;
+        if (transport.paused) {
+            last_progress = now;
+            struct pollfd pollfd = {.fd = renderer_fd, .events = POLLIN};
+            if (poll(&pollfd, 1, 20) < 0 && errno != EINTR)
+                fail_errno("poll renderer");
+            continue;
+        }
+        unsigned index;
+        int64_t pts_us;
+        int next = software_video_next(software_video, &index, &pts_us, 20,
+                                       error, sizeof(error));
+        if (next < 0 && error[0]) {
+            fprintf(stderr, "AV1 software decoding: %s\n", error);
+            return 2;
+        }
+        if (next < 0)
+            break;
+        if (next == 0) {
+            if (now - last_progress > 10.0)
+                fail_message("no decoder progress for 10 seconds");
+            continue;
+        }
+        last_progress = monotonic_seconds();
+        if (!audio_started && options->start_paused) {
+            /* The audio clock starts with the next "play". */
+            transport.paused = true;
+            transport.pause_started = last_progress;
+            audio_started = true;
+            printf("player_state=PAUSED start_paused=1"
+                   " first_video_pts_us=%" PRId64 "\n", pts_us);
+        } else if (!audio_started) {
+            if (media_pipeline_pause(pipeline, false, error,
+                                     sizeof(error)) < 0) {
+                fprintf(stderr, "start audio playback: %s\n", error);
+                return 2;
+            }
+            audio_started = true;
+            printf("audio_started first_video_pts_us=%" PRId64 "\n", pts_us);
+        }
+        int64_t audio_clock = media_pipeline_clock_us(pipeline);
+        while (audio_clock != AV_NOPTS_VALUE &&
+               pts_us > audio_clock + INT64_C(10000)) {
+            int64_t wait_us = pts_us - audio_clock - 10000;
+            if (wait_us > 5000)
+                wait_us = 5000;
+            struct timespec delay = {.tv_sec = 0, .tv_nsec = wait_us * 1000};
+            nanosleep(&delay, NULL);
+            if (process_renderer_messages(buffers, frames->count))
+                fail_message("unexpected renderer FLUSHED response");
+            audio_clock = media_pipeline_clock_us(pipeline);
+        }
+        bool late = audio_clock != AV_NOPTS_VALUE &&
+                    pts_us + VIDEO_LATE_DROP_US < audio_clock;
+        if (late) {
+            late_drops++;
+            software_video_release(software_video, index);
+        } else {
+            detect_format_from_frame(options, buffers, index, &layout,
+                                     pts_us);
+            send_renderer_message(NV12_IPC_FRAME, index, shown);
+            renderer_outstanding[index] = true;
+        }
+        if (shown % 300U == 0)
+            printf("frame=%" PRIu64 " buffer=%u timestamp_us=%" PRId64
+                   " audio_clock_us=%" PRId64 " late_drops=%" PRIu64 "\n",
+                   shown, index, pts_us, audio_clock, late_drops);
+        if (++shown == options->frame_limit)
+            break;
+    }
+
+    if (transport.requested) {
+        if (media_pipeline_pause(pipeline, true, error, sizeof(error)) < 0) {
+            fprintf(stderr, "pause before player control: %s\n", error);
+            return 2;
+        }
+        if (transport.requested == NV12_ACTION_BACK)
+            wait_renderer(false);
+        else
+            hold_renderer(buffers, frames->count);
+        software_video_close(&software_video);
+        volume_pipeline = NULL;
+        media_pipeline_close(&pipeline);
+        if (transport.requested == NV12_ACTION_BACK)
+            return 0;
+        restart_session(argv, options, transport.requested_start_us,
+                        transport.paused);
+    }
+
+    double elapsed = monotonic_seconds() - playback_start;
+    printf("summary decoder=software frames=%" PRIu64
+           " late_video_drops=%" PRIu64 " seek_preroll_drops=%" PRIu64
+           " elapsed_s=%.3f source_duration_s=%.3f achieved_fps=%.3f\n",
+           shown, late_drops, software_video_preroll_drops(software_video),
+           elapsed, source_duration, elapsed > 0.0 ? shown / elapsed : 0.0);
+    wait_renderer(options->frame_limit == 0); /* test runs stop after N */
+    software_video_close(&software_video);
+    volume_pipeline = NULL;
+    media_pipeline_close(&pipeline);
+    printf("result=success\n");
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -2219,6 +2584,10 @@ int main(int argc, char **argv)
     }
     bool detect_format = !options.format_source_set &&
                          format_source == NV12_FORMAT_SOURCE_DEFAULT;
+    /* Opt-in AV1 software decoding: the demuxer accepts AV1 and the
+     * Jellyfin profile offers it (software-video.h). */
+    if (settings_get_bool("av1_software", false))
+        setenv(SOFTWARE_VIDEO_ENV, "1", 1);
     char pipeline_error[512] = {0};
     struct media_pipeline *pipeline = NULL;
     char input_url[2304];
@@ -2285,6 +2654,8 @@ int main(int argc, char **argv)
            options.swap_eyes, options.video_levels, options.frame_limit);
     if (options.start_us)
         printf("playback_start_target_us=%" PRId64 "\n", options.start_us);
+    if (info->video_codec == AV_CODEC_ID_AV1)
+        return play_software(argv, &options, pipeline, source_duration);
 
     /* Keep the validated transfer implementation available as diagnostic
      * source, while Vulkan and OpenXR live entirely in the renderer process.
@@ -2382,11 +2753,7 @@ int main(int argc, char **argv)
     bool last_seen = false;
     bool eos_seen = false;
     bool audio_started = false;
-    bool playback_paused = false;
-    double pause_started = 0.0;
-    double last_status_sent = 0.0;
-    uint32_t requested_control = 0;
-    int64_t requested_start_us = 0;
+    struct transport transport = {0};
     double playback_start = 0.0;
     double deadline = initial_start + 10.0;
     double last_progress = initial_start;
@@ -2416,79 +2783,22 @@ int main(int argc, char **argv)
             process_renderer_messages(captures, capture_count))
             fail_message("unexpected renderer FLUSHED response");
         double now = monotonic_seconds();
-        if (renderer_action == NV12_ACTION_TOGGLE_PAUSE) {
-            playback_paused = !playback_paused;
-            if (media_pipeline_pause(pipeline, playback_paused,
-                                     pipeline_error,
-                                     sizeof(pipeline_error)) < 0) {
-                fprintf(stderr, "change playback pause state: %s\n",
-                        pipeline_error);
-                return 2;
-            }
-            if (playback_paused) {
-                pause_started = now;
-            } else if (pause_started > 0.0) {
-                deadline += now - pause_started;
-                pause_started = 0.0;
-            }
+        bool was_paused = transport.paused;
+        double resumed_after = update_transport(&transport, pipeline, info,
+                                                options.start_us,
+                                                audio_started, now);
+        if (resumed_after < 0.0)
+            return 2;
+        deadline += resumed_after;
+        if (transport.paused != was_paused)
             last_progress = now;
-            printf("player_state=%s position_us=%" PRId64 "\n",
-                   playback_paused ? "PAUSED" : "PLAYING",
-                   media_pipeline_clock_us(pipeline));
-            send_renderer_status(playback_paused,
-                                 status_position_us(pipeline,
-                                                    options.start_us),
-                                 info->duration_us);
-            playback_report_update(jellyfin_report,
-                                   status_position_us(pipeline,
-                                                      options.start_us),
-                                   playback_paused, audio_started);
-            last_status_sent = now;
-        } else if (renderer_action == NV12_ACTION_SEEK_BACK ||
-                   renderer_action == NV12_ACTION_SEEK_FORWARD ||
-                   renderer_action == NV12_ACTION_SEEK_TO) {
-            int64_t position = media_pipeline_clock_us(pipeline);
-            if (position == AV_NOPTS_VALUE)
-                position = options.start_us;
-            if (renderer_action == NV12_ACTION_SEEK_TO) {
-                requested_start_us = renderer_action_position_us;
-            } else {
-                int64_t delta = renderer_action == NV12_ACTION_SEEK_BACK
-                                    ? -INT64_C(10000000) : INT64_C(10000000);
-                requested_start_us = position + delta;
-            }
-            if (requested_start_us < 0)
-                requested_start_us = 0;
-            if (info->duration_us > 0 &&
-                requested_start_us >= info->duration_us)
-                requested_start_us = info->duration_us - 1;
-            requested_control = renderer_action;
-            printf("player_action=%u position_us=%" PRId64
-                   " target_us=%" PRId64 "\n",
-                   renderer_action, position, requested_start_us);
-        } else if (renderer_action == NV12_ACTION_BACK) {
-            requested_control = renderer_action;
-            printf("player_action=back\n");
-        }
-        renderer_action = 0;
-        if (requested_control)
+        if (transport.requested)
             break;
-        if (playback_paused)
+        if (transport.paused)
             last_progress = now;
-        if (renderer_fd >= 0 && now - last_status_sent >= 0.25) {
-            send_renderer_status(playback_paused,
-                                 status_position_us(pipeline,
-                                                    options.start_us),
-                                 info->duration_us);
-            playback_report_update(jellyfin_report,
-                                   status_position_us(pipeline,
-                                                      options.start_us),
-                                   playback_paused, audio_started);
-            last_status_sent = now;
-        }
-        if (!playback_paused && now > deadline)
+        if (!transport.paused && now > deadline)
             fail_message("probe deadline exceeded");
-        if (capture_started && !playback_paused &&
+        if (capture_started && !transport.paused &&
             now - last_progress > 10.0)
             fail_message("no decoder/GPU progress for 10 seconds");
         int timeout_ms = 20;
@@ -2517,23 +2827,7 @@ int main(int argc, char **argv)
                                                   &capture_contract, &layout,
                                                   expected_width,
                                                   expected_height);
-                    detect_format_before_start(&options,
-                                               layout.visible_width,
-                                               layout.visible_height);
-                    if (!view_state_valid) {
-                        view_state = (struct title_settings){
-                            .projection_mode = options.projection_mode,
-                            .fisheye_fov = options.fisheye_fov,
-                            .stereo_layout = options.stereo_layout,
-                            .swap_eyes = options.swap_eyes,
-                            .video_levels = options.video_levels,
-                            .format_source = format_source,
-                        };
-                        view_state_valid = true;
-                    }
-                    frame_detection.active =
-                        format_source == NV12_FORMAT_SOURCE_DEFAULT &&
-                        !layout.tp10;
+                    prepare_view(&options, &layout);
                     start_renderer(captures, capture_count, &layout,
                                    &options);
                     type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
@@ -2594,7 +2888,7 @@ int main(int argc, char **argv)
             }
         }
 
-        if (capture_started && !playback_paused) {
+        if (capture_started && !transport.paused) {
             while (!video_eof) {
                 if (!have_next_packet) {
                     pipeline_error[0] = '\0';
@@ -2659,7 +2953,7 @@ int main(int argc, char **argv)
             }
         }
 
-        if (capture_started && !playback_paused) {
+        if (capture_started && !transport.paused) {
             bool capture_generation_last = false;
             bool last_capture_had_payload = false;
             unsigned last_capture_index = capture_count;
@@ -2731,8 +3025,8 @@ int main(int argc, char **argv)
                     } else {
                     if (!audio_started && options.start_paused) {
                         /* The audio clock starts with the next "play". */
-                        playback_paused = true;
-                        pause_started = monotonic_seconds();
+                        transport.paused = true;
+                        transport.pause_started = monotonic_seconds();
                         audio_started = true;
                         printf("player_state=PAUSED start_paused=1"
                                " first_video_pts_us=%" PRId64 "\n",
@@ -2819,7 +3113,7 @@ int main(int argc, char **argv)
                 if (!plane.bytesused)
                     queue_capture(dequeued.index,
                                   captures[dequeued.index].length);
-                if (playback_paused)
+                if (transport.paused)
                     break; /* started paused: one frame is shown */
             }
             if (capture_generation_last && source_change_pending) {
@@ -2870,14 +3164,14 @@ int main(int argc, char **argv)
         }
     }
 
-    if (requested_control) {
+    if (transport.requested) {
         if (media_pipeline_pause(pipeline, true, pipeline_error,
                                  sizeof(pipeline_error)) < 0) {
             fprintf(stderr, "pause before player control: %s\n",
                     pipeline_error);
             return 2;
         }
-        if (requested_control == NV12_ACTION_BACK || !capture_started)
+        if (transport.requested == NV12_ACTION_BACK || !capture_started)
             wait_renderer(false);
         else
             hold_renderer(captures, capture_count);
@@ -2902,92 +3196,10 @@ int main(int argc, char **argv)
         media_packet_unref(&next_packet);
         volume_pipeline = NULL;
         media_pipeline_close(&pipeline);
-        if (requested_control == NV12_ACTION_BACK)
+        if (transport.requested == NV12_ACTION_BACK)
             return 0;
-        char start_text[32];
-        snprintf(start_text, sizeof(start_text), "%" PRId64,
-                 requested_start_us);
-        if (view_state_valid) {
-            options.projection_mode = view_state.projection_mode;
-            options.fisheye_fov = view_state.fisheye_fov;
-            options.stereo_layout = view_state.stereo_layout;
-            options.swap_eyes = view_state.swap_eyes;
-            options.video_levels = view_state.video_levels;
-        }
-        const char *projection = options.projection_mode ==
-                                         NV12_PROJECTION_EQUIRECT_180
-                                     ? "180"
-                                 : options.projection_mode ==
-                                           NV12_PROJECTION_EQUIRECT_360
-                                     ? "360"
-                                 : options.projection_mode ==
-                                           NV12_PROJECTION_FISHEYE
-                                     ? "fisheye" : "flat";
-        const char *stereo = options.stereo_layout == NV12_STEREO_SBS
-                                 ? "sbs"
-                             : options.stereo_layout == NV12_STEREO_TB
-                                 ? "tb" : "mono";
-        static const char *const levels_names[] = {"normal", "deep", "full"};
-        const char *levels = options.video_levels <= NV12_LEVELS_FULL
-                                 ? levels_names[options.video_levels]
-                                 : "normal";
-        printf("player_restart target_us=%s projection=%s stereo=%s"
-               " levels=%s\n",
-               start_text, projection, stereo, levels);
-        char panel_text[96] = {0};
-        if (panel_state.valid)
-            snprintf(panel_text, sizeof(panel_text), "%.6f,%.6f,%.6f,%.6f,%u",
-                     panel_state.x, panel_state.y, panel_state.z,
-                     panel_state.yaw, panel_state.visible ? 1U : 0U);
-        jellyfin_restarting = true;
-        jellyfin_cleanup();
-        char renderer_text[48] = {0};
-        bool keep_renderer = renderer_fd >= 0;
-        if (keep_renderer) {
-            int fd_flags = fcntl(renderer_fd, F_GETFD);
-            if (fd_flags < 0 ||
-                fcntl(renderer_fd, F_SETFD, fd_flags & ~FD_CLOEXEC) < 0)
-                fail_errno("keep renderer IPC across exec");
-            snprintf(renderer_text, sizeof(renderer_text), "%d,%ld",
-                     renderer_fd, (long)renderer_pid);
-        }
-        char *restart_argv[24];
-        size_t restart_argc = 0;
-        restart_argv[restart_argc++] = argv[0];
-        restart_argv[restart_argc++] = argv[1];
-        restart_argv[restart_argc++] = "--projection";
-        restart_argv[restart_argc++] = (char *)projection;
-        restart_argv[restart_argc++] = "--stereo";
-        restart_argv[restart_argc++] = (char *)stereo;
-        restart_argv[restart_argc++] =
-            options.swap_eyes ? "--swap-eyes" : "--no-swap-eyes";
-        restart_argv[restart_argc++] = "--levels";
-        restart_argv[restart_argc++] = (char *)levels;
-        restart_argv[restart_argc++] = "--start-us";
-        restart_argv[restart_argc++] = start_text;
-        char fisheye_text[16];
-        snprintf(fisheye_text, sizeof(fisheye_text), "%u",
-                 options.fisheye_fov);
-        restart_argv[restart_argc++] = "--fisheye-fov";
-        restart_argv[restart_argc++] = fisheye_text;
-        restart_argv[restart_argc++] = "--format-source";
-        restart_argv[restart_argc++] =
-            (char *)format_source_names[format_source];
-        if (panel_state.valid) {
-            restart_argv[restart_argc++] = "--panel";
-            restart_argv[restart_argc++] = panel_text;
-        }
-        if (keep_renderer) {
-            restart_argv[restart_argc++] = "--renderer";
-            restart_argv[restart_argc++] = renderer_text;
-        }
-        if (strncmp(argv[1], "jf:item:", 8) == 0)
-            restart_argv[restart_argc++] = "--jellyfin-resumed";
-        if (playback_paused)
-            restart_argv[restart_argc++] = "--paused";
-        restart_argv[restart_argc] = NULL;
-        execv(argv[0], restart_argv);
-        fail_errno("restart stereonaut-session after seek");
+        restart_session(argv, &options, transport.requested_start_us,
+                        transport.paused);
     }
 
     double playback_end = monotonic_seconds();

@@ -305,6 +305,14 @@ const struct media_stream_info *media_pipeline_info(
     return pipeline ? media_demux_info(pipeline->demux) : NULL;
 }
 
+int media_pipeline_copy_video_parameters(
+    const struct media_pipeline *pipeline, AVCodecParameters *parameters)
+{
+    return pipeline ? media_demux_copy_video_parameters(pipeline->demux,
+                                                        parameters)
+                    : AVERROR(EINVAL);
+}
+
 static int copy_failure(struct media_pipeline *pipeline,
                         char *error, size_t error_size)
 {

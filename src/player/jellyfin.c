@@ -15,17 +15,21 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "software-video.h"
+
 #define RESPONSE_LIMIT (48U * 1024U * 1024U)
 #define LIST_LIMIT 5000
 
 /* Direct Play HEVC Main 8 bit (plus Main10 with the patched Turnip, see
- * STEREONAUT_TP10) and 8-bit 4:2:0 H.264 (Baseline, Main, High) in mkv/mp4;
- * everything else becomes an HLS transcode to HEVC. The HEVC profile list
- * and bit depth are filled in by device_profile(). */
+ * STEREONAUT_TP10) and 8-bit 4:2:0 H.264 (Baseline, Main, High) in mkv/mp4,
+ * plus 8-bit AV1 up to 4K if software decoding is enabled
+ * (software-video.h); everything else becomes an HLS transcode to HEVC.
+ * The codec list, the HEVC profiles and bit depth and the AV1 profile are
+ * filled in by jf_resolve_playback(). */
 static const char DEVICE_PROFILE_FORMAT[] =
     "{\"Name\":\"Stereonaut\",\"MaxStreamingBitrate\":200000000,"
     "\"DirectPlayProfiles\":[{\"Type\":\"Video\",\"Container\":\"mkv,mp4\","
-    "\"VideoCodec\":\"hevc,h264\",\"AudioCodec\":\"aac,ac3,eac3,mp3,opus\"}],"
+    "\"VideoCodec\":\"%s\",\"AudioCodec\":\"aac,ac3,eac3,mp3,opus\"}],"
     "\"TranscodingProfiles\":[{\"Type\":\"Video\",\"Container\":\"ts\","
     "\"Protocol\":\"hls\",\"VideoCodec\":\"hevc\",\"AudioCodec\":\"aac\","
     "\"Context\":\"Streaming\",\"MaxAudioChannels\":\"2\","
@@ -41,7 +45,16 @@ static const char DEVICE_PROFILE_FORMAT[] =
     "\"Value\":\"high|main|baseline|constrained baseline\","
     "\"IsRequired\":true},"
     "{\"Condition\":\"LessThanEqual\",\"Property\":\"VideoBitDepth\","
-    "\"Value\":\"8\",\"IsRequired\":true}]}]}";
+    "\"Value\":\"8\",\"IsRequired\":true}]}%s]}";
+
+static const char AV1_CODEC_PROFILE_FORMAT[] =
+    ",{\"Type\":\"Video\",\"Codec\":\"av1\",\"Conditions\":["
+    "{\"Condition\":\"LessThanEqual\",\"Property\":\"Width\","
+    "\"Value\":\"%d\",\"IsRequired\":true},"
+    "{\"Condition\":\"LessThanEqual\",\"Property\":\"Height\","
+    "\"Value\":\"%d\",\"IsRequired\":true},"
+    "{\"Condition\":\"LessThanEqual\",\"Property\":\"VideoBitDepth\","
+    "\"Value\":\"8\",\"IsRequired\":true}]}";
 
 struct buffer {
     char *data;
@@ -779,11 +792,18 @@ int jf_resolve_playback(const struct jf_config *config, const char *item_id,
     snprintf(path, sizeof(path), "/Items/%s/PlaybackInfo?UserId=%s", item_id,
              config->user_id);
     bool main10 = getenv("STEREONAUT_TP10") != NULL;
+    bool av1 = getenv(SOFTWARE_VIDEO_ENV) != NULL;
+    char av1_profile[512] = "";
     char profile[2048];
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-nonliteral"
+    if (av1)
+        snprintf(av1_profile, sizeof(av1_profile), AV1_CODEC_PROFILE_FORMAT,
+                 SOFTWARE_VIDEO_MAX_WIDTH, SOFTWARE_VIDEO_MAX_HEIGHT);
     snprintf(profile, sizeof(profile), DEVICE_PROFILE_FORMAT,
-             main10 ? "main|main 10" : "main", main10 ? "10" : "8");
+             av1 ? "hevc,h264,av1" : "hevc,h264",
+             main10 ? "main|main 10" : "main", main10 ? "10" : "8",
+             av1_profile);
 #pragma GCC diagnostic pop
     snprintf(body, sizeof(body),
              "{\"DeviceProfile\":%s,\"AutoOpenLiveStream\":false}",

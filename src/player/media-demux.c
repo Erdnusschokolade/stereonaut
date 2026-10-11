@@ -13,11 +13,15 @@
 #include <libavutil/error.h>
 #include <libavutil/pixdesc.h>
 
+#include "software-video.h"
+
 #define HLS_SEEK_BIAS_US INT64_C(3100000)
 
 struct media_demux {
     AVFormatContext *format;
     AVBSFContext *video_bsf;
+    /* Copied at open: the demux thread may update the stream's own. */
+    AVCodecParameters *video_parameters;
     AVPacket *input;
     AVPacket *filtered;
     struct media_stream_info info;
@@ -54,9 +58,19 @@ static int64_t packet_time_us(int64_t value, AVRational time_base)
 }
 
 /* Iris decodes HEVC Main and the 8-bit 4:2:0 H.264 profiles to NV12 and
- * HEVC Main10 to Q10C. */
+ * HEVC Main10 to Q10C. 8-bit AV1 up to 4K is decoded in software if the
+ * viewer opted in (software-video.h). */
 static bool is_supported_video(const AVCodecParameters *parameters)
 {
+    if (parameters->codec_id == AV_CODEC_ID_AV1) {
+        if (!getenv(SOFTWARE_VIDEO_ENV) ||
+            parameters->width > SOFTWARE_VIDEO_MAX_WIDTH ||
+            parameters->height > SOFTWARE_VIDEO_MAX_HEIGHT)
+            return false;
+        return (parameters->format == AV_PIX_FMT_NONE ||
+                parameters->format == AV_PIX_FMT_YUV420P) &&
+               parameters->bits_per_raw_sample <= 8;
+    }
     if (parameters->codec_id == AV_CODEC_ID_HEVC) {
         /* Main10 arrives as Q10C, which only the patched Turnip can sample;
          * the launcher sets STEREONAUT_TP10 when that driver is installed. */
@@ -115,8 +129,11 @@ static int select_audio_stream(AVFormatContext *format)
 static int initialize_video_filter(struct media_demux *demux,
                                    char *error, size_t error_size)
 {
+    /* dav1d takes AV1 packets as stored in the container. */
     const char *name = demux->info.video_codec == AV_CODEC_ID_H264
                            ? "h264_mp4toannexb"
+                       : demux->info.video_codec == AV_CODEC_ID_AV1
+                           ? "null"
                            : "hevc_mp4toannexb";
     const AVBitStreamFilter *filter = av_bsf_get_by_name(name);
     if (!filter) {
@@ -225,6 +242,14 @@ int media_demux_open(struct media_demux **result, const char *path,
         media_demux_close(&demux);
         return -1;
     }
+    demux->video_parameters = avcodec_parameters_alloc();
+    if (!demux->video_parameters ||
+        avcodec_parameters_copy(demux->video_parameters,
+                                video_parameters) < 0) {
+        set_error(error, error_size, "copy video parameters failed");
+        media_demux_close(&demux);
+        return -1;
+    }
     demux->info.video_stream_index = video;
     demux->info.video_codec = video_parameters->codec_id;
     demux->info.video_profile = video_parameters->profile;
@@ -284,6 +309,14 @@ int media_demux_copy_audio_parameters(const struct media_demux *demux,
     return avcodec_parameters_copy(
         parameters,
         demux->format->streams[demux->info.audio_stream_index]->codecpar);
+}
+
+int media_demux_copy_video_parameters(const struct media_demux *demux,
+                                      AVCodecParameters *parameters)
+{
+    if (!demux || !parameters || !demux->video_parameters)
+        return AVERROR(EINVAL);
+    return avcodec_parameters_copy(parameters, demux->video_parameters);
 }
 
 static int return_packet(struct media_packet *output, AVPacket *packet,
@@ -434,6 +467,7 @@ void media_demux_close(struct media_demux **pointer)
     av_packet_free(&demux->input);
     av_packet_free(&demux->filtered);
     av_bsf_free(&demux->video_bsf);
+    avcodec_parameters_free(&demux->video_parameters);
     avformat_close_input(&demux->format);
     av_channel_layout_uninit(&demux->info.channel_layout);
     free(demux);

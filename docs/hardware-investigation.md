@@ -238,6 +238,33 @@ Jellyfin-Transkodierung nach HEVC angewiesen. Für die Session wäre der
 Aufwand später klein (OUTPUT-FourCC und Demuxer-Freigabe, kein
 Bitstreamfilter nötig).
 
+### AV1 per Software mit dav1d (2026-10-11)
+
+Durchsatz von dav1d 1.4.1 (FFmpeg n7.0, `libdav1d`, Threads automatisch) auf
+dem Frame, gemessen mit `ffmpeg -benchmark -c:v libdav1d … -f null -`. Die
+Clips sind je 30 s aus dem 8K-Referenzausschnitt (`realvideo-001`, 59,94
+fps), am PC zu AV1 8 Bit kodiert:
+
+| Clip | Bitrate | Decodiert | Echtzeitfaktor |
+| --- | --- | --- | --- |
+| 3840×1920, NVENC | 25,7 Mbit/s | 77 fps (110 fps mit `max_frame_delay=8`) | 1,29× (1,83×) |
+| 3840×1920, SVT-AV1 | 19,8 Mbit/s | 139 fps | 2,31× |
+| 8192×4096, NVENC | 63,5 Mbit/s | 49 fps, alle 8 Kerne voll | 0,81× |
+
+Mit Echtzeit-Tempo (`-re`) belegt 4K60 etwa 1,6 (SVT) bzw. 2,5 (NVENC) der
+8 Kerne, im Leerlauf mit SteamVR etwa 0,7. Die Leistungsaufnahme ist nicht
+belastbar gemessen: Am Ladegerät zeigt der Akkustrom nur den Saldo (etwa
+1,9 W Entladung im Leerlauf, 5,7 W beim Decodieren).
+
+Bewertung: 4K60 reicht mit Reserve, 8K60 nicht. Der Player bietet AV1 daher
+als experimentelle, abschaltbare Option nur bis 4096×2160 und 8 Bit an
+(`src/player/software-video.c`): dav1d schreibt in NV12-Puffer aus
+`/dev/udmabuf` (Gruppe `video`), die der Renderer wie Iris-Puffer importiert.
+Im Player ohne Headset: 1700 Bilder des NVENC-Clips ohne verspätete Bilder
+(rund 3 Kerne belegt, mit `max_frame_delay=8`; ohne diese Einstellung fielen
+448 von 1200 Bildern zu spät aus), ein 4096×2048-Titel mit 60 fps per
+Jellyfin Direct Play ohne Verluste.
+
 ### Auflösung und Framerate
 
 `VIDIOC_ENUM_FRAMESIZES` meldet für H264/HEVC/VP90 sowie die enumerierten CAPTURE-Formate jeweils `128x128 – 8192x8192`, Schritt `1/1`. Das ist eine gemeldete Breiten-/Höhenhülle, kein erfolgreicher 8192²-Test und keine Zusage für alle Kombinationen, Profile oder Bildraten. Pixel-/Makroblockbudget, Alignment, Referenzbilder, Bitrate und thermische Grenzen können enger sein.

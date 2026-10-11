@@ -46,6 +46,8 @@ int media_demux_open(struct media_demux **result, const char *path,
 const struct media_stream_info *media_demux_info(const struct media_demux *demux);
 int media_demux_copy_audio_parameters(const struct media_demux *demux,
                                       AVCodecParameters *parameters);
+int media_demux_copy_video_parameters(const struct media_demux *demux,
+                                      AVCodecParameters *parameters);
 int media_demux_read(struct media_demux *demux, struct media_packet *packet,
                      char *error, size_t error_size);
 int media_demux_seek(struct media_demux *demux, int64_t target_us,

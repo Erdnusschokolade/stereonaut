@@ -22,6 +22,8 @@ cc -std=c11 -O2 -Wall -Wextra -Werror \
   "$script_dir/playback-report.c" \
   "$script_dir/title-settings.c" \
   "$script_dir/format-detect.c" \
+  "$script_dir/software-video.c" \
+  "$script_dir/settings.c" \
   $(pkg-config --libs libavformat libavcodec libavutil libswresample alsa \
                 libcurl json-c libjpeg) \
   -lvulkan -lm -pthread

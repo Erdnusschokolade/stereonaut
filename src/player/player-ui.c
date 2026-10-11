@@ -382,6 +382,11 @@ static void layout_popup(const struct player_ui_state *state,
                    "Ausrichtung");
         add_chip(layout, PLAYER_UI_RECENTER, COLUMN_X(1), ROW_CHIP_Y(1),
                  COLUMN_W, "Zentrieren", false);
+        static const char *const off_on[2] = {"Aus", "An"};
+        add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(2), 0,
+                   "AV1 bis 4K per CPU (Test)");
+        add_chip_row(layout, 1, 2, 2, PLAYER_UI_AV1_SOFTWARE, off_on,
+                     state->av1_software ? 1 : 0);
 
         static const char *const projection_labels[] = {
             [NV12_FORMAT_SOURCE_DEFAULT] = "Projektion (Standard)",
