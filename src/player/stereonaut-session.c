@@ -183,6 +183,10 @@ static bool view_state_valid;
 static bool renderer_held;
 /* Pipeline whose output volume the renderer sets. */
 static struct media_pipeline *volume_pipeline;
+/* Set when a seek within the session failed after stopping the V4L2
+ * queues: the restart that follows closes the decoder, so buffers the
+ * renderer releases are no longer queued. */
+static bool capture_queue_closed;
 /* Experimental AV1 decoder; replaces Iris for the whole session. */
 static struct software_video *software_video;
 
@@ -1904,6 +1908,8 @@ static void queue_capture(unsigned index, size_t length)
         software_video_release(software_video, index);
         return;
     }
+    if (capture_queue_closed)
+        return;
     struct v4l2_plane plane = {
         .length = (uint32_t)length,
     };
@@ -2870,6 +2876,9 @@ int main(int argc, char **argv)
             enum v4l2_buf_type output_type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
             enum v4l2_buf_type capture_type =
                 V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+            /* From here on a failure falls back to the restart, which
+             * closes the decoder; the queues stay as they are. */
+            capture_queue_closed = true;
             if (xioctl(VIDIOC_STREAMOFF, &output_type) < 0 ||
                 xioctl(VIDIOC_STREAMOFF, &capture_type) < 0) {
                 fprintf(stderr, "seek: STREAMOFF errno=%d\n", errno);
@@ -2891,12 +2900,14 @@ int main(int argc, char **argv)
             }
             options.start_us = media_pipeline_start_us(pipeline);
             /* Buffers the renderer still shows are queued on RELEASE. */
+            capture_queue_closed = false;
             for (unsigned i = 0; i < capture_count; ++i)
                 if (!renderer_outstanding[i])
                     queue_capture(i, captures[i].length);
             if (xioctl(VIDIOC_STREAMON, &capture_type) < 0 ||
                 xioctl(VIDIOC_STREAMON, &output_type) < 0) {
                 fprintf(stderr, "seek: STREAMON errno=%d\n", errno);
+                capture_queue_closed = true;
                 break;
             }
             printf("seek_in_place requested_us=%" PRId64 " start_us=%" PRId64
