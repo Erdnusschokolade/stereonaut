@@ -1012,6 +1012,10 @@ static void receive_frame_messages(struct app *app)
         } else if (message.type == NV12_IPC_HOLD) {
             hold_current_frame(app);
             send_ipc(app, NV12_IPC_HELD, 0);
+        } else if (message.type == NV12_IPC_SEEKING) {
+            app->awaiting_frame = true;
+            app->ui_dirty = true;
+            printf("video_seeking\n");
         } else if (message.type == NV12_IPC_INIT) {
             reinitialize_video(app, &message, &received);
         } else if (message.type == NV12_IPC_FORMAT) {

@@ -146,6 +146,9 @@ struct playback_options {
     bool format_source_set;
     /* Seek restart while paused: show the target frame and stay paused. */
     bool start_paused;
+    /* Diagnostics: after this many frames, seek as if from the panel. */
+    uint64_t test_seek_frames;
+    int64_t test_seek_us;
 };
 
 struct capture_contract {
@@ -1004,6 +1007,15 @@ static struct playback_options parse_playback_options(int argc, char **argv)
                 }
             if (!options.format_source_set)
                 fail_message("invalid --format-source value");
+        } else if (strcmp(argv[i], "--seek-test") == 0) {
+            unsigned long long frames_before = 0;
+            long long target = 0;
+            if (++i >= argc ||
+                sscanf(argv[i], "%llu:%lld", &frames_before, &target) != 2 ||
+                frames_before == 0 || target < 0)
+                fail_message("--seek-test requires FRAMES:TARGET_US");
+            options.test_seek_frames = frames_before;
+            options.test_seek_us = target;
         } else if (strcmp(argv[i], "--frames") == 0) {
             if (++i >= argc)
                 fail_message("--frames requires a positive frame count");
@@ -2193,6 +2205,18 @@ struct transport {
     double last_status_sent;
 };
 
+/* --seek-test: a seek to the given time once `frames` frames were shown. */
+static void run_test_seek(struct playback_options *options, uint64_t frames)
+{
+    if (!options->test_seek_frames || frames < options->test_seek_frames)
+        return;
+    renderer_action = NV12_ACTION_SEEK_TO;
+    renderer_action_position_us = options->test_seek_us;
+    options->test_seek_frames = 0;
+    printf("seek_test frames=%" PRIu64 " target_us=%" PRId64 "\n", frames,
+           options->test_seek_us);
+}
+
 /* Applies the renderer's last player action and reports the position to
  * the renderer and Jellyfin four times a second. Returns how long a pause
  * lasted that ended now (deadlines move by it), or -1 on failure. */
@@ -2423,6 +2447,7 @@ static int play_software(char **argv, struct playback_options *options,
     bool audio_started = false;
     double playback_start = monotonic_seconds();
     double last_progress = playback_start;
+    double seek_started = 0.0;
     uint64_t shown = 0, late_drops = 0;
     for (;;) {
         if (stop_requested) {
@@ -2432,9 +2457,34 @@ static int play_software(char **argv, struct playback_options *options,
         if (process_renderer_messages(buffers, frames->count))
             fail_message("unexpected renderer FLUSHED response");
         double now = monotonic_seconds();
+        run_test_seek(options, shown);
         if (update_transport(&transport, pipeline, info, options->start_us,
                              audio_started, now) < 0.0)
             return 2;
+        if (transport.requested && transport.requested != NV12_ACTION_BACK) {
+            /* Seek within the session; a failure falls back to the
+             * restart below. */
+            send_renderer_message(NV12_IPC_SEEKING, 0, 0);
+            software_video_stop(software_video);
+            if (media_pipeline_seek(pipeline, transport.requested_start_us,
+                                    true, error, sizeof(error)) < 0) {
+                fprintf(stderr, "seek: %s\n", error);
+                break;
+            }
+            options->start_us = media_pipeline_start_us(pipeline);
+            software_video_restart(software_video, options->start_us);
+            printf("seek_in_place requested_us=%" PRId64 " start_us=%" PRId64
+                   "\n", transport.requested_start_us, options->start_us);
+            /* Paused: show the new position and stay paused. */
+            options->start_paused = transport.paused;
+            transport = (struct transport){
+                .last_status_sent = transport.last_status_sent,
+            };
+            audio_started = false;
+            seek_started = now;
+            last_progress = now;
+            continue;
+        }
         if (transport.requested)
             break;
         if (transport.paused) {
@@ -2460,6 +2510,11 @@ static int play_software(char **argv, struct playback_options *options,
             continue;
         }
         last_progress = monotonic_seconds();
+        if (seek_started > 0.0) {
+            printf("seek_latency_ms=%.0f\n",
+                   (last_progress - seek_started) * 1000.0);
+            seek_started = 0.0;
+        }
         if (!audio_started && options->start_paused) {
             /* The audio clock starts with the next "play". */
             transport.paused = true;
@@ -2549,7 +2604,7 @@ int main(int argc, char **argv)
                 " [--stereo mono|sbs|tb] [--swap-eyes|--no-swap-eyes]"
                 " [--levels normal|deep|full]"
                 " [--format-source default|name|image|user] [--paused]"
-                " [--frames N]"
+                " [--frames N] [--seek-test FRAMES:TARGET_US]"
                 " [--start-us TIMESTAMP]\n",
                 argv[0]);
         return 2;
@@ -2624,6 +2679,12 @@ int main(int argc, char **argv)
         return strncmp(input, "http", 4) == 0 ? EXIT_SOURCE_FAILED : 2;
     }
     volume_pipeline = pipeline;
+    if (options.start_us > 0) {
+        /* Playback starts at the keyframe nearest to the requested time. */
+        printf("seek_keyframe requested_us=%" PRId64 " start_us=%" PRId64
+               "\n", options.start_us, media_pipeline_start_us(pipeline));
+        options.start_us = media_pipeline_start_us(pipeline);
+    }
     const struct media_stream_info *info = media_pipeline_info(pipeline);
     uint32_t expected_width = (uint32_t)info->width;
     uint32_t expected_height = (uint32_t)info->height;
@@ -2773,6 +2834,7 @@ int main(int argc, char **argv)
     uint64_t seek_preroll_drops = 0;
     struct timing_stats decode_stats = {0};
     double maximum_feed_lateness_ms = 0.0;
+    double seek_started = 0.0;
 
     while (!last_seen) {
         if (stop_requested) {
@@ -2783,6 +2845,7 @@ int main(int argc, char **argv)
             process_renderer_messages(captures, capture_count))
             fail_message("unexpected renderer FLUSHED response");
         double now = monotonic_seconds();
+        run_test_seek(&options, frames);
         bool was_paused = transport.paused;
         double resumed_after = update_transport(&transport, pipeline, info,
                                                 options.start_us,
@@ -2792,6 +2855,63 @@ int main(int argc, char **argv)
         deadline += resumed_after;
         if (transport.paused != was_paused)
             last_progress = now;
+        if (transport.requested && transport.requested != NV12_ACTION_BACK &&
+            capture_started && !source_change_pending) {
+            /* Seek within the session (stateful decoder seek: both queues
+             * off, coded data from the new keyframe, queues on again); a
+             * failure falls back to the restart below. */
+            send_renderer_message(NV12_IPC_SEEKING, 0, 0);
+            enum v4l2_buf_type output_type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
+            enum v4l2_buf_type capture_type =
+                V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+            if (xioctl(VIDIOC_STREAMOFF, &output_type) < 0 ||
+                xioctl(VIDIOC_STREAMOFF, &capture_type) < 0) {
+                fprintf(stderr, "seek: STREAMOFF errno=%d\n", errno);
+                break;
+            }
+            for (unsigned i = 0; i < output_count; ++i) {
+                outputs[i].free = true;
+                outputs[i].queued_at = 0.0;
+            }
+            if (have_next_packet) {
+                media_packet_unref(&next_packet);
+                have_next_packet = false;
+            }
+            if (media_pipeline_seek(pipeline, transport.requested_start_us,
+                                    true, pipeline_error,
+                                    sizeof(pipeline_error)) < 0) {
+                fprintf(stderr, "seek: %s\n", pipeline_error);
+                break;
+            }
+            options.start_us = media_pipeline_start_us(pipeline);
+            /* Buffers the renderer still shows are queued on RELEASE. */
+            for (unsigned i = 0; i < capture_count; ++i)
+                if (!renderer_outstanding[i])
+                    queue_capture(i, captures[i].length);
+            if (xioctl(VIDIOC_STREAMON, &capture_type) < 0 ||
+                xioctl(VIDIOC_STREAMON, &output_type) < 0) {
+                fprintf(stderr, "seek: STREAMON errno=%d\n", errno);
+                break;
+            }
+            printf("seek_in_place requested_us=%" PRId64 " start_us=%" PRId64
+                   "\n", transport.requested_start_us, options.start_us);
+            /* Access units still in the decoder were dropped. */
+            queued_access_units = frames + capture_error_drops;
+            video_eof = false;
+            drain_sent = false;
+            eos_seen = false;
+            have_sequence = false;
+            consecutive_capture_errors = 0;
+            audio_started = false;
+            /* Paused: show the new position and stay paused. */
+            options.start_paused = transport.paused;
+            transport = (struct transport){
+                .last_status_sent = transport.last_status_sent,
+            };
+            seek_started = now;
+            last_progress = now;
+            continue;
+        }
         if (transport.requested)
             break;
         if (transport.paused)
@@ -3023,6 +3143,11 @@ int main(int argc, char **argv)
                         queue_capture(dequeued.index,
                                       captures[dequeued.index].length);
                     } else {
+                    if (seek_started > 0.0) {
+                        printf("seek_latency_ms=%.0f\n",
+                               (monotonic_seconds() - seek_started) * 1000.0);
+                        seek_started = 0.0;
+                    }
                     if (!audio_started && options.start_paused) {
                         /* The audio clock starts with the next "play". */
                         transport.paused = true;

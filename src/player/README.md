@@ -40,7 +40,10 @@ requests supersede older results, which keeps slow mounts from replacing a
 more recent navigation result.
 
 `media_pipeline_seek` stops and joins both media workers, aborts and rebuilds
-their bounded queues, seeks libavformat to the preceding video keyframe,
+their bounded queues, seeks libavformat to the video keyframe nearest to the
+target (from the container index, before or after it; for Jellyfin's HLS the
+nearest segment start), reads ahead to the first video packet so
+`media_pipeline_start_us` reports where playback really resumes,
 flushes the audio decoder/output, and then restarts both workers in either the
 playing or paused state requested by the controller. The seek probe verifies
 that a 10-second request resumes at the preceding 9.539-second keyframe in the
@@ -93,11 +96,9 @@ The playback renderer adds a head-relative native OpenXR quad panel over the
 video layer. The same two-hand aim/select actions used by the browser drive
 Back, -10 s, Play/Pause and +10 s. Position, duration and state arrive over
 the frame IPC socket. Pause leaves the OpenXR loop and current DMA-BUF frame
-alive while stopping audio and bounded decoder feed. A seek closes the active
-media/V4L2/XR children cleanly and re-executes the same session at the
-preceding container keyframe; decoded video and PCM before the requested
-timestamp are discarded. Re-exec keeps repeated seeks simple and avoids
-reusing a stateful HEVC decoder across a GOP discontinuity.
+alive while stopping audio and bounded decoder feed. A seek resumes at the
+keyframe nearest to the target within the running session (see below); the
+older re-exec of the session at the new position remains as the fallback.
 
 The playback panel is world-fixed and movable. Pressing the squeeze button
 while the aim ray hits the panel grabs it (it follows the controller and turns
@@ -122,6 +123,14 @@ a playback session's NV12 socket, and the host answers `FILE_SELECTED` or
 `EXIT_REQUESTED`. The separate browser process was removed; its panel logic
 lives in `browser-ui.c`. `stereonaut-launcher --play PATH --frames N` runs a
 bounded playback without browsing, which is what the hardware tests use.
+
+The session seeks without restarting: for Iris it stops both V4L2 queues,
+seeks the pipeline, requeues every CAPTURE buffer the renderer does not show
+and starts the queues again; the software decoder joins its thread and
+flushes dav1d. The renderer gets `NV12_IPC_SEEKING`, keeps the current frame
+and shows "LADEN" until the next one. Only if this fails does the session
+fall back to the re-exec described above. `--seek-test FRAMES:US` triggers
+such a seek in a bounded test run.
 
 Jellyfin titles are addressed as `jf:item:<id>:<folder>`; `jellyfin.c` talks to
 the server (Quick Connect, listings, `PlaybackInfo`) and the session plays the

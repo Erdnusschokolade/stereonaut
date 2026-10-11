@@ -436,6 +436,33 @@ void software_video_release(struct software_video *video, unsigned index)
     pthread_mutex_unlock(&video->mutex);
 }
 
+void software_video_stop(struct software_video *video)
+{
+    pthread_mutex_lock(&video->mutex);
+    video->stopping = true;
+    pthread_cond_broadcast(&video->changed);
+    pthread_mutex_unlock(&video->mutex);
+    if (video->thread_started)
+        pthread_join(video->thread, NULL);
+    video->thread_started = false;
+    avcodec_flush_buffers(video->codec);
+    pthread_mutex_lock(&video->mutex);
+    for (unsigned i = 0; i < video->layout.count; ++i)
+        if (video->states[i] == BUFFER_READY)
+            video->states[i] = BUFFER_FREE;
+    video->ready_first = video->ready_count = 0;
+    pthread_mutex_unlock(&video->mutex);
+}
+
+void software_video_restart(struct software_video *video, int64_t start_us)
+{
+    pthread_mutex_lock(&video->mutex);
+    video->start_us = start_us;
+    video->stopping = video->finished = video->failed = false;
+    video->failure[0] = '\0';
+    pthread_mutex_unlock(&video->mutex);
+}
+
 uint64_t software_video_preroll_drops(struct software_video *video)
 {
     pthread_mutex_lock(&video->mutex);

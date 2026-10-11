@@ -50,8 +50,11 @@ int media_demux_copy_video_parameters(const struct media_demux *demux,
                                       AVCodecParameters *parameters);
 int media_demux_read(struct media_demux *demux, struct media_packet *packet,
                      char *error, size_t error_size);
+/* Seeks to the keyframe nearest to target_us; media_demux_start_us then
+ * gives the time playback resumes at (AV_NOPTS_VALUE at the end). */
 int media_demux_seek(struct media_demux *demux, int64_t target_us,
                      char *error, size_t error_size);
+int64_t media_demux_start_us(const struct media_demux *demux);
 void media_packet_unref(struct media_packet *packet);
 void media_demux_close(struct media_demux **demux);
 /* Makes blocking network operations of every demuxer fail promptly.

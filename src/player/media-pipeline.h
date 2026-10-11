@@ -23,6 +23,9 @@ int media_pipeline_pop_video(struct media_pipeline *pipeline,
 int64_t media_pipeline_clock_us(struct media_pipeline *pipeline);
 int media_pipeline_pause(struct media_pipeline *pipeline, bool paused,
                          char *error, size_t error_size);
+/* Where playback starts after media_pipeline_open or the last seek: the
+ * keyframe nearest to the requested time. */
+int64_t media_pipeline_start_us(const struct media_pipeline *pipeline);
 int media_pipeline_seek(struct media_pipeline *pipeline, int64_t target_us,
                         bool paused, char *error, size_t error_size);
 /* Output volume (linear gain 0 to 1.5); no effect without audio. */

@@ -15,7 +15,12 @@
 
 #include "software-video.h"
 
-#define HLS_SEEK_BIAS_US INT64_C(3100000)
+/* Jellyfin's HLS segments are about 3 s long and start with a keyframe;
+ * see media_demux_seek. */
+#define HLS_SEGMENT_HALF_US INT64_C(1500000)
+/* Packets read ahead after a seek while looking for the first video
+ * packet (audio interleaved before it). */
+#define PENDING_CAPACITY 256U
 
 struct media_demux {
     AVFormatContext *format;
@@ -30,6 +35,11 @@ struct media_demux {
     /* HLS timelines (Jellyfin) start at 10 s; all packet times are shifted
      * so playback positions and seek targets start at zero. */
     int64_t time_offset_us;
+    /* Read ahead by the last seek, returned before reading on. */
+    struct media_packet pending[PENDING_CAPACITY];
+    size_t pending_first, pending_count;
+    /* Time of the first video packet after the last seek. */
+    int64_t start_us;
 };
 
 static void set_error(char *error, size_t size, const char *format, ...)
@@ -178,6 +188,7 @@ int media_demux_open(struct media_demux **result, const char *path,
     }
     demux->info.video_stream_index = -1;
     demux->info.audio_stream_index = -1;
+    demux->start_us = AV_NOPTS_VALUE;
     demux->format = avformat_alloc_context();
     if (!demux->format) {
         set_error(error, error_size, "allocate format context");
@@ -349,13 +360,9 @@ static int return_packet(struct media_packet *output, AVPacket *packet,
     return 1;
 }
 
-int media_demux_read(struct media_demux *demux, struct media_packet *packet,
-                     char *error, size_t error_size)
+static int read_packet(struct media_demux *demux, struct media_packet *packet,
+                       char *error, size_t error_size)
 {
-    if (!demux || !packet) {
-        set_error(error, error_size, "invalid media_demux_read arguments");
-        return -1;
-    }
     memset(packet, 0, sizeof(*packet));
     for (;;) {
         int result = av_bsf_receive_packet(demux->video_bsf,
@@ -413,6 +420,106 @@ int media_demux_read(struct media_demux *demux, struct media_packet *packet,
     }
 }
 
+int media_demux_read(struct media_demux *demux, struct media_packet *packet,
+                     char *error, size_t error_size)
+{
+    if (!demux || !packet) {
+        set_error(error, error_size, "invalid media_demux_read arguments");
+        return -1;
+    }
+    if (demux->pending_count) {
+        *packet = demux->pending[demux->pending_first];
+        memset(&demux->pending[demux->pending_first], 0, sizeof(*packet));
+        demux->pending_first = (demux->pending_first + 1U) % PENDING_CAPACITY;
+        demux->pending_count--;
+        return 1;
+    }
+    return read_packet(demux, packet, error, error_size);
+}
+
+static void drop_pending(struct media_demux *demux)
+{
+    while (demux->pending_count) {
+        media_packet_unref(&demux->pending[demux->pending_first]);
+        demux->pending_first = (demux->pending_first + 1U) % PENDING_CAPACITY;
+        demux->pending_count--;
+    }
+    demux->pending_first = 0;
+}
+
+/* Reads up to the first video packet, which starts the playback after a
+ * seek, and keeps everything read for media_demux_read. Audio before it
+ * beyond the read-ahead capacity is dropped (it precedes the start). */
+static int find_start(struct media_demux *demux, char *error,
+                      size_t error_size)
+{
+    for (;;) {
+        struct media_packet packet;
+        int result = read_packet(demux, &packet, error, error_size);
+        if (result <= 0) {
+            demux->start_us = AV_NOPTS_VALUE;
+            return result;
+        }
+        if (demux->pending_count == PENDING_CAPACITY) {
+            media_packet_unref(&demux->pending[demux->pending_first]);
+            demux->pending_first = (demux->pending_first + 1U) %
+                                   PENDING_CAPACITY;
+            demux->pending_count--;
+        }
+        bool video = packet.kind == MEDIA_PACKET_VIDEO;
+        int64_t time = packet.pts_us != AV_NOPTS_VALUE ? packet.pts_us
+                                                       : packet.dts_us;
+        demux->pending[(demux->pending_first + demux->pending_count) %
+                       PENDING_CAPACITY] = packet;
+        demux->pending_count++;
+        if (video) {
+            demux->start_us = time;
+            return 1;
+        }
+    }
+}
+
+/* The keyframe nearest to `target` (stream time base) from the container
+ * index, or `target` if the index is empty. */
+static int64_t nearest_keyframe(AVStream *stream, int64_t target)
+{
+    const AVIndexEntry *before = avformat_index_get_entry_from_timestamp(
+        stream, target, AVSEEK_FLAG_BACKWARD);
+    const AVIndexEntry *after =
+        avformat_index_get_entry_from_timestamp(stream, target, 0);
+    if (!before && !after)
+        return target;
+    if (!before)
+        return after->timestamp;
+    if (!after)
+        return before->timestamp;
+    return target - before->timestamp <= after->timestamp - target
+               ? before->timestamp
+               : after->timestamp;
+}
+
+/* To the last keyframe at or before `target` (stream time base). */
+static int seek_backward(struct media_demux *demux, int64_t target,
+                         char *error, size_t error_size)
+{
+    int result = avformat_seek_file(demux->format,
+                                    demux->info.video_stream_index,
+                                    INT64_MIN, target, target,
+                                    AVSEEK_FLAG_BACKWARD);
+    if (result < 0) {
+        set_av_error(error, error_size, "avformat_seek_file", result);
+        return -1;
+    }
+    return 0;
+}
+
+int64_t media_demux_start_us(const struct media_demux *demux)
+{
+    return demux ? demux->start_us : AV_NOPTS_VALUE;
+}
+
+/* Playback resumes at the keyframe nearest to the target, before or after
+ * it, so no frames have to be decoded and discarded up to the target. */
 int media_demux_seek(struct media_demux *demux, int64_t target_us,
                      char *error, size_t error_size)
 {
@@ -424,23 +531,23 @@ int media_demux_seek(struct media_demux *demux, int64_t target_us,
         demux->format->streams[demux->info.video_stream_index];
     if (demux->time_offset_us) {
         /* libavformat's HLS demuxer starts at the first keyframe at or after
-         * the requested time, i.e. after the target. Segments are about 3 s
-         * long and begin with a keyframe, so asking one segment early yields
-         * the latest segment start at or before the target, which the
-         * session then prerolls like a keyframe in a regular file. */
-        target_us -= HLS_SEEK_BIAS_US;
+         * the requested time. Segments begin with a keyframe, so asking half
+         * a segment early yields the segment start nearest to the target. */
+        target_us -= HLS_SEGMENT_HALF_US;
         if (target_us < 0)
             target_us = 0;
     }
     int64_t target = av_rescale_q(target_us + demux->time_offset_us,
                                   AV_TIME_BASE_Q, stream->time_base);
-    int result = avformat_seek_file(demux->format,
-                                    demux->info.video_stream_index,
-                                    INT64_MIN, target, target,
-                                    AVSEEK_FLAG_BACKWARD);
-    if (result < 0) {
-        set_av_error(error, error_size, "avformat_seek_file", result);
+    if (seek_backward(demux, target, error, error_size) < 0)
         return -1;
+    if (!demux->time_offset_us) {
+        /* The index is complete now (Matroska reads its cues on the first
+         * seek); go on to the following keyframe if that one is nearer. */
+        int64_t keyframe = nearest_keyframe(stream, target);
+        if (keyframe > target &&
+            seek_backward(demux, keyframe, error, error_size) < 0)
+            return -1;
     }
     avformat_flush(demux->format);
     av_bsf_flush(demux->video_bsf);
@@ -448,7 +555,8 @@ int media_demux_seek(struct media_demux *demux, int64_t target_us,
     av_packet_unref(demux->filtered);
     demux->input_eof = false;
     demux->bsf_eof_sent = false;
-    return 0;
+    drop_pending(demux);
+    return find_start(demux, error, error_size) < 0 ? -1 : 0;
 }
 
 void media_packet_unref(struct media_packet *packet)
@@ -464,6 +572,7 @@ void media_demux_close(struct media_demux **pointer)
     if (!pointer || !*pointer)
         return;
     struct media_demux *demux = *pointer;
+    drop_pending(demux);
     av_packet_free(&demux->input);
     av_packet_free(&demux->filtered);
     av_bsf_free(&demux->video_bsf);

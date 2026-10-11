@@ -59,6 +59,11 @@ geprüft:
   noch nicht bestätigt (`binding_learn … grip_value=` im Log).
 - Schnelleres Öffnen von Bibliotheken (Liste ohne Stream-Infos, Codec und
   Auflösung werden seitenweise nachgeladen; VR-Bibliothek 0,25 s statt 2 s).
+- Schnelleres Spulen: Seek auf den nächstgelegenen Keyframe (kein Vorlauf
+  mehr) und ohne Neustart der Session (Decoder, Stream und Renderer-Puffer
+  bleiben). Bis zum ersten Bild: lokal 0,1 s, Jellyfin 0,5 s; vorher
+  1,8–2 s plus Neustart (5400×2700 HEVC, 3,6 s Keyframe-Abstand).
+  Der Neustart bleibt als Rückfall, wenn der Seek scheitert.
 - Experimentell: AV1 8 Bit bis 4096×2160 per Software (dav1d), Schalter
   „AV1 bis 4K per CPU“ im Reiter „Ansicht“ (Standard aus, gilt ab dem
   nächsten Titel); Jellyfin spielt solche Titel dann direkt statt zu
@@ -69,9 +74,9 @@ geprüft:
 
 - HEVC Main10 nur mit dem eigenen Turnip (`tools/mesa-tp10`); ohne ihn
   transkodiert Jellyfin bzw. lokale Main10-Dateien werden abgewiesen.
-- Seek ist ein Neustart der Session (etwa eine Sekunde Standbild); eine A-B-
-  Schleife wäre nur mit einem lückenlosen Bitstream-Splice sinnvoll
-  (geschätzt 2–3 Tage).
+- Seek landet auf dem nächstgelegenen Keyframe (vor oder nach dem Ziel),
+  nicht sekundengenau. Eine lückenlose A-B-Schleife bräuchte zusätzlich einen
+  Bitstream-Splice mit durchlaufender Zeitachse.
 - Passthrough ist nicht umgesetzt. SteamVR bietet auf dem Frame inzwischen
   `XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND` an (Abfrage 2026-10-10).
 - Parallel laufende Player mit Iris-Nutzung (Playa) führen zu

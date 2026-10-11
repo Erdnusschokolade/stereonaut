@@ -46,6 +46,7 @@ struct media_pipeline {
     bool failed;
     char failure[512];
     int64_t audio_skip_before_us;
+    int64_t start_us; /* where playback resumes after the last seek */
 };
 
 static int start_workers(struct media_pipeline *pipeline,
@@ -254,6 +255,10 @@ int media_pipeline_open(struct media_pipeline **result, const char *path,
         media_pipeline_close(&pipeline);
         return -1;
     }
+    if (start_us > 0 &&
+        media_demux_start_us(pipeline->demux) != AV_NOPTS_VALUE)
+        start_us = media_demux_start_us(pipeline->demux);
+    pipeline->start_us = start_us;
     if (start_us > 0) {
         pipeline->audio_skip_before_us = start_us - AUDIO_SEEK_MARGIN_US;
         pthread_mutex_lock(&pipeline->audio_mutex);
@@ -408,6 +413,9 @@ int media_pipeline_seek(struct media_pipeline *pipeline, int64_t target_us,
     if (media_demux_seek(pipeline->demux, target_us,
                          error, error_size) < 0)
         return -1;
+    if (media_demux_start_us(pipeline->demux) != AV_NOPTS_VALUE)
+        target_us = media_demux_start_us(pipeline->demux);
+    pipeline->start_us = target_us;
     pipeline->audio_skip_before_us = target_us - AUDIO_SEEK_MARGIN_US;
     pthread_mutex_lock(&pipeline->audio_mutex);
     int reset_result = audio_output_reset(pipeline->audio, target_us,
@@ -428,6 +436,11 @@ int media_pipeline_seek(struct media_pipeline *pipeline, int64_t target_us,
     if (start_workers(pipeline, error, error_size) < 0)
         return -1;
     return 0;
+}
+
+int64_t media_pipeline_start_us(const struct media_pipeline *pipeline)
+{
+    return pipeline ? pipeline->start_us : 0;
 }
 
 void media_pipeline_set_volume(struct media_pipeline *pipeline, float volume)

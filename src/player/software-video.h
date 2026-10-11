@@ -45,6 +45,11 @@ int software_video_next(struct software_video *video, unsigned *index,
                         int64_t *pts_us, int timeout_ms, char *error,
                         size_t error_size);
 void software_video_release(struct software_video *video, unsigned index);
+/* Seek: software_video_stop ends decoding and drops decoded frames (the
+ * buffers the caller holds stay taken); after the pipeline has seeked,
+ * software_video_restart decodes again from its new position. */
+void software_video_stop(struct software_video *video);
+void software_video_restart(struct software_video *video, int64_t start_us);
 /* Frames decoded but dropped before start_us. */
 uint64_t software_video_preroll_drops(struct software_video *video);
 void software_video_close(struct software_video **video);

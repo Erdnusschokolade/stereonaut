@@ -65,6 +65,10 @@ enum nv12_ipc_type {
     /* Renderer -> session: output volume (volume, 1 = unchanged), sent after
      * READY and on every change. */
     NV12_IPC_VOLUME = 15,
+    /* Session -> renderer: a seek within the running session started; keep
+     * showing the current frame (released with the next FRAME as usual)
+     * and show the loading state until then. */
+    NV12_IPC_SEEKING = 16,
 };
 
 /* INIT pixel_format: how the decoder buffers are laid out. */
