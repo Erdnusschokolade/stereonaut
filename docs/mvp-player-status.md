@@ -1,76 +1,82 @@
-# Entwicklungsauftrag 011 – MVP-Implementierungsstand
+# Stereonaut – Projektstand
 
-Stand: 2026-10-09, Branch `player/mvp`
+Stand: 2026-10-11, Branch `main` (zuvor `player/mvp` und
+`hardware/main10-baseline`)
 
-## Implementierter Pfad
+Der MVP aus Entwicklungsauftrag 011 ist abgeschlossen; der Player wird
+seitdem im Alltag auf dem Steam Frame genutzt und um Komfortfunktionen
+erweitert. Details, Messungen und Begründungen stehen chronologisch in
+`docs/mvp-player-handoff.md`, die Architektur in `docs/mvp-player-plan.md`
+und `CLAUDE.md`.
 
-- libavformat demuxt MKV/MP4, erhält Container-Zeitstempel und wandelt HEVC
-  mit `hevc_mp4toannexb` für den direkten Iris-V4L2-Pfad um.
-- libavcodec und libswresample dekodieren die gewählte Audiospur nach
-  48-kHz-S16-Stereo; ALSA `default` liefert die Audio-Masterclock.
-- Begrenzte Audio-/Videoqueues laufen in getrennten Threads. Der initiale
-  Audiostart wartet auf Iris-`SOURCE_CHANGE` und den bereiten XR-Renderer.
-- Die Session übernimmt den bestätigten NV12-DMA-BUF-/Vulkan-/OpenXR-Pfad und
-  terminiert Video anhand der Audio-Clock. Frühe Frames werden gehalten;
-  Frames mit mehr als 100 ms Verspätung dürfen übersprungen werden.
-- Der Medien-Pipeline-Seek stoppt und verbindet beide Worker neu, leert die
-  Queues, springt auf den vorherigen Keyframe und setzt Audio zurück. PCM vor
-  dem Ziel wird vollständig verworfen; der überlappende Audioblock wird auf
-  48-kHz-Samplegrenze angeschnitten.
-- Ein asynchroner lokaler Dateibrowser filtert `.mkv` und `.mp4`, sortiert
-  Verzeichnisse und Dateien und ersetzt veraltete Listing-Ergebnisse.
-- Die decoderfreie native OpenXR-Dateiauswahl besitzt ein Vulkan-Quadpanel,
-  Controller-Aim-Ray, Trigger-Auswahl und Seitenwechsel. Der Launcher wechselt
-  zwischen Browser- und Playback-Prozess.
-- Der Video-Renderer besitzt ein zweites, transparentes OpenXR-Quadpanel mit
-  Zeit/Duration, Zurück, -10 s, Play/Pause und +10 s. Pause hält Audio und
-  Decoderfeed an, lässt Headtracking und den letzten Frame aber aktiv. Seek
-  beendet die dateigebundenen Ressourcen kontrolliert und startet dieselbe
-  Datei am vorherigen Keyframe neu; Vorlaufvideo und -PCM werden verworfen.
+## Videopfad
 
-## Lokale Nachweise
+```text
+MKV/MP4 -> libavformat (hevc_/h264_mp4toannexb)
+        -> HEVC Main 8 | H.264 8 Bit 4:2:0 | HEVC Main10 (nur mit eigenem Turnip)
+        -> Iris V4L2 -> NV12/TP10 DMA-BUF -> Vulkan -> OpenXR
+Audio:  libavcodec/libswresample -> 48 kHz S16 -> ALSA (Master-Clock)
+```
 
-- Alle C-Quellen bauen mit `-Wall -Wextra -Werror`.
-- MKV und MP4 wurden durch die Demux-Probe gelesen; Annex-B und monotone
-  Zeitstempel wurden bestätigt.
-- Pipeline-Seek auf 10 s liefert für die MP4-Fixture den vorherigen Keyframe
-  bei 9,539 s.
-- Der Audio-Seek-Test erreicht 11,008167 s und gibt keine Samples vor 10 s an
-  das Ausgabemodell weiter.
-- Der Browser-Test listet nur Verzeichnisse sowie MKV/MP4 und sortiert
-  unabhängig von Groß-/Kleinschreibung.
+Jellyfin liefert Direct Play für diese Formate und transkodiert alles andere
+nach HEVC Main 8 (Server-Grenze 4096 px Breite).
 
-## Zielhardwarebefunde
+## Im Headset bestätigt
 
-Der erste Container-Integrationslauf stoppte vor Decoderstream, DMA-BUF und
-OpenXR bei `VIDIOC_REQBUFS OUTPUT` mit `ENOMEM`. Ein Kontrolllauf mit dem
-unveränderten, früher erfolgreichen `xr-nv12-playback-probe` reproduzierte den
-Fehler an derselben Stelle mit demselben Iris-Layout
-(`8192×4096`, OUTPUT-`sizeimage=16588800`). Es lief danach kein Probeprozess
-und `/dev/video-dec0` war von keinem Prozess geöffnet. Das Frame meldete rund
-9,8 GiB verfügbaren RAM und freie hohe Buddy-Orders.
+- Browser ↔ Wiedergabe über den dauerhaften OpenXR-Host, Rückkehr in Ordner
+  und Seite, Fehlertexte, Start über KDE und die SteamVR-Bibliothek.
+- Lokale Dateien und Jellyfin (Quick Connect, Bibliotheken, Vorschaubilder,
+  Direct Play und Transkodierung, 4K bis 8K60).
+- Pause, ±10 s, Seek-Leiste mit Trickplay-Vorschau, Seek als Neustart mit
+  gehaltenem letztem Bild; Griff zum Verschieben und Ein-/Ausblenden.
+- Projektion, Stereo, Augentausch, Position, 6DoF und Bildwerte je Titel.
+- H.264 nativ, HEVC Main10 nativ mit dem eigenen Turnip (`STEREONAUT_TP10`).
+- Jellyfin-Wiedergabemeldungen (Start, Fortschritt, Pause, Stopp).
+- Autofokus mit Eye Tracking (Grundfunktion; der eigene Reiter mit Schwelle,
+  Hysterese und Überblenden ist neu, siehe unten).
+- Tastenbelegung: Einzeltasten (Stick, A/B/X, Steuerkreuz) lösen ihre
+  Aktionen aus und lassen sich neu belegen.
 
-Der Nutzer stellte anschließend fest, dass Playa parallel einen Stream offen
-hielt. Nach dessen Beendigung funktionierten Iris-OUTPUT- und alle zwölf
-50.331.648-Byte-CAPTURE-Allokationen sofort wieder. Der Befund ist damit als
-Ressourcenkonflikt mit dem parallelen Player eingegrenzt; ein Neustart oder
-Treiber-/Dienst-Recovery war nicht nötig.
+## Auf dem Frame gebaut, Headset-Test offen
 
-Der danach ausgeführte 300-Frame-Containerlauf bestätigte 300/300 dekodierte
-8K-Frames, keine Drops, keine V4L2-Fehler und 59,60 fps einschließlich Start-
-und Drain-Overhead. Alle NV12-DMA-BUFs wurden importiert und alle 300 Übergaben
-vom Renderer freigegeben. Die veröffentlichte Audio-Clock lag am letzten Frame
-etwa 10 ms hinter dessen PTS. Das Headset war während dieses Messlaufs nicht
-sichtbar, daher wurden die Frames vom XR-Renderer als `hidden` gezählt.
+Gebaut, installiert und per Kurzlauf ohne Headset bzw. per `ui-preview`
+geprüft:
 
-Der decoderfreie Browser lief auf dem Frame. Das Panel war sichtbar, und der
-Nutzer bestätigte, dass sich das Highlight mit der Controller-Aim-Pose bewegt.
-Eine sichtbare Laserlinie ist noch nicht implementiert.
+- Fortsetzen-Dialog, Fortschrittsbalken und „Gesehen“ auf den Kacheln,
+  „Weiterschauen“ auf der Startseite.
+- Lautstärke, „Am Ende: Stopp/Wiederholen/Nächster“, automatisches
+  Ausblenden des Panels, Pause bleibt beim Spulen erhalten.
+- Kapitelmarken und Reiter „Info“.
+- Formaterkennung ohne Dateinamen (am Frame mit Jellyfin-Trickplay und
+  Decoderpuffern im Log bestätigt, im Headset noch nicht gesehen).
+- Fisheye-Projektion (äquidistantes Modell, an echtem Fisheye-Material
+  ungeprüft).
+- Filter nach Genre/Studio/Darsteller, Suche mit Bildschirmtastatur,
+  Sortierung lokaler Ordner, Vorschaubilder lokaler Dateien.
+- Reiter „Fokus“: Auslösen nur unter einem Abstand, Hysterese, Überblenden.
+- Kombinationen mit dem Griff („R Griff + Stick →“): der Griff wurde beim
+  Belegen nicht erkannt; Korrektur über den analogen Griffwert eingebaut,
+  noch nicht bestätigt (`binding_learn … grip_value=` im Log).
+- Schnelleres Öffnen von Bibliotheken (Liste ohne Stream-Infos, Codec und
+  Auflösung werden seitenweise nachgeladen; VR-Bibliothek 0,25 s statt 2 s).
 
-## Noch offen
+## Bekannte Grenzen
 
-- Playback-Panel und seine vier Controlleraktionen praktisch im Headset
-  validieren, einschließlich wiederholtem Seek und Browser-Rückkehr.
-- Fehlertext-Rückgabe zum Browser ergänzen.
-- Zielhardwaretests für Browser, Controller, A/V-Sync, wiederholtes Seeking,
-  mehrere Dateien und einen längeren Lauf.
+- HEVC Main10 nur mit dem eigenen Turnip (`tools/mesa-tp10`); ohne ihn
+  transkodiert Jellyfin bzw. lokale Main10-Dateien werden abgewiesen.
+- Seek ist ein Neustart der Session (etwa eine Sekunde Standbild); eine A-B-
+  Schleife wäre nur mit einem lückenlosen Bitstream-Splice sinnvoll
+  (geschätzt 2–3 Tage).
+- Passthrough ist nicht umgesetzt. SteamVR bietet auf dem Frame inzwischen
+  `XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND` an (Abfrage 2026-10-10).
+- Parallel laufende Player mit Iris-Nutzung (Playa) führen zu
+  `VIDIOC_REQBUFS OUTPUT: ENOMEM`.
+- Gelegentliches Stocken bei einem HLS-Transkodier-Titel ist ungeklärt.
+
+## Offen
+
+- Headset-Tests der Punkte oben.
+- Ein dokumentierter Messlauf über mehrere Minuten (Framerate, Drops,
+  A/V-Sync, Speicher).
+- Funktionsideen und Aufwandsschätzungen: Tabelle „Funktionsideen“ im
+  Handoff.
