@@ -55,7 +55,7 @@ int main(int argc, char **argv)
     avcodec_parameters_free(&parameters);
     int64_t seek_target_us = INT64_C(10000000);
     if (seek_test &&
-        (media_demux_seek(demux, seek_target_us,
+        (media_demux_seek(demux, seek_target_us, -1,
                           error, sizeof(error)) < 0 ||
          audio_output_reset(audio, seek_target_us,
                             error, sizeof(error)) < 0)) {
