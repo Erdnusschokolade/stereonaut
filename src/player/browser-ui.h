@@ -35,6 +35,7 @@ struct browser_ui {
     int parent;           /* listing index of the ".." entry or -1 */
     struct ui_image **thumbs; /* per listing entry, may be NULL */
     bool *thumb_requested;    /* per listing entry */
+    bool *streams_requested;  /* codec/size asked for, per listing entry */
     struct thumbnail_loader *loader;
     int sort;             /* enum jf_sort */
     bool sort_descending;

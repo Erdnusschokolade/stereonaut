@@ -48,6 +48,19 @@ struct file_browser_listing {
     char error[256];
 };
 
+/* Codec and picture size of Jellyfin titles (see
+ * file_browser_request_streams). */
+#define FILE_BROWSER_STREAMS_MAX 48
+struct file_browser_streams {
+    uint64_t generation;
+    size_t count;
+    struct {
+        size_t index; /* entry of the listing */
+        char codec[32];
+        int width, height;
+    } entries[FILE_BROWSER_STREAMS_MAX];
+};
+
 struct file_browser;
 
 int file_browser_open(struct file_browser **result, const char *initial_path,
@@ -64,6 +77,17 @@ void file_browser_set_local_sort(struct file_browser *browser, int sort,
 int file_browser_poll(struct file_browser *browser,
                       struct file_browser_listing *listing);
 void file_browser_listing_clear(struct file_browser_listing *listing);
+/* Jellyfin listings come without codec and picture size; this asks for
+ * them for some entries ("jf:item:ID..." paths, e.g. the visible page) in
+ * one request after any pending listing. Requests of one generation add
+ * up; returns how many entries were taken (the rest may be asked again). */
+size_t file_browser_request_streams(struct file_browser *browser,
+                                    uint64_t generation,
+                                    const struct file_browser_listing *listing,
+                                    const size_t *indices, size_t count);
+/* Takes finished stream information; false if there is none. */
+bool file_browser_poll_streams(struct file_browser *browser,
+                               struct file_browser_streams *streams);
 void file_browser_close(struct file_browser **browser);
 
 #endif

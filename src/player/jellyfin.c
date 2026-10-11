@@ -587,8 +587,7 @@ int jf_list_children(const struct jf_config *config, const char *parent_id,
     char path[512];
     snprintf(path, sizeof(path),
              "/Items?userId=%s&ParentId=%s&SortBy=%s&"
-             "SortOrder=%s&Limit=%d&EnableTotalRecordCount=false&"
-             "Fields=MediaStreams%s",
+             "SortOrder=%s&Limit=%d&EnableTotalRecordCount=false%s",
              config->user_id, parent_id, fields[sort],
              descending ? "Descending" : "Ascending", LIST_LIMIT,
              filter_text);
@@ -656,11 +655,40 @@ int jf_search(const struct jf_config *config, const char *query,
     snprintf(path, sizeof(path),
              "/Items?userId=%s&searchTerm=%s&Recursive=true&"
              "IncludeItemTypes=Movie,Video,Episode&Limit=200&"
-             "Fields=MediaStreams&EnableTotalRecordCount=false",
+             "EnableTotalRecordCount=false",
              config->user_id, encoded);
     json_object *root = NULL;
     int result = json_call(config, "GET", path, NULL, &root, error,
                            error_size);
+    if (result < 0)
+        return result;
+    result = collect_items(root, false, items, count);
+    json_object_put(root);
+    if (result < 0)
+        set_error(error, error_size, "Nicht genug Speicher");
+    return result;
+}
+
+int jf_list_streams(const struct jf_config *config, const char *ids,
+                    struct jf_item **items, size_t *count, char *error,
+                    size_t error_size)
+{
+    *items = NULL;
+    *count = 0;
+    size_t length = strlen(ids) + strlen(config->user_id) + 128;
+    char *path = malloc(length);
+    if (!path) {
+        set_error(error, error_size, "Nicht genug Speicher");
+        return -1;
+    }
+    snprintf(path, length,
+             "/Items?userId=%s&Ids=%s&Fields=MediaStreams&"
+             "EnableTotalRecordCount=false",
+             config->user_id, ids);
+    json_object *root = NULL;
+    int result = json_call(config, "GET", path, NULL, &root, error,
+                           error_size);
+    free(path);
     if (result < 0)
         return result;
     result = collect_items(root, false, items, count);

@@ -12,6 +12,7 @@
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
+#include <time.h>
 
 struct file_browser {
     pthread_t worker;
@@ -23,6 +24,13 @@ struct file_browser {
     uint64_t request_generation;
     struct file_browser_listing ready;
     bool has_ready;
+    /* Stream information: the entries asked for (ids) and the answer. */
+    uint64_t streams_generation;
+    size_t streams_count;
+    size_t streams_index[FILE_BROWSER_STREAMS_MAX];
+    char streams_id[FILE_BROWSER_STREAMS_MAX][JF_ID_SIZE];
+    struct file_browser_streams streams_ready;
+    bool has_streams;
     int sort;
     bool descending;
     int local_sort;
@@ -420,6 +428,46 @@ static int add_filter_values(struct file_browser_listing *listing,
     return 0;
 }
 
+/* The libraries change rarely but every folder title needs them: kept for
+ * a minute per server and user (worker thread only). Returns a copy. */
+#define VIEWS_CACHE_SECONDS 60
+static struct jf_item *views_cache;
+static size_t views_cache_count;
+static time_t views_cache_time;
+static char views_cache_key[sizeof(((struct jf_config *)0)->server) +
+                            sizeof(((struct jf_config *)0)->user_id)];
+
+static int list_views_cached(const struct jf_config *config,
+                             struct jf_item **items, size_t *count,
+                             char *error, size_t error_size)
+{
+    char key[sizeof(views_cache_key)];
+    snprintf(key, sizeof(key), "%s|%s", config->server, config->user_id);
+    time_t now = time(NULL);
+    if (!views_cache || strcmp(key, views_cache_key) != 0 ||
+        now - views_cache_time > VIEWS_CACHE_SECONDS ||
+        now < views_cache_time) {
+        struct jf_item *fresh = NULL;
+        size_t fresh_count = 0;
+        if (jf_list_views(config, &fresh, &fresh_count, error, error_size) < 0)
+            return -1;
+        free(views_cache);
+        views_cache = fresh;
+        views_cache_count = fresh_count;
+        views_cache_time = now;
+        snprintf(views_cache_key, sizeof(views_cache_key), "%s", key);
+    }
+    *count = views_cache_count;
+    *items = malloc((views_cache_count ? views_cache_count : 1U) *
+                    sizeof(**items));
+    if (!*items) {
+        set_error(error, error_size, "Nicht genug Speicher");
+        return -1;
+    }
+    memcpy(*items, views_cache, views_cache_count * sizeof(**items));
+    return 0;
+}
+
 static struct file_browser_listing read_jellyfin(const char *request,
                                                   uint64_t generation,
                                                   enum jf_sort sort,
@@ -477,13 +525,14 @@ static struct file_browser_listing read_jellyfin(const char *request,
         result = jf_search(&config, query, &items, &count, error,
                            sizeof(error));
     } else if (!folder_id) {
-        result = jf_list_views(&config, &items, &count, error, sizeof(error));
+        result = list_views_cached(&config, &items, &count, error,
+                                   sizeof(error));
     } else {
         struct jf_item *views = NULL;
         size_t view_count = 0;
         bool is_view = false;
-        if (jf_list_views(&config, &views, &view_count, error,
-                          sizeof(error)) == 0) {
+        if (list_views_cached(&config, &views, &view_count, error,
+                              sizeof(error)) == 0) {
             for (size_t i = 0; i < view_count; ++i)
                 if (strcmp(views[i].id, folder_id) == 0) {
                     is_view = true;
@@ -590,16 +639,83 @@ static struct file_browser_listing read_location(
     return read_directory(path, generation, local_sort, local_descending);
 }
 
+/* Asks Jellyfin for the streams of the requested entries (worker thread,
+ * mutex held on entry and exit). */
+static void read_streams(struct file_browser *browser)
+{
+    uint64_t generation = browser->streams_generation;
+    size_t count = browser->streams_count;
+    size_t indices[FILE_BROWSER_STREAMS_MAX];
+    char ids[FILE_BROWSER_STREAMS_MAX * JF_ID_SIZE] = "";
+    size_t used = 0;
+    for (size_t i = 0; i < count; ++i) {
+        indices[i] = browser->streams_index[i];
+        used += (size_t)snprintf(ids + used, sizeof(ids) - used, "%s%s",
+                                 i ? "," : "", browser->streams_id[i]);
+    }
+    char id_list[FILE_BROWSER_STREAMS_MAX][JF_ID_SIZE];
+    memcpy(id_list, browser->streams_id, count * JF_ID_SIZE);
+    browser->streams_count = 0;
+    pthread_mutex_unlock(&browser->mutex);
+
+    struct file_browser_streams result = {.generation = generation};
+    struct jf_config config;
+    struct jf_item *items = NULL;
+    size_t item_count = 0;
+    char error[256] = "";
+    if (jf_config_load(&config, error, sizeof(error)) == 0 &&
+        jf_list_streams(&config, ids, &items, &item_count, error,
+                        sizeof(error)) == 0) {
+        for (size_t i = 0; i < count; ++i)
+            for (size_t j = 0; j < item_count; ++j) {
+                if (strcmp(items[j].id, id_list[i]) != 0)
+                    continue;
+                result.entries[result.count].index = indices[i];
+                snprintf(result.entries[result.count].codec,
+                         sizeof(result.entries[result.count].codec), "%s",
+                         items[j].codec);
+                result.entries[result.count].width = items[j].width;
+                result.entries[result.count].height = items[j].height;
+                ++result.count;
+                break;
+            }
+    } else {
+        fprintf(stderr, "browser_streams error=%s\n", error);
+    }
+    free(items);
+
+    pthread_mutex_lock(&browser->mutex);
+    if (generation != browser->request_generation)
+        return;
+    if (browser->has_streams &&
+        browser->streams_ready.generation == generation) {
+        /* Not taken yet: add to it. */
+        struct file_browser_streams *ready = &browser->streams_ready;
+        for (size_t i = 0; i < result.count &&
+                           ready->count < FILE_BROWSER_STREAMS_MAX; ++i)
+            ready->entries[ready->count++] = result.entries[i];
+    } else {
+        browser->streams_ready = result;
+        browser->has_streams = true;
+    }
+}
+
 static void *browser_worker(void *argument)
 {
     struct file_browser *browser = argument;
     for (;;) {
         pthread_mutex_lock(&browser->mutex);
-        while (!browser->request_path && !browser->stopping)
+        while (!browser->request_path && !browser->streams_count &&
+               !browser->stopping)
             pthread_cond_wait(&browser->changed, &browser->mutex);
         if (browser->stopping) {
             pthread_mutex_unlock(&browser->mutex);
             return NULL;
+        }
+        if (!browser->request_path) {
+            read_streams(browser);
+            pthread_mutex_unlock(&browser->mutex);
+            continue;
         }
         char *path = browser->request_path;
         uint64_t generation = browser->request_generation;
@@ -650,6 +766,58 @@ void file_browser_set_local_sort(struct file_browser *browser, int sort,
                               : FILE_BROWSER_SORT_NAME;
     browser->local_descending = descending;
     pthread_mutex_unlock(&browser->mutex);
+}
+
+size_t file_browser_request_streams(struct file_browser *browser,
+                                    uint64_t generation,
+                                    const struct file_browser_listing *listing,
+                                    const size_t *indices, size_t count)
+{
+    if (!browser || !listing)
+        return 0;
+    pthread_mutex_lock(&browser->mutex);
+    if (browser->streams_generation != generation) {
+        browser->streams_generation = generation;
+        browser->streams_count = 0;
+    }
+    size_t taken = 0;
+    for (; taken < count; ++taken) {
+        if (browser->streams_count >= FILE_BROWSER_STREAMS_MAX)
+            break;
+        size_t index = indices[taken];
+        const char *path = index < listing->entry_count
+                               ? listing->entries[index].path
+                               : NULL;
+        if (!path || strncmp(path, "jf:item:", 8) != 0)
+            continue;
+        const char *id = path + 8;
+        size_t length = strcspn(id, ":");
+        if (length == 0 || length >= JF_ID_SIZE)
+            continue;
+        size_t slot = browser->streams_count++;
+        browser->streams_index[slot] = index;
+        memcpy(browser->streams_id[slot], id, length);
+        browser->streams_id[slot][length] = '\0';
+    }
+    if (browser->streams_count)
+        pthread_cond_signal(&browser->changed);
+    pthread_mutex_unlock(&browser->mutex);
+    return taken;
+}
+
+bool file_browser_poll_streams(struct file_browser *browser,
+                               struct file_browser_streams *streams)
+{
+    if (!browser || !streams)
+        return false;
+    pthread_mutex_lock(&browser->mutex);
+    bool ready = browser->has_streams;
+    if (ready) {
+        *streams = browser->streams_ready;
+        browser->has_streams = false;
+    }
+    pthread_mutex_unlock(&browser->mutex);
+    return ready;
 }
 
 int file_browser_request(struct file_browser *browser, const char *path,

@@ -124,7 +124,9 @@ enum jf_filter {
 
 /* Libraries (views) sorted by name and the children of a folder in the given
  * order (folders first); with a filter all titles below the folder that
- * match it. The array is freed with free(). */
+ * match it. Children and search results come without codec and picture
+ * size (asking for the streams of a whole library takes seconds); see
+ * jf_list_streams. The array is freed with free(). */
 int jf_list_views(const struct jf_config *config, struct jf_item **items,
                   size_t *count, char *error, size_t error_size);
 int jf_list_children(const struct jf_config *config, const char *parent_id,
@@ -141,6 +143,11 @@ int jf_list_filter_values(const struct jf_config *config,
 int jf_search(const struct jf_config *config, const char *query,
               struct jf_item **items, size_t *count, char *error,
               size_t error_size);
+/* Codec and picture size of the items whose ids are listed, comma
+ * separated (a page of titles). */
+int jf_list_streams(const struct jf_config *config, const char *ids,
+                    struct jf_item **items, size_t *count, char *error,
+                    size_t error_size);
 /* Partly watched videos of all libraries, most recent first ("continue
  * watching"); a short timeout, the start page waits for it. */
 int jf_list_resume(const struct jf_config *config, struct jf_item **items,

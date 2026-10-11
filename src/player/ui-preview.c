@@ -46,6 +46,20 @@ void file_browser_set_local_sort(struct file_browser *browser, int sort,
 {
     (void)browser; (void)sort; (void)descending;
 }
+size_t file_browser_request_streams(struct file_browser *browser,
+                                    uint64_t generation,
+                                    const struct file_browser_listing *listing,
+                                    const size_t *indices, size_t count)
+{
+    (void)browser; (void)generation; (void)listing; (void)indices;
+    return count;
+}
+bool file_browser_poll_streams(struct file_browser *browser,
+                               struct file_browser_streams *streams)
+{
+    (void)browser; (void)streams;
+    return false;
+}
 void file_browser_listing_clear(struct file_browser_listing *listing)
 {
     for (size_t i = 0; i < listing->entry_count; ++i) {

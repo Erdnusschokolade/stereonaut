@@ -1145,10 +1145,37 @@ static void request(struct browser_ui *ui, const char *location)
     }
 }
 
+/* Asks for codec and picture size of the Jellyfin titles on the current
+ * and the next page (the listing comes without them). */
+static void request_streams(struct browser_ui *ui)
+{
+    if (!ui->streams_requested)
+        return;
+    size_t indices[2 * PAGE_ENTRIES];
+    size_t count = 0;
+    for (size_t position = ui->page * PAGE_ENTRIES;
+         position < ui->grid_count && position < (ui->page + 2) * PAGE_ENTRIES;
+         ++position) {
+        size_t index = ui->grid[position];
+        const struct file_browser_entry *entry = &ui->listing.entries[index];
+        if (!ui->streams_requested[index] &&
+            entry->kind == FILE_BROWSER_MEDIA && !entry->codec[0] &&
+            strncmp(entry->path, "jf:item:", 8) == 0)
+            indices[count++] = index;
+    }
+    if (!count)
+        return;
+    size_t taken = file_browser_request_streams(
+        ui->browser, ui->listing.generation, &ui->listing, indices, count);
+    for (size_t i = 0; i < taken; ++i)
+        ui->streams_requested[indices[i]] = true;
+}
+
 /* Loads the thumbnails of the current and the next page and releases those
  * more than one page away, so memory stays bounded for long listings. */
 static void request_thumbnails(struct browser_ui *ui)
 {
+    request_streams(ui);
     if (!ui->thumbs || !ui->thumb_requested)
         return;
     for (size_t position = 0; position < ui->grid_count; ++position) {
@@ -1459,6 +1486,8 @@ static void free_thumbnails(struct browser_ui *ui)
     ui->thumbs = NULL;
     free(ui->thumb_requested);
     ui->thumb_requested = NULL;
+    free(ui->streams_requested);
+    ui->streams_requested = NULL;
 }
 
 static void install_listing(struct browser_ui *ui,
@@ -1472,6 +1501,7 @@ static void install_listing(struct browser_ui *ui,
     ui->grid = calloc(slots, sizeof(*ui->grid));
     ui->thumbs = calloc(slots, sizeof(*ui->thumbs));
     ui->thumb_requested = calloc(slots, sizeof(*ui->thumb_requested));
+    ui->streams_requested = calloc(slots, sizeof(*ui->streams_requested));
     ui->grid_count = 0;
     ui->parent = -1;
     for (size_t i = 0; i < ui->listing.entry_count; ++i) {
@@ -1524,6 +1554,25 @@ bool browser_ui_update(struct browser_ui *ui)
             changed = true;
         } else {
             ui_image_free(thumbnail.image);
+        }
+    }
+    struct file_browser_streams streams;
+    while (file_browser_poll_streams(ui->browser, &streams)) {
+        if (streams.generation != ui->listing.generation)
+            continue;
+        for (size_t i = 0; i < streams.count; ++i) {
+            size_t index = streams.entries[i].index;
+            if (index >= ui->listing.entry_count)
+                continue;
+            struct file_browser_entry *entry = &ui->listing.entries[index];
+            snprintf(entry->codec, sizeof(entry->codec), "%s",
+                     streams.entries[i].codec);
+            entry->width = streams.entries[i].width;
+            entry->height = streams.entries[i].height;
+            if (ui->detail == (int)index) {
+                ui->dirty = true;
+                changed = true;
+            }
         }
     }
     struct file_browser_listing updated = {0};
