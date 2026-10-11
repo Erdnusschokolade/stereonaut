@@ -124,6 +124,40 @@ vec3 adjust_picture(vec3 rgb)
     return rgb;
 }
 
+/* Code values on the 8-bit scale: Y, Cb, Cr (normalized 10-bit codes;
+ * the planes are padded, see video_scale). */
+vec3 fetch(vec2 uv)
+{
+    vec2 plane_uv = uv * view.video_scale.xy;
+    float y = textureLod(luma_plane, plane_uv, 0.0).r;
+    vec2 cbcr = textureLod(chroma_plane, plane_uv, 0.0).rg;
+    return vec3(y, cbcr) * 1023.0 / 4.0;
+}
+
+/* The video is often drawn smaller than it is: a 4K flat screen gets
+ * about a quarter of its pixels in the eye image. One bilinear tap per
+ * pixel then skips texels, and sharp edges step and shimmer. Up to 4x4
+ * taps spread over the pixel's footprint (dx, dy: its extent in uv) are
+ * averaged instead. A footprint of more than 64 texels is a jump in the
+ * mapping (360 seam, edge of the 180 image), not a minification. */
+vec3 sample_filtered(vec2 uv, vec2 dx, vec2 dy, vec2 low, vec2 high)
+{
+    vec2 size = view.source_info.xy;
+    float extent = max(length(dx * size), length(dy * size));
+    int taps = extent > 64.0 ? 1
+                             : int(clamp(ceil(extent * 0.5), 1.0, 4.0));
+    if (taps == 1)
+        return fetch(clamp(uv, low, high));
+    vec3 sum = vec3(0.0);
+    for (int i = 0; i < taps; ++i)
+        for (int j = 0; j < taps; ++j) {
+            vec2 offset = (vec2(i, j) + 0.5) / float(taps) - 0.5;
+            sum += fetch(clamp(uv + offset.x * dx + offset.y * dy, low,
+                               high));
+        }
+    return sum / float(taps * taps);
+}
+
 void main()
 {
     bool valid = true;
@@ -131,21 +165,29 @@ void main()
     if (view.modes.x != PROJECTION_FLAT)
         projection_uv = direction_to_projection_uv(projection_direction,
                                                     valid);
+    vec2 region_min, region_max;
+    vec2 source_uv = projection_uv_to_stereo_uv(projection_uv,
+                                                 region_min, region_max);
+    /* Derivatives before any pixel leaves (uniform control flow). */
+    vec2 dx = dFdx(source_uv);
+    vec2 dy = dFdy(source_uv);
+    /* Flat screen: fade the outermost pixel into the background (the
+     * clear colour in render_frame) so its edges do not step. */
+    float coverage = 1.0;
+    if (view.modes.x == PROJECTION_FLAT) {
+        vec2 to_edge = min(flat_uv, 1.0 - flat_uv) / fwidth(flat_uv);
+        coverage = clamp(min(to_edge.x, to_edge.y), 0.0, 1.0);
+    }
     if (!valid) {
         output_color = vec4(0.0, 0.0, 0.0, 1.0);
         return;
     }
 
-    vec2 region_min, region_max;
-    vec2 source_uv = projection_uv_to_stereo_uv(projection_uv,
-                                                 region_min, region_max);
     vec2 half_texel = 0.5 * view.source_info.zw;
-    source_uv = clamp(source_uv, region_min + half_texel,
-                      region_max - half_texel);
-    vec2 plane_uv = source_uv * view.video_scale.xy;
-    float y = texture(luma_plane, plane_uv).r;
-    vec2 cbcr = texture(chroma_plane, plane_uv).rg;
-    /* Normalized 10-bit codes on the 8-bit scale. */
-    vec3 rgb = ycbcr_to_rgb(y * 1023.0 / 4.0, cbcr * 1023.0 / 4.0);
-    output_color = vec4(adjust_picture(rgb), 1.0);
+    vec3 ycbcr = sample_filtered(source_uv, dx, dy,
+                                 region_min + half_texel,
+                                 region_max - half_texel);
+    vec3 rgb = adjust_picture(ycbcr_to_rgb(ycbcr.x, ycbcr.yz));
+    output_color = vec4(mix(vec3(0.005, 0.005, 0.008), rgb, coverage),
+                        1.0);
 }
