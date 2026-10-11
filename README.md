@@ -7,7 +7,8 @@
 > run or reuse any of it; use it at your own risk.
 
 A native VR video player for the **Steam Frame** (SteamOS, aarch64,
-Snapdragon 8 Gen 3). It plays 180°, 360°, fisheye and flat videos in mono,
+Snapdragon 8 Gen 3), with an OpenXR host that also recognizes common Linux
+PCVR controller profiles. It plays 180°, 360°, fisheye and flat videos in mono,
 side-by-side or top-bottom stereo, from local files or a Jellyfin server, up
 to 8K60 – decoded entirely in hardware.
 
@@ -45,11 +46,18 @@ Frame specifically and has not been tried on other headsets.
 
 ## Building
 
-The code is built on the Steam Frame itself. It needs `pkg-config` for
+The code is built on the Steam Frame itself or on Linux with a PCVR OpenXR
+runtime. It needs `pkg-config` for
 libavformat, libavcodec, libavutil, libswresample, alsa, libcurl, json-c,
-freetype2 and libjpeg, plus `glslc`, Vulkan and the SteamVR OpenXR loader
-(`/opt/steamvr/bin/linuxarm64/libopenxr_loader.so`, override with
-`OPENXR_LOADER`). All builds use `-std=c11 -O2 -Wall -Wextra -Werror`.
+freetype2 and libjpeg, plus `glslc`, Vulkan and an OpenXR loader. On the
+Frame the bundled SteamVR loader is used; elsewhere the build uses the normal
+`pkg-config` OpenXR loader (override either with `OPENXR_LOADER`). All builds
+use `-std=c11 -O2 -Wall -Wextra -Werror`.
+
+The PCVR work currently covers the OpenXR runtime and controller layer (Index,
+Touch, Windows Mixed Reality, Vive and Cosmos). Actual video playback remains
+dependent on a decoder that exports linear NV12 DMA-BUFs; the built-in Iris
+decoder is Frame-specific.
 
 ```sh
 src/player/build-stereonaut-session.sh   # session, renderer (XR host), launcher, shaders

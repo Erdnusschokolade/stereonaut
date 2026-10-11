@@ -6,7 +6,7 @@ audio with FFmpeg, sends video directly to Iris V4L2, and presents the
 resulting NV12 DMA-BUFs through the existing Vulkan/OpenXR renderer. Audio is
 decoded to 48-kHz S16 stereo and written to the system's ALSA `default` PCM.
 
-Build on Steam Frame:
+Build on Steam Frame or a Linux PC with an OpenXR runtime:
 
 ```sh
 ./build-stereonaut-session.sh
@@ -123,6 +123,13 @@ a playback session's NV12 socket, and the host answers `FILE_SELECTED` or
 `EXIT_REQUESTED`. The separate browser process was removed; its panel logic
 lives in `browser-ui.c`. `stereonaut-launcher --play PATH --frames N` runs a
 bounded playback without browsing, which is what the hardware tests use.
+
+The OpenXR host also suggests the standardized SteamVR PC controller profiles
+(Valve Index, Meta/Oculus Touch, Windows Mixed Reality and HTC Vive/Cosmos).
+The ordinary Linux OpenXR loader is selected automatically at build time; the
+Frame's bundled loader remains the default on the Frame. PCVR playback still
+needs a decoder that can export linear NV12 DMA-BUFs, while the integrated
+Iris decoder is specific to the Frame.
 
 The session seeks without restarting: for Iris it stops both V4L2 queues,
 seeks the pipeline, requeues every CAPTURE buffer the renderer does not show

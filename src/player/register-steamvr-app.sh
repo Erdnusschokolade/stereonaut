@@ -12,9 +12,17 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/stereonaut"
 manifest="$data_dir/stereonaut.vrmanifest"
 launcher="$HOME/.local/bin/stereonaut"
-vrcmd=${VRCMD:-/opt/steamvr/bin/linuxarm64/vrcmd}
+if [ -n "${VRCMD:-}" ]; then
+    vrcmd=$VRCMD
+elif [ -x /opt/steamvr/bin/linuxarm64/vrcmd ]; then
+    vrcmd=/opt/steamvr/bin/linuxarm64/vrcmd
+elif command -v vrcmd >/dev/null 2>&1; then
+    vrcmd=$(command -v vrcmd)
+else
+    vrcmd=
+fi
 
-if [ ! -x "$vrcmd" ]; then
+if [ -z "$vrcmd" ] || [ ! -x "$vrcmd" ]; then
     echo "SteamVR tool not found: $vrcmd" >&2
     exit 1
 fi

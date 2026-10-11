@@ -1,4 +1,4 @@
-/* Continuously render Iris NV12 DMA-BUF frames on the validated OpenXR quad. */
+/* Continuously render decoded NV12 DMA-BUF frames on an OpenXR quad. */
 #define _POSIX_C_SOURCE 200809L
 #define XR_USE_GRAPHICS_API_VULKAN
 #define XR_USE_PLATFORM_XLIB
@@ -296,6 +296,7 @@ struct app {
     int stick_direction[2]; /* -1 left, +1 right, 0 centred */
     bool select_down[2];
     bool has_valve_frame_controller;
+    bool has_pcvr_controller;
     bool has_generic_controller;
     XrPath hands[2];
     XrSpace aim_spaces[2];
@@ -503,6 +504,24 @@ static void initialize_actions(struct app *app)
          0, true},
         {"/interaction_profiles/valve/index_controller",
          "trigger/value", "squeeze/value", true, true, 1, true},
+        /* The common PCVR profiles use the same core affordances as Index:
+         * trigger for pointing, squeeze for panel grab and a thumbstick for
+         * seek/volume. Keep face-button suggestions to Index: their names
+         * and hands differ between Touch, WMR and Vive. */
+        {"/interaction_profiles/oculus/touch_controller",
+         "trigger/value", "squeeze/value", true,
+         app->has_pcvr_controller, 0, true},
+        {"/interaction_profiles/microsoft/motion_controller",
+         "trigger/value", "squeeze/value", true,
+         app->has_pcvr_controller, 0, true},
+        {"/interaction_profiles/htc/vive_cosmos_controller",
+         "trigger/value", "squeeze/click", true,
+         app->has_pcvr_controller, 0, false},
+        /* Original Vive wands expose a trackpad rather than a thumbstick;
+         * it is still a Vector2f input and maps naturally to navigation. */
+        {"/interaction_profiles/htc/vive_controller",
+         "trigger/value", "squeeze/click", true,
+         app->has_pcvr_controller, 0, false},
         /* No squeeze button or stick: panel grab, show/hide, page flips and
          * stick seeking are unavailable. */
         {"/interaction_profiles/khr/simple_controller",
@@ -534,8 +553,11 @@ static void initialize_actions(struct app *app)
                     app->squeeze_action, xr_path(app, text[2][hand])};
             }
             if (profiles[p].thumbstick) {
+                const char *stick = strstr(profiles[p].profile,
+                                           "vive_controller")
+                                        ? "trackpad" : "thumbstick";
                 snprintf(text[3][hand], sizeof(text[3][hand]),
-                         "/user/hand/%s/input/thumbstick", hand_names[hand]);
+                         "/user/hand/%s/input/%s", hand_names[hand], stick);
                 bindings[count++] = (XrActionSuggestedBinding){
                     app->stick_action, xr_path(app, text[3][hand])};
             }
@@ -1171,7 +1193,11 @@ static void hide_dashboard_at_startup(const struct app *app)
     time_t now = time(NULL);
     if (!first_call_s)
         first_call_s = now;
-    if (app->state != XR_SESSION_STATE_VISIBLE ||
+    /* This workaround is specific to the Steam Frame dashboard launch.
+     * Desktop SteamVR decides dashboard focus itself; hiding it there makes
+     * a direct PCVR launch unexpectedly lose its system UI. */
+    if (!app->has_valve_frame_controller ||
+        app->state != XR_SESSION_STATE_VISIBLE ||
         now - first_call_s > WINDOW_S || attempts >= MAX_ATTEMPTS ||
         (attempts && now - last_attempt_s < 1))
         return;
@@ -1307,6 +1333,10 @@ static void initialize_xr_vulkan(struct app *app)
             app->has_generic_controller = true;
     }
     free(available);
+    /* No extension is required for the standardized PC interaction
+     * profiles. Unsupported profiles are harmlessly rejected by
+     * xrSuggestInteractionProfileBindings. */
+    app->has_pcvr_controller = true;
     const char *extensions[4] = {XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME};
     uint32_t extension_count = 1;
     if (app->has_eye_gaze_extension)

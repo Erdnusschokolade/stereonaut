@@ -4,7 +4,19 @@ set -eu
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 project_dir=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 build_dir="$script_dir/build"
-openxr_loader=${OPENXR_LOADER:-/opt/steamvr/bin/linuxarm64/libopenxr_loader.so}
+# Steam Frame ships its loader outside the normal linker search path.  A PC
+# SteamVR installation normally exposes the loader through pkg-config (or the
+# standard -lopenxr_loader name).  OPENXR_LOADER remains an escape hatch for
+# either platform, for example when testing a runtime from a separate SDK.
+if [ -n "${OPENXR_LOADER:-}" ]; then
+  openxr_loader="$OPENXR_LOADER"
+elif [ -r /opt/steamvr/bin/linuxarm64/libopenxr_loader.so ]; then
+  openxr_loader=/opt/steamvr/bin/linuxarm64/libopenxr_loader.so
+elif pkg-config --exists openxr; then
+  openxr_loader=$(pkg-config --libs openxr)
+else
+  openxr_loader=-lopenxr_loader
+fi
 
 mkdir -p "$build_dir"
 
@@ -42,7 +54,7 @@ cc -std=c11 -O2 -Wall -Wextra -Werror \
   "$script_dir/controller-bindings.c" \
   $(pkg-config --libs libcurl json-c freetype2 libjpeg libavformat \
                 libavcodec libavutil) \
-  -lvulkan -lm -pthread "$openxr_loader"
+  -lvulkan -lm -pthread $openxr_loader
 
 cc -std=c11 -O2 -Wall -Wextra -Werror \
   -I"$script_dir" -o "$build_dir/stereonaut-launcher" \
