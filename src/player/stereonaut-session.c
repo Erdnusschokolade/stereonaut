@@ -2607,6 +2607,32 @@ static int play_pcvr_vulkan(struct playback_options *options,
         fail_message("no renderer socket for PCVR Vulkan playback");
     renderer_fd = options->adopt_renderer_fd;
     renderer_pid = options->adopt_renderer_pid;
+    struct nv12_ipc_message query = {
+        .type = NV12_IPC_DECODER_QUERY,
+        .video_codec = (uint32_t)info->video_codec,
+    };
+    if (send(renderer_fd, &query, sizeof(query), MSG_NOSIGNAL) !=
+        (ssize_t)sizeof(query))
+        fail_errno("query PCVR Vulkan decoder");
+    struct pollfd capability_ready = {.fd = renderer_fd, .events = POLLIN};
+    if (poll(&capability_ready, 1, 15000) <= 0)
+        fail_message("PCVR Vulkan decoder capability query timed out");
+    struct nv12_ipc_message capabilities = {0};
+    if (recv(renderer_fd, &capabilities, sizeof(capabilities), 0) !=
+            (ssize_t)sizeof(capabilities) ||
+        capabilities.type != NV12_IPC_DECODER_CAPABILITIES)
+        fail_message("PCVR Vulkan decoder returned no capabilities");
+    uint32_t required = info->video_codec == AV_CODEC_ID_H264
+                            ? NV12_DECODER_H264_VULKAN
+                        : info->video_codec == AV_CODEC_ID_HEVC
+                            ? NV12_DECODER_HEVC_VULKAN
+                            : NV12_DECODER_AV1_VULKAN;
+    if (!(capabilities.decoder_capabilities & required)) {
+        fprintf(stderr, "PCVR Vulkan Video is unavailable for codec %s on "
+                        "the OpenXR GPU\n",
+                avcodec_get_name(info->video_codec));
+        return EXIT_UNSUPPORTED_FORMAT;
+    }
     struct nv12_ipc_message init = {
         .type = NV12_IPC_VULKAN_INIT,
         .width = (uint32_t)info->width, .height = (uint32_t)info->height,

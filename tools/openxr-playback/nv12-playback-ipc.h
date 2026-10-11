@@ -96,6 +96,7 @@ enum nv12_pixel_format {
 enum nv12_decoder_capability {
     NV12_DECODER_H264_VULKAN = 1U << 0,
     NV12_DECODER_HEVC_VULKAN = 1U << 1,
+    NV12_DECODER_AV1_VULKAN = 1U << 2,
 };
 
 enum nv12_player_state {

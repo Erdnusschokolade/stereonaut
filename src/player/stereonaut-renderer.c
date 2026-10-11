@@ -785,6 +785,8 @@ static void send_decoder_capabilities(struct app *app)
             capabilities |= NV12_DECODER_H264_VULKAN;
         if (app->vulkan_video.hevc)
             capabilities |= NV12_DECODER_HEVC_VULKAN;
+        if (app->vulkan_video.av1)
+            capabilities |= NV12_DECODER_AV1_VULKAN;
     }
     struct nv12_ipc_message message = {
         .type = NV12_IPC_DECODER_CAPABILITIES,
