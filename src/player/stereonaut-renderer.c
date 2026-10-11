@@ -55,6 +55,11 @@
  * deflection. */
 #define STICK_PRESS_THRESHOLD 0.30f
 #define STICK_RELEASE_THRESHOLD 0.15f
+/* Grip as a modifier of button bindings: its analog value, because the
+ * Frame's grip click needs a firm squeeze that a hand also moving the stick
+ * rarely keeps up. */
+#define GRIP_PRESS_THRESHOLD 0.40f
+#define GRIP_RELEASE_THRESHOLD 0.25f
 
 /* Holding a stick direction or button repeats its action (volume, tilt,
  * zoom) after the delay, then at the interval. */
@@ -263,6 +268,9 @@ struct app {
     XrAction select_action;
     XrAction squeeze_action;
     XrAction stick_action;
+    XrAction grip_value_action;
+    bool grip_value_down[2];
+    float grip_value[2];
     XrAction button_actions[ARRAY_COUNT(button_inputs)];
     /* Controller bindings (settings.json "binding_*") and their input
      * state: what was down last frame, whether a held button served as a
@@ -470,6 +478,9 @@ static void initialize_actions(struct app *app)
     create_action(app->action_set, XR_ACTION_TYPE_VECTOR2F_INPUT,
                   "stick", "Blaettern und Spulen", app->hands,
                   &app->stick_action);
+    create_action(app->action_set, XR_ACTION_TYPE_FLOAT_INPUT,
+                  "grip_value", "Griff (Kombinationen)", app->hands,
+                  &app->grip_value_action);
     for (size_t i = 0; i < ARRAY_COUNT(button_inputs); ++i)
         create_action(app->action_set, XR_ACTION_TYPE_BOOLEAN_INPUT,
                       button_inputs[i].action, button_inputs[i].label,
@@ -481,26 +492,27 @@ static void initialize_actions(struct app *app)
         bool thumbstick;
         bool enabled;
         int buttons; /* button_inputs: 0 none, 1 Index subset, 2 all */
+        bool grip_value; /* has squeeze/value */
     } profiles[] = {
         {"/interaction_profiles/valve/frame_controller",
          "trigger/value", "squeeze/click", true,
-         app->has_valve_frame_controller, 2},
+         app->has_valve_frame_controller, 2, true},
         {"/interaction_profiles/khr/generic_controller",
          "trigger/value", "squeeze/value", true, app->has_generic_controller,
-         0},
+         0, true},
         {"/interaction_profiles/valve/index_controller",
-         "trigger/value", "squeeze/value", true, true, 1},
+         "trigger/value", "squeeze/value", true, true, 1, true},
         /* No squeeze button or stick: panel grab, show/hide, page flips and
          * stick seeking are unavailable. */
         {"/interaction_profiles/khr/simple_controller",
-         "select/click", NULL, false, true, 0},
+         "select/click", NULL, false, true, 0, false},
     };
     static const char *const hand_names[2] = {"left", "right"};
     unsigned accepted = 0;
     for (size_t p = 0; p < ARRAY_COUNT(profiles); ++p) {
         if (!profiles[p].enabled)
             continue;
-        XrActionSuggestedBinding bindings[8 + ARRAY_COUNT(button_inputs)];
+        XrActionSuggestedBinding bindings[10 + ARRAY_COUNT(button_inputs)];
         uint32_t count = 0;
         char text[4][2][96];
         for (unsigned hand = 0; hand < 2; ++hand) {
@@ -525,6 +537,14 @@ static void initialize_actions(struct app *app)
                          "/user/hand/%s/input/thumbstick", hand_names[hand]);
                 bindings[count++] = (XrActionSuggestedBinding){
                     app->stick_action, xr_path(app, text[3][hand])};
+            }
+            if (profiles[p].grip_value) {
+                char path[96];
+                snprintf(path, sizeof(path),
+                         "/user/hand/%s/input/squeeze/value",
+                         hand_names[hand]);
+                bindings[count++] = (XrActionSuggestedBinding){
+                    app->grip_value_action, xr_path(app, path)};
             }
         }
         for (size_t i = 0; i < ARRAY_COUNT(button_inputs); ++i) {
@@ -2617,6 +2637,8 @@ static void run_binding(struct app *app, int action)
  * action with the same buttons loses them. */
 static void learn_binding(struct app *app, int input, int modifier)
 {
+    printf("binding_learn input=%d modifier=%d grip_value=%.2f/%.2f\n", input,
+           modifier, app->grip_value[0], app->grip_value[1]);
     for (int i = 0; i < BINDING_ACTION_COUNT; ++i)
         if (i != app->learn_action && app->bindings[i].input == input &&
             app->bindings[i].modifier == modifier) {
@@ -2765,7 +2787,23 @@ static void sync_player_input(struct app *app, XrTime time)
         read_boolean(app, app->squeeze_action, app->hands[hand],
                      &hands[hand].squeeze);
     }
-    const bool grips[2] = {held(&hands[0].squeeze), held(&hands[1].squeeze)};
+    bool grips[2];
+    for (unsigned hand = 0; hand < 2; ++hand) {
+        XrActionStateGetInfo info = {
+            .type = XR_TYPE_ACTION_STATE_GET_INFO,
+            .action = app->grip_value_action,
+            .subactionPath = app->hands[hand],
+        };
+        XrActionStateFloat state = {.type = XR_TYPE_ACTION_STATE_FLOAT};
+        need_xr("xrGetActionStateFloat(grip)",
+                xrGetActionStateFloat(app->session, &info, &state));
+        float value = state.isActive ? state.currentState : 0.0f;
+        app->grip_value[hand] = value;
+        app->grip_value_down[hand] =
+            value >= (app->grip_value_down[hand] ? GRIP_RELEASE_THRESHOLD
+                                                 : GRIP_PRESS_THRESHOLD);
+        grips[hand] = held(&hands[hand].squeeze) || app->grip_value_down[hand];
+    }
     process_bindings(app, grips);
 
     /* Auto-hide: any trigger, grip or stick, or pointing at the panel,
