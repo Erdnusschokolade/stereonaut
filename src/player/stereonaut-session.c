@@ -146,6 +146,10 @@ struct playback_options {
     bool format_source_set;
     /* Seek restart while paused: show the target frame and stay paused. */
     bool start_paused;
+    /* Iris refused to restart the queues after a seek in place (STREAMON
+     * ENOMEM with a kernel warning, seen with 8K Main10): later seeks of
+     * this title restart the session straight away. */
+    bool no_seek_in_place;
     /* Diagnostics: after this many frames (counted from the start), seek
      * as if from the panel; up to four seeks. */
     uint64_t test_seek_frames[4];
@@ -1000,6 +1004,8 @@ static struct playback_options parse_playback_options(int argc, char **argv)
             options.fisheye_fov_set = true;
         } else if (strcmp(argv[i], "--paused") == 0) {
             options.start_paused = true;
+        } else if (strcmp(argv[i], "--no-seek-in-place") == 0) {
+            options.no_seek_in_place = true;
         } else if (strcmp(argv[i], "--format-source") == 0) {
             static const char *const sources[] = {"default", "name", "image",
                                                   "user"};
@@ -2412,6 +2418,8 @@ static void restart_session(char **argv, struct playback_options *options,
         restart_argv[restart_argc++] = "--jellyfin-resumed";
     if (paused)
         restart_argv[restart_argc++] = "--paused";
+    if (options->no_seek_in_place)
+        restart_argv[restart_argc++] = "--no-seek-in-place";
     restart_argv[restart_argc] = NULL;
     execv(argv[0], restart_argv);
     fail_errno("restart stereonaut-session after seek");
@@ -2868,7 +2876,8 @@ int main(int argc, char **argv)
         if (transport.paused != was_paused)
             last_progress = now;
         if (transport.requested && transport.requested != NV12_ACTION_BACK &&
-            capture_started && !source_change_pending) {
+            capture_started && !source_change_pending &&
+            !options.no_seek_in_place) {
             /* Seek within the session (stateful decoder seek: both queues
              * off, coded data from the new keyframe, queues on again); a
              * failure falls back to the restart below. */
@@ -2908,6 +2917,7 @@ int main(int argc, char **argv)
                 xioctl(VIDIOC_STREAMON, &output_type) < 0) {
                 fprintf(stderr, "seek: STREAMON errno=%d\n", errno);
                 capture_queue_closed = true;
+                options.no_seek_in_place = true;
                 break;
             }
             printf("seek_in_place requested_us=%" PRId64 " start_us=%" PRId64
@@ -3317,14 +3327,21 @@ int main(int argc, char **argv)
             wait_renderer(false);
         else
             hold_renderer(captures, capture_count);
-        if (capture_started) {
-            type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+        /* After a failed seek in place the queues are already off, and
+         * Iris may reject STREAMOFF (EINVAL after a refused STREAMON);
+         * closing the device below cleans up either way. */
+        if (capture_queue_closed) {
+            fprintf(stderr, "seek_in_place_failed restarting=1\n");
+        } else {
+            if (capture_started) {
+                type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+                must_ioctl(VIDIOC_STREAMOFF, &type,
+                           "VIDIOC_STREAMOFF CAPTURE control");
+            }
+            type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
             must_ioctl(VIDIOC_STREAMOFF, &type,
-                       "VIDIOC_STREAMOFF CAPTURE control");
+                       "VIDIOC_STREAMOFF OUTPUT control");
         }
-        type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
-        must_ioctl(VIDIOC_STREAMOFF, &type,
-                   "VIDIOC_STREAMOFF OUTPUT control");
         for (unsigned i = 0; i < output_count; ++i)
             if (munmap(outputs[i].mapping, outputs[i].length) < 0)
                 fail_errno("munmap OUTPUT control");
