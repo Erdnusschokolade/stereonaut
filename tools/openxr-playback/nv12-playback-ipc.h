@@ -88,6 +88,9 @@ enum nv12_pixel_format {
     /* Iris Q10C: TP10 (three 10-bit samples per 32-bit word) with UBWC;
      * needs the patched Turnip (STEREONAUT_TP10, tools/mesa-tp10). */
     NV12_FORMAT_TP10 = 1,
+    /* Vulkan Video HEVC Main10/AV1 Main10 output, normalized by a P010
+     * sampler conversion in the PCVR renderer. */
+    NV12_FORMAT_P010 = 2,
 };
 
 enum nv12_decoder_capability {

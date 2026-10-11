@@ -52,7 +52,8 @@ int pcvr_vulkan_decoder_open(struct pcvr_vulkan_decoder **result,
     *result = NULL;
     if (!source || !source->instance || !source->physical ||
         !source->device || width <= 0 || height <= 0 ||
-        (codec_id != AV_CODEC_ID_H264 && codec_id != AV_CODEC_ID_HEVC)) {
+        (codec_id != AV_CODEC_ID_H264 && codec_id != AV_CODEC_ID_HEVC &&
+         codec_id != AV_CODEC_ID_AV1)) {
         set_error(error, error_size, "invalid Vulkan Video decoder setup");
         return -1;
     }

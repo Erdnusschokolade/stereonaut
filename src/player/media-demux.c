@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <libavcodec/bsf.h>
 #include <libavutil/error.h>
@@ -73,6 +74,12 @@ static int64_t packet_time_us(int64_t value, AVRational time_base)
 static bool is_supported_video(const AVCodecParameters *parameters)
 {
     if (parameters->codec_id == AV_CODEC_ID_AV1) {
+        /* A desktop OpenXR host can hand AV1 to Vulkan Video.  The Frame
+         * still keeps its explicitly opted-in dav1d fallback below. */
+        if (access("/dev/video-dec0", R_OK) < 0)
+            return parameters->format == AV_PIX_FMT_NONE ||
+                   parameters->format == AV_PIX_FMT_YUV420P ||
+                   parameters->format == AV_PIX_FMT_YUV420P10LE;
         if (!getenv(SOFTWARE_VIDEO_ENV) ||
             parameters->width > SOFTWARE_VIDEO_MAX_WIDTH ||
             parameters->height > SOFTWARE_VIDEO_MAX_HEIGHT)

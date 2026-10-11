@@ -20,6 +20,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <vulkan/vulkan.h>
+#include <libavutil/hwcontext_vulkan.h>
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 
@@ -33,6 +34,7 @@
 #include "ui-draw.h"
 #include "vulkan-video.h"
 #include "pcvr-vulkan-decode.h"
+#include "pcvr-packet-ipc.h"
 #include "nv12-playback-ipc.h"
 #include "player-ui-ipc.h"
 
@@ -147,6 +149,7 @@ _Static_assert(sizeof(struct view_uniform) <= UBO_STRIDE,
 struct video_buffer {
     int dma_buf_fd;
     bool tp10;
+    bool p010;
     VkImage image;          /* NV12, or the TP10 luma plane */
     VkDeviceMemory memory;
     VkImageView view;
@@ -221,10 +224,18 @@ struct app {
     VkDescriptorPool descriptor_pool;
     VkSamplerYcbcrConversion conversion;
     VkSampler video_sampler;
+    VkSamplerYcbcrConversion p010_conversion;
+    VkSampler p010_sampler;
     VkSampler plane_sampler; /* TP10 planes: plain linear sampling */
     struct video_buffer video_buffers[NV12_IPC_MAX_BUFFERS];
     /* Last frame kept on screen while the session restarts after a seek. */
     struct video_buffer held;
+    /* Native PCVR decode output: FFmpeg owns image/memory, the renderer owns
+     * only the sampled view and keeps the AVFrame alive while presenting. */
+    struct pcvr_vulkan_decoder *pcvr_decoder;
+    AVFrame *pcvr_frame;
+    struct video_buffer pcvr_buffer;
+    bool pcvr_active, pcvr_ready;
     bool has_held;
     VkDescriptorSet spare_set;
     bool awaiting_frame;
@@ -1017,6 +1028,103 @@ static void release_current_video(struct app *app)
     app->current_video_index = -1;
 }
 
+static void write_video_descriptor(struct app *app, VkDescriptorSet set,
+                                   const struct video_buffer *buffer);
+static void create_p010_sampler(struct app *app);
+
+static void clear_pcvr_frame(struct app *app)
+{
+    if (app->pcvr_buffer.view)
+        vkDestroyImageView(app->device, app->pcvr_buffer.view, NULL);
+    app->pcvr_buffer.view = VK_NULL_HANDLE;
+    app->pcvr_buffer.image = VK_NULL_HANDLE;
+    app->pcvr_ready = false;
+    if (app->pcvr_frame)
+        av_frame_unref(app->pcvr_frame);
+}
+
+static void set_pcvr_frame(struct app *app, AVFrame *frame)
+{
+    /* FFmpeg's Vulkan frame carries a timeline semaphore.  The renderer's
+     * first integration keeps synchronization conservative: wait for the
+     * decode queue before replacing the sampled image.  This is zero-copy
+     * and correct across vendors; timeline hand-off can remove this bounded
+     * queue wait once the frame scheduler is in place. */
+    need_vk("vkQueueWaitIdle(PCVR decode)", vkQueueWaitIdle(app->video_queue));
+    clear_pcvr_frame(app);
+    av_frame_move_ref(app->pcvr_frame, frame);
+    AVVkFrame *vulkan = (AVVkFrame *)app->pcvr_frame->data[0];
+    need(vulkan && vulkan->img[0], "FFmpeg Vulkan frame has no image");
+    app->pcvr_buffer.image = vulkan->img[0];
+    VkSamplerYcbcrConversionInfo conversion = {
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_INFO,
+        .conversion = app->pcvr_buffer.p010 ? app->p010_conversion
+                                             : app->conversion,
+    };
+    VkImageViewCreateInfo view = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .pNext = &conversion, .image = app->pcvr_buffer.image,
+        .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = app->pcvr_buffer.p010
+                      ? VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16
+                      : VK_FORMAT_G8_B8R8_2PLANE_420_UNORM,
+        .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                             .levelCount = 1, .layerCount = 1},
+    };
+    need_vk("vkCreateImageView(PCVR Vulkan Video)",
+            vkCreateImageView(app->device, &view, NULL,
+                              &app->pcvr_buffer.view));
+    write_video_descriptor(app, app->pcvr_buffer.descriptor_set,
+                           &app->pcvr_buffer);
+    app->pcvr_ready = true;
+    app->awaiting_frame = false;
+    app->seek_pending = false;
+    app->received_frames++;
+}
+
+static void initialize_pcvr_decoder(struct app *app,
+                                    const struct nv12_ipc_message *message)
+{
+    need(message->video_codec == AV_CODEC_ID_H264 ||
+             message->video_codec == AV_CODEC_ID_HEVC ||
+             message->video_codec == AV_CODEC_ID_AV1,
+         "unsupported PCVR Vulkan codec");
+    clear_pcvr_frame(app);
+    pcvr_vulkan_decoder_close(&app->pcvr_decoder);
+    char error[256] = {0};
+    struct pcvr_vulkan_decode_device device = {
+        .instance = app->instance, .physical = app->physical,
+        .device = app->device, .graphics_queue_family = app->queue_family,
+        .video_queue_family = app->vulkan_video.queue_family,
+        .enabled_device_extensions = app->enabled_device_extensions,
+        .enabled_device_extension_count = app->enabled_device_extension_count,
+    };
+    need(pcvr_vulkan_decoder_open(&app->pcvr_decoder, &device,
+                                  (enum AVCodecID)message->video_codec,
+                                  (int)message->width, (int)message->height,
+                                  error, sizeof(error)) == 0, error);
+    if (!app->pcvr_frame)
+        app->pcvr_frame = av_frame_alloc();
+    need(app->pcvr_frame != NULL, "allocate PCVR Vulkan frame");
+    app->pcvr_buffer = (struct video_buffer){
+        .dma_buf_fd = -1, .descriptor_set = app->video_buffers[0].descriptor_set,
+        .p010 = message->pixel_format == NV12_FORMAT_P010,
+    };
+    if (app->pcvr_buffer.p010)
+        create_p010_sampler(app);
+    app->video_width = message->width;
+    app->video_height = message->height;
+    app->coded_width = message->width;
+    app->coded_height = message->height;
+    app->video_format = NV12_FORMAT_NV12;
+    app->pcvr_active = true;
+    app->eos_received = false;
+    send_ipc(app, NV12_IPC_READY, 0);
+    send_volume(app);
+    printf("pcvr_vulkan_decoder codec=%u size=%ux%u\n",
+           message->video_codec, message->width, message->height);
+}
+
 static void receive_frame_messages(struct app *app)
 {
     for (;;) {
@@ -1044,6 +1152,36 @@ static void receive_frame_messages(struct app *app)
         need((size_t)bytes == sizeof(message), "short NV12 IPC message");
         if (message.type == NV12_IPC_DECODER_QUERY) {
             send_decoder_capabilities(app);
+        } else if (message.type == NV12_IPC_VULKAN_INIT) {
+            initialize_pcvr_decoder(app, &message);
+        } else if (message.type == NV12_IPC_VULKAN_PACKET) {
+            need(app->pcvr_active && app->pcvr_decoder,
+                 "PCVR packet without decoder");
+            AVPacket *packet = NULL;
+            need(pcvr_packet_receive(&received, &message, &packet) == 0,
+                 "receive PCVR Vulkan packet");
+            packet->pts = message.position_us;
+            packet->dts = message.duration_us;
+            char error[256] = {0};
+            int sent = pcvr_vulkan_decoder_send(app->pcvr_decoder, packet,
+                                                error, sizeof(error));
+            av_packet_free(&packet);
+            need(sent >= 0, error);
+            for (;;) {
+                AVFrame *frame = av_frame_alloc();
+                need(frame != NULL, "allocate decoded PCVR frame");
+                int decoded = pcvr_vulkan_decoder_receive(app->pcvr_decoder,
+                                                          frame, error,
+                                                          sizeof(error));
+                if (decoded < 0)
+                    need(false, error);
+                if (!decoded) {
+                    av_frame_free(&frame);
+                    break;
+                }
+                set_pcvr_frame(app, frame);
+                av_frame_free(&frame);
+            }
         } else if (message.type == NV12_IPC_FRAME) {
             need(message.index < app->video_buffer_count,
                  "NV12 IPC frame index is invalid");
@@ -1897,6 +2035,53 @@ static void create_video_sampler(struct app *app)
                                                           : "cosited_even");
 }
 
+static void create_p010_sampler(struct app *app)
+{
+    if (app->p010_sampler)
+        return;
+    VkFormatProperties properties;
+    vkGetPhysicalDeviceFormatProperties(
+        app->physical, VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16,
+        &properties);
+    VkFormatFeatureFlags features = properties.optimalTilingFeatures;
+    need((features & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) &&
+             (features & VK_FORMAT_FEATURE_SAMPLED_IMAGE_YCBCR_CONVERSION_LINEAR_FILTER_BIT),
+         "P010 Vulkan Video output is not sampleable");
+    VkSamplerYcbcrConversionCreateInfo conversion = {
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_CREATE_INFO,
+        .format = VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16,
+        .ycbcrModel = VK_SAMPLER_YCBCR_MODEL_CONVERSION_RGB_IDENTITY,
+        .ycbcrRange = VK_SAMPLER_YCBCR_RANGE_ITU_FULL,
+        .components = {VK_COMPONENT_SWIZZLE_IDENTITY,
+                       VK_COMPONENT_SWIZZLE_IDENTITY,
+                       VK_COMPONENT_SWIZZLE_IDENTITY,
+                       VK_COMPONENT_SWIZZLE_IDENTITY},
+        .xChromaOffset = VK_CHROMA_LOCATION_MIDPOINT,
+        .yChromaOffset = VK_CHROMA_LOCATION_MIDPOINT,
+        .chromaFilter = VK_FILTER_LINEAR,
+    };
+    need_vk("vkCreateSamplerYcbcrConversion(P010)",
+            vkCreateSamplerYcbcrConversion(app->device, &conversion, NULL,
+                                           &app->p010_conversion));
+    VkSamplerYcbcrConversionInfo conversion_info = {
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_INFO,
+        .conversion = app->p010_conversion,
+    };
+    VkSamplerCreateInfo sampler = {
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .pNext = &conversion_info, .magFilter = VK_FILTER_LINEAR,
+        .minFilter = VK_FILTER_LINEAR,
+        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST,
+        .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .maxLod = 0.0f,
+    };
+    need_vk("vkCreateSampler(P010)", vkCreateSampler(app->device, &sampler,
+                                                       NULL,
+                                                       &app->p010_sampler));
+}
+
 static void create_pipeline(struct app *app)
 {
     VkAttachmentDescription attachment = {.format = app->color_format, .samples = VK_SAMPLE_COUNT_1_BIT,
@@ -1930,7 +2115,7 @@ static void create_pipeline(struct app *app)
          .descriptorCount = 1,
          .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT |
                        VK_SHADER_STAGE_COMPUTE_BIT,
-         .pImmutableSamplers = &app->video_sampler},
+         .pImmutableSamplers = NULL},
         {.binding = 2, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
          .descriptorCount = 1,
          .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT |
@@ -2233,7 +2418,7 @@ static void write_video_descriptor(struct app *app, VkDescriptorSet set,
         .range = sizeof(struct view_uniform),
     };
     VkDescriptorImageInfo descriptor_image = {
-        .sampler = app->video_sampler,
+        .sampler = buffer->p010 ? app->p010_sampler : app->video_sampler,
         .imageView = view,
         .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
     };
@@ -4147,6 +4332,8 @@ static void render_frame(struct app *app)
     struct video_buffer *video = NULL;
     if (app->playing && app->current_video_index >= 0)
         video = &app->video_buffers[app->current_video_index];
+    else if (app->playing && app->pcvr_ready)
+        video = &app->pcvr_buffer;
     else if (app->playing && app->has_held)
         video = &app->held;
     XrView views[2] = {{.type = XR_TYPE_VIEW}, {.type = XR_TYPE_VIEW}};
@@ -4361,6 +4548,12 @@ static void render_frame(struct app *app)
                              .levelCount = 1, .layerCount = 1},
     };
     VkImageMemoryBarrier video_acquires[2] = {video_acquire, video_acquire};
+    if (video == &app->pcvr_buffer) {
+        /* FFmpeg creates its frames for the renderer's queue-family set;
+         * their timeline semaphore establishes decode -> sampling order. */
+        video_acquires[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        video_acquires[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    }
     uint32_t video_images = video && video->tp10 ? 2U : 1U;
     if (video_images == 2U)
         video_acquires[1].image = video->image_uv;
@@ -4416,6 +4609,10 @@ static void render_frame(struct app *app)
     video_release.srcQueueFamilyIndex = app->queue_family;
     video_release.dstQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
     VkImageMemoryBarrier video_releases[2] = {video_release, video_release};
+    if (video == &app->pcvr_buffer) {
+        video_releases[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        video_releases[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    }
     if (video_images == 2U)
         video_releases[1].image = video->image_uv;
     if (video)

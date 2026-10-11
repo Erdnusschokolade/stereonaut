@@ -40,6 +40,7 @@
 #include "format-detect.h"
 #include "settings.h"
 #include "software-video.h"
+#include "pcvr-packet-ipc.h"
 
 #define MAX_OUTPUT_BUFFERS 16U
 #define MAX_CAPTURE_BUFFERS 32U
@@ -2594,6 +2595,94 @@ static int play_software(char **argv, struct playback_options *options,
     return 0;
 }
 
+/* PCVR sends compressed Annex-B access units to the OpenXR process.  Its
+ * Vulkan device owns both decode output and sampling, unlike the Frame path
+ * below where Iris CAPTURE DMA-BUFs cross the process boundary. */
+static int play_pcvr_vulkan(struct playback_options *options,
+                            struct media_pipeline *pipeline,
+                            double source_duration)
+{
+    const struct media_stream_info *info = media_pipeline_info(pipeline);
+    if (options->adopt_renderer_fd < 0)
+        fail_message("no renderer socket for PCVR Vulkan playback");
+    renderer_fd = options->adopt_renderer_fd;
+    renderer_pid = options->adopt_renderer_pid;
+    struct nv12_ipc_message init = {
+        .type = NV12_IPC_VULKAN_INIT,
+        .width = (uint32_t)info->width, .height = (uint32_t)info->height,
+        .coded_width = (uint32_t)info->width,
+        .coded_height = (uint32_t)info->height,
+        .pixel_format = info->pixel_format == AV_PIX_FMT_YUV420P10LE
+                            ? NV12_FORMAT_P010 : NV12_FORMAT_NV12,
+        .video_codec = (uint32_t)info->video_codec,
+        .projection_mode = options->projection_mode,
+        .fisheye_fov = options->fisheye_fov,
+        .stereo_layout = options->stereo_layout,
+        .swap_eyes = options->swap_eyes, .video_levels = options->video_levels,
+        .format_source = format_source,
+    };
+    if (send(renderer_fd, &init, sizeof(init), MSG_NOSIGNAL) !=
+        (ssize_t)sizeof(init))
+        fail_errno("send PCVR Vulkan init");
+    struct pollfd ready = {.fd = renderer_fd, .events = POLLIN};
+    if (poll(&ready, 1, 15000) <= 0)
+        fail_message("PCVR Vulkan renderer initialization timed out");
+    struct nv12_ipc_message response = {0};
+    if (recv(renderer_fd, &response, sizeof(response), 0) !=
+            (ssize_t)sizeof(response) || response.type != NV12_IPC_READY)
+        fail_message("PCVR Vulkan renderer did not become ready");
+    int flags = fcntl(renderer_fd, F_GETFL);
+    if (flags < 0 || fcntl(renderer_fd, F_SETFL, flags | O_NONBLOCK) < 0)
+        fail_errno("set PCVR renderer nonblocking");
+    bool audio_started = false;
+    struct transport transport = {0};
+    char error[256] = {0};
+    for (;;) {
+        if (stop_requested)
+            break;
+        if (update_transport(&transport, pipeline, info, options->start_us,
+                             audio_started, monotonic_seconds()) < 0.0)
+            return 2;
+        if (transport.requested) {
+            send_renderer_message(NV12_IPC_EOS, 0, 0);
+            break;
+        }
+        if (transport.paused) {
+            struct pollfd wait = {.fd = renderer_fd, .events = POLLIN};
+            poll(&wait, 1, 20);
+            continue;
+        }
+        struct media_packet packet;
+        int popped = media_pipeline_pop_video(pipeline, &packet, 50, error,
+                                              sizeof(error));
+        if (popped < 0) {
+            if (error[0])
+                fprintf(stderr, "PCVR video packet: %s\n", error);
+            break;
+        }
+        if (popped == 0)
+            continue;
+        if (!audio_started) {
+            if (media_pipeline_pause(pipeline, false, error, sizeof(error)) < 0)
+                return 2;
+            audio_started = true;
+        }
+        struct nv12_ipc_message message = {
+            .type = NV12_IPC_VULKAN_PACKET,
+            .position_us = packet.pts_us,
+            .duration_us = packet.dts_us,
+            .frame_index = packet.keyframe ? 1U : 0U,
+        };
+        if (pcvr_packet_send(renderer_fd, &message, packet.packet) < 0)
+            fail_errno("send PCVR Vulkan packet");
+        media_packet_unref(&packet);
+    }
+    send_renderer_message(NV12_IPC_EOS, 1, 0);
+    wait_renderer(true);
+    (void)source_duration;
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
@@ -2715,6 +2804,14 @@ int main(int argc, char **argv)
            options.swap_eyes, options.video_levels, options.frame_limit);
     if (options.start_us)
         printf("playback_start_target_us=%" PRId64 "\n", options.start_us);
+    /* Desktop PCVR has no Frame/Iris V4L2 node.  H.264 and HEVC are fed to
+     * the renderer's Vulkan Video backend instead; the renderer validates
+     * the selected OpenXR GPU and codec profile before it accepts INIT. */
+    if (access("/dev/video-dec0", R_OK) < 0 &&
+        (info->video_codec == AV_CODEC_ID_H264 ||
+         info->video_codec == AV_CODEC_ID_HEVC ||
+         info->video_codec == AV_CODEC_ID_AV1))
+        return play_pcvr_vulkan(&options, pipeline, source_duration);
     if (info->video_codec == AV_CODEC_ID_AV1)
         return play_software(argv, &options, pipeline, source_duration);
 
