@@ -34,8 +34,7 @@ cc -std=c11 -O2 -Wall -Wextra -Werror \
   "$script_dir/playback-report.c" \
   "$script_dir/title-settings.c" \
   "$script_dir/format-detect.c" \
-  "$script_dir/software-video.c" \
-  "$script_dir/pcvr-packet-ipc.c" \
+  "$script_dir/decoded-video.c" \
   "$script_dir/settings.c" \
   $(pkg-config --libs libavformat libavcodec libavutil libswresample alsa \
                 libcurl json-c libjpeg) \
@@ -47,9 +46,7 @@ cc -std=c11 -O2 -Wall -Wextra -Werror \
                        libavcodec libavutil) \
   -I/usr/include -I"$script_dir" -I"$project_dir/tools/openxr-playback" \
   -o "$build_dir/stereonaut-renderer" \
-  "$script_dir/stereonaut-renderer.c" "$script_dir/vulkan-video.c" \
-  "$script_dir/pcvr-vulkan-decode.c" "$script_dir/pcvr-packet-ipc.c" \
-  "$script_dir/browser-ui.c" \
+  "$script_dir/stereonaut-renderer.c" "$script_dir/browser-ui.c" \
   "$script_dir/player-ui.c" "$script_dir/ui-draw.c" "$script_dir/thumbnails.c" \
   "$script_dir/file-browser.c" "$script_dir/jellyfin.c" \
   "$script_dir/trickplay.c" "$script_dir/settings.c" \

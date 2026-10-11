@@ -258,7 +258,7 @@ belastbar gemessen: Am Ladegerät zeigt der Akkustrom nur den Saldo (etwa
 
 Bewertung: 4K60 reicht mit Reserve, 8K60 nicht. Der Player bietet AV1 daher
 als experimentelle, abschaltbare Option nur bis 4096×2160 und 8 Bit an
-(`src/player/software-video.c`): dav1d schreibt in NV12-Puffer aus
+(`src/player/decoded-video.c`): dav1d schreibt in NV12-Puffer aus
 `/dev/udmabuf` (Gruppe `video`), die der Renderer wie Iris-Puffer importiert.
 Im Player ohne Headset: 1700 Bilder des NVENC-Clips ohne verspätete Bilder
 (rund 3 Kerne belegt, mit `max_frame_delay=8`; ohne diese Einstellung fielen

@@ -6,7 +6,7 @@
  * every Iris CAPTURE allocation once, executes one two-plane Vulkan transfer
  * for every decoded frame, and requeues CAPTURE only after the Vulkan fence.
  * 8-bit AV1 up to 4K is decoded with dav1d instead if the viewer opted in
- * (play_software, software-video.h).
+ * (play_decoded, decoded-video.h).
  */
 #define _POSIX_C_SOURCE 200809L
 
@@ -39,8 +39,7 @@
 #include "title-settings.h"
 #include "format-detect.h"
 #include "settings.h"
-#include "software-video.h"
-#include "pcvr-packet-ipc.h"
+#include "decoded-video.h"
 
 #define MAX_OUTPUT_BUFFERS 16U
 #define MAX_CAPTURE_BUFFERS 32U
@@ -108,6 +107,8 @@ struct vulkan_context {
 
 struct video_layout {
     bool tp10;               /* Q10C instead of NV12 */
+    bool p010;               /* PC hardware decoder, 10 bit */
+    bool host_memory;        /* memfds instead of DMA-BUFs (PC) */
     uint32_t width;
     uint32_t coded_height;
     uint32_t visible_width;
@@ -184,8 +185,12 @@ static bool view_state_valid;
 static bool renderer_held;
 /* Pipeline whose output volume the renderer sets. */
 static struct media_pipeline *volume_pipeline;
+/* Set when a seek within the session failed after stopping the V4L2
+ * queues: the restart that follows closes the decoder, so buffers the
+ * renderer releases are no longer queued. */
+static bool capture_queue_closed;
 /* Experimental AV1 decoder; replaces Iris for the whole session. */
-static struct software_video *software_video;
+static struct decoded_video *decoded_video;
 
 /* Exit codes understood by the launcher. */
 #define EXIT_UNSUPPORTED_FORMAT 3
@@ -587,13 +592,16 @@ static bool sample_frame(const struct capture_buffer *buffer, unsigned index,
                                          DMA_BUF_SYNC_READ};
     fd_ioctl(buffer->dma_buf_fd, DMA_BUF_IOCTL_SYNC, &sync);
     const uint8_t *luma = frame_detection.mappings[index];
+    /* P010: the upper byte of each little-endian 16-bit sample. */
+    size_t sample_bytes = layout->p010 ? 2U : 1U;
     for (int y = 0; y < thumb_h; ++y) {
         size_t row = (size_t)((2U * (uint32_t)y + 1U) * height /
                               (2U * (uint32_t)thumb_h)) * layout->stride;
         for (int x = 0; x < thumb_w; ++x)
             thumbnail[y * thumb_w + x] =
-                luma[row + (2U * (uint32_t)x + 1U) * width /
-                               (2U * (uint32_t)thumb_w)];
+                luma[row + sample_bytes * ((2U * (uint32_t)x + 1U) * width /
+                                           (2U * (uint32_t)thumb_w)) +
+                     sample_bytes - 1U];
     }
     sync.flags = DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ;
     fd_ioctl(buffer->dma_buf_fd, DMA_BUF_IOCTL_SYNC, &sync);
@@ -691,7 +699,11 @@ static void start_renderer(
         .panel_yaw = options->panel.yaw,
         .panel_visible = options->panel.visible,
         .panel_valid = options->panel.valid,
-        .pixel_format = layout->tp10 ? NV12_FORMAT_TP10 : NV12_FORMAT_NV12,
+        .buffer_kind = layout->host_memory ? NV12_BUFFER_HOST
+                                           : NV12_BUFFER_DMA_BUF,
+        .pixel_format = layout->tp10   ? NV12_FORMAT_TP10
+                        : layout->p010 ? NV12_FORMAT_P010
+                                       : NV12_FORMAT_NV12,
         .coded_width = layout->width,
         .coded_height = layout->coded_height,
         .format_source = format_source,
@@ -1901,10 +1913,12 @@ static int export_capture(unsigned index, size_t expected_size)
 
 static void queue_capture(unsigned index, size_t length)
 {
-    if (software_video) { /* AV1 software path: no CAPTURE queue */
-        software_video_release(software_video, index);
+    if (decoded_video) { /* decoded outside Iris: no CAPTURE queue */
+        decoded_video_release(decoded_video, index);
         return;
     }
+    if (capture_queue_closed)
+        return;
     struct v4l2_plane plane = {
         .length = (uint32_t)length,
     };
@@ -2412,22 +2426,23 @@ static void restart_session(char **argv, struct playback_options *options,
     fail_errno("restart stereonaut-session after seek");
 }
 
-/* Playback of an AV1 title with dav1d (software-video.h): the renderer
+/* Playback of an AV1 title with dav1d (decoded-video.h): the renderer
  * protocol, pacing against the audio clock and seek restart of the Iris
  * loop, with frames from the decoder thread instead of CAPTURE buffers. */
-static int play_software(char **argv, struct playback_options *options,
-                         struct media_pipeline *pipeline,
-                         double source_duration)
+static int play_decoded(char **argv, struct playback_options *options,
+                        struct media_pipeline *pipeline,
+                        double source_duration,
+                        enum decoded_video_decoder decoder)
 {
     const struct media_stream_info *info = media_pipeline_info(pipeline);
     char error[512] = {0};
-    if (software_video_open(&software_video, pipeline, options->start_us,
-                            error, sizeof(error)) < 0) {
-        fprintf(stderr, "open AV1 software decoder: %s\n", error);
+    if (decoded_video_open(&decoded_video, pipeline, options->start_us,
+                           decoder, error, sizeof(error)) < 0) {
+        fprintf(stderr, "open video decoder: %s\n", error);
         return EXIT_UNSUPPORTED_FORMAT;
     }
-    const struct software_video_layout *frames =
-        software_video_layout(software_video);
+    const struct decoded_video_layout *frames =
+        decoded_video_layout(decoded_video);
     struct capture_buffer buffers[MAX_CAPTURE_BUFFERS];
     memset(buffers, 0, sizeof(buffers));
     for (unsigned i = 0; i < frames->count; ++i) {
@@ -2443,10 +2458,14 @@ static int play_software(char **argv, struct playback_options *options,
         .stride = frames->stride,
         .sizeimage = (uint32_t)frames->size,
         .uv_offset = frames->uv_offset,
+        .p010 = frames->p010,
+        .host_memory = frames->host_memory,
     };
-    printf("software_video decoder=libdav1d buffers=%u stride=%u"
+    printf("decoded_video decoder=%s format=%s buffers=%u stride=%u"
            " uv_offset=%" PRIu64 " bytes=%" PRIu64 "\n",
-           frames->count, frames->stride, frames->uv_offset, frames->size);
+           decoded_video_decoder_name(decoded_video),
+           frames->p010 ? "p010" : "nv12", frames->count, frames->stride,
+           frames->uv_offset, frames->size);
     prepare_view(options, &layout);
     start_renderer(buffers, frames->count, &layout, options);
 
@@ -2472,14 +2491,14 @@ static int play_software(char **argv, struct playback_options *options,
             /* Seek within the session; a failure falls back to the
              * restart below. */
             send_renderer_message(NV12_IPC_SEEKING, 0, 0);
-            software_video_stop(software_video);
+            decoded_video_stop(decoded_video);
             if (media_pipeline_seek(pipeline, transport.requested_start_us,
                                     true, error, sizeof(error)) < 0) {
                 fprintf(stderr, "seek: %s\n", error);
                 break;
             }
             options->start_us = media_pipeline_start_us(pipeline);
-            software_video_restart(software_video, options->start_us);
+            decoded_video_restart(decoded_video, options->start_us);
             printf("seek_in_place requested_us=%" PRId64 " start_us=%" PRId64
                    "\n", transport.requested_start_us, options->start_us);
             /* Paused: show the new position and stay paused. */
@@ -2503,8 +2522,8 @@ static int play_software(char **argv, struct playback_options *options,
         }
         unsigned index;
         int64_t pts_us;
-        int next = software_video_next(software_video, &index, &pts_us, 20,
-                                       error, sizeof(error));
+        int next = decoded_video_next(decoded_video, &index, &pts_us, 20,
+                                      error, sizeof(error));
         if (next < 0 && error[0]) {
             fprintf(stderr, "AV1 software decoding: %s\n", error);
             return 2;
@@ -2554,7 +2573,7 @@ static int play_software(char **argv, struct playback_options *options,
                     pts_us + VIDEO_LATE_DROP_US < audio_clock;
         if (late) {
             late_drops++;
-            software_video_release(software_video, index);
+            decoded_video_release(decoded_video, index);
         } else {
             detect_format_from_frame(options, buffers, index, &layout,
                                      pts_us);
@@ -2578,7 +2597,7 @@ static int play_software(char **argv, struct playback_options *options,
             wait_renderer(false);
         else
             hold_renderer(buffers, frames->count);
-        software_video_close(&software_video);
+        decoded_video_close(&decoded_video);
         volume_pipeline = NULL;
         media_pipeline_close(&pipeline);
         if (transport.requested == NV12_ACTION_BACK)
@@ -2588,130 +2607,17 @@ static int play_software(char **argv, struct playback_options *options,
     }
 
     double elapsed = monotonic_seconds() - playback_start;
-    printf("summary decoder=software frames=%" PRIu64
+    printf("summary decoder=%s frames=%" PRIu64
            " late_video_drops=%" PRIu64 " seek_preroll_drops=%" PRIu64
            " elapsed_s=%.3f source_duration_s=%.3f achieved_fps=%.3f\n",
-           shown, late_drops, software_video_preroll_drops(software_video),
+           decoded_video_decoder_name(decoded_video), shown, late_drops,
+           decoded_video_preroll_drops(decoded_video),
            elapsed, source_duration, elapsed > 0.0 ? shown / elapsed : 0.0);
     wait_renderer(options->frame_limit == 0); /* test runs stop after N */
-    software_video_close(&software_video);
+    decoded_video_close(&decoded_video);
     volume_pipeline = NULL;
     media_pipeline_close(&pipeline);
     printf("result=success\n");
-    return 0;
-}
-
-/* PCVR sends compressed Annex-B access units to the OpenXR process.  Its
- * Vulkan device owns both decode output and sampling, unlike the Frame path
- * below where Iris CAPTURE DMA-BUFs cross the process boundary. */
-static int play_pcvr_vulkan(struct playback_options *options,
-                            struct media_pipeline *pipeline,
-                            double source_duration)
-{
-    const struct media_stream_info *info = media_pipeline_info(pipeline);
-    if (options->adopt_renderer_fd < 0)
-        fail_message("no renderer socket for PCVR Vulkan playback");
-    renderer_fd = options->adopt_renderer_fd;
-    renderer_pid = options->adopt_renderer_pid;
-    struct nv12_ipc_message query = {
-        .type = NV12_IPC_DECODER_QUERY,
-        .video_codec = (uint32_t)info->video_codec,
-    };
-    if (send(renderer_fd, &query, sizeof(query), MSG_NOSIGNAL) !=
-        (ssize_t)sizeof(query))
-        fail_errno("query PCVR Vulkan decoder");
-    struct pollfd capability_ready = {.fd = renderer_fd, .events = POLLIN};
-    if (poll(&capability_ready, 1, 15000) <= 0)
-        fail_message("PCVR Vulkan decoder capability query timed out");
-    struct nv12_ipc_message capabilities = {0};
-    if (recv(renderer_fd, &capabilities, sizeof(capabilities), 0) !=
-            (ssize_t)sizeof(capabilities) ||
-        capabilities.type != NV12_IPC_DECODER_CAPABILITIES)
-        fail_message("PCVR Vulkan decoder returned no capabilities");
-    uint32_t required = info->video_codec == AV_CODEC_ID_H264
-                            ? NV12_DECODER_H264_VULKAN
-                        : info->video_codec == AV_CODEC_ID_HEVC
-                            ? NV12_DECODER_HEVC_VULKAN
-                            : NV12_DECODER_AV1_VULKAN;
-    if (!(capabilities.decoder_capabilities & required)) {
-        fprintf(stderr, "PCVR Vulkan Video is unavailable for codec %s on "
-                        "the OpenXR GPU\n",
-                avcodec_get_name(info->video_codec));
-        return EXIT_UNSUPPORTED_FORMAT;
-    }
-    struct nv12_ipc_message init = {
-        .type = NV12_IPC_VULKAN_INIT,
-        .width = (uint32_t)info->width, .height = (uint32_t)info->height,
-        .coded_width = (uint32_t)info->width,
-        .coded_height = (uint32_t)info->height,
-        .pixel_format = info->pixel_format == AV_PIX_FMT_YUV420P10LE
-                            ? NV12_FORMAT_P010 : NV12_FORMAT_NV12,
-        .video_codec = (uint32_t)info->video_codec,
-        .projection_mode = options->projection_mode,
-        .fisheye_fov = options->fisheye_fov,
-        .stereo_layout = options->stereo_layout,
-        .swap_eyes = options->swap_eyes, .video_levels = options->video_levels,
-        .format_source = format_source,
-    };
-    if (send(renderer_fd, &init, sizeof(init), MSG_NOSIGNAL) !=
-        (ssize_t)sizeof(init))
-        fail_errno("send PCVR Vulkan init");
-    struct pollfd ready = {.fd = renderer_fd, .events = POLLIN};
-    if (poll(&ready, 1, 15000) <= 0)
-        fail_message("PCVR Vulkan renderer initialization timed out");
-    struct nv12_ipc_message response = {0};
-    if (recv(renderer_fd, &response, sizeof(response), 0) !=
-            (ssize_t)sizeof(response) || response.type != NV12_IPC_READY)
-        fail_message("PCVR Vulkan renderer did not become ready");
-    int flags = fcntl(renderer_fd, F_GETFL);
-    if (flags < 0 || fcntl(renderer_fd, F_SETFL, flags | O_NONBLOCK) < 0)
-        fail_errno("set PCVR renderer nonblocking");
-    bool audio_started = false;
-    struct transport transport = {0};
-    char error[256] = {0};
-    for (;;) {
-        if (stop_requested)
-            break;
-        if (update_transport(&transport, pipeline, info, options->start_us,
-                             audio_started, monotonic_seconds()) < 0.0)
-            return 2;
-        if (transport.requested) {
-            send_renderer_message(NV12_IPC_EOS, 0, 0);
-            break;
-        }
-        if (transport.paused) {
-            struct pollfd wait = {.fd = renderer_fd, .events = POLLIN};
-            poll(&wait, 1, 20);
-            continue;
-        }
-        struct media_packet packet;
-        int popped = media_pipeline_pop_video(pipeline, &packet, 50, error,
-                                              sizeof(error));
-        if (popped < 0) {
-            if (error[0])
-                fprintf(stderr, "PCVR video packet: %s\n", error);
-            break;
-        }
-        if (popped == 0)
-            continue;
-        if (!audio_started) {
-            if (media_pipeline_pause(pipeline, false, error, sizeof(error)) < 0)
-                return 2;
-            audio_started = true;
-        }
-        struct nv12_ipc_message message = {
-            .type = NV12_IPC_VULKAN_PACKET,
-            .position_us = packet.pts_us,
-            .duration_us = packet.dts_us,
-            .frame_index = packet.keyframe ? 1U : 0U,
-        };
-        if (pcvr_packet_send(renderer_fd, &message, packet.packet) < 0)
-            fail_errno("send PCVR Vulkan packet");
-        media_packet_unref(&packet);
-    }
-    send_renderer_message(NV12_IPC_EOS, 1, 0);
-    wait_renderer(true);
-    (void)source_duration;
     return 0;
 }
 
@@ -2761,9 +2667,9 @@ int main(int argc, char **argv)
     bool detect_format = !options.format_source_set &&
                          format_source == NV12_FORMAT_SOURCE_DEFAULT;
     /* Opt-in AV1 software decoding: the demuxer accepts AV1 and the
-     * Jellyfin profile offers it (software-video.h). */
+     * Jellyfin profile offers it (decoded-video.h). */
     if (settings_get_bool("av1_software", false))
-        setenv(SOFTWARE_VIDEO_ENV, "1", 1);
+        setenv(AV1_SOFTWARE_ENV, "1", 1);
     char pipeline_error[512] = {0};
     struct media_pipeline *pipeline = NULL;
     char input_url[2304];
@@ -2836,16 +2742,14 @@ int main(int argc, char **argv)
            options.swap_eyes, options.video_levels, options.frame_limit);
     if (options.start_us)
         printf("playback_start_target_us=%" PRId64 "\n", options.start_us);
-    /* Desktop PCVR has no Frame/Iris V4L2 node.  H.264 and HEVC are fed to
-     * the renderer's Vulkan Video backend instead; the renderer validates
-     * the selected OpenXR GPU and codec profile before it accepts INIT. */
-    if (access("/dev/video-dec0", R_OK) < 0 &&
-        (info->video_codec == AV_CODEC_ID_H264 ||
-         info->video_codec == AV_CODEC_ID_HEVC ||
-         info->video_codec == AV_CODEC_ID_AV1))
-        return play_pcvr_vulkan(&options, pipeline, source_duration);
+    /* PCVR: without the Frame's Iris the GPU's decoder takes every codec;
+     * on the Frame AV1 goes to dav1d (opt-in, checked by the demuxer). */
+    if (access(DECODED_VIDEO_IRIS_DEVICE, F_OK) < 0)
+        return play_decoded(argv, &options, pipeline, source_duration,
+                            DECODED_VIDEO_HARDWARE);
     if (info->video_codec == AV_CODEC_ID_AV1)
-        return play_software(argv, &options, pipeline, source_duration);
+        return play_decoded(argv, &options, pipeline, source_duration,
+                            DECODED_VIDEO_DAV1D);
 
     /* Keep the validated transfer implementation available as diagnostic
      * source, while Vulkan and OpenXR live entirely in the renderer process.
@@ -2857,7 +2761,7 @@ int main(int argc, char **argv)
     (void)execute_transfer;
     (void)cleanup_vulkan;
 
-    video_fd = open("/dev/video-dec0", O_RDWR | O_NONBLOCK | O_CLOEXEC);
+    video_fd = open(DECODED_VIDEO_IRIS_DEVICE, O_RDWR | O_NONBLOCK | O_CLOEXEC);
     if (video_fd < 0)
         fail_errno("open /dev/video-dec0");
     struct v4l2_capability capability = {0};
@@ -2993,6 +2897,9 @@ int main(int argc, char **argv)
             enum v4l2_buf_type output_type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
             enum v4l2_buf_type capture_type =
                 V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
+            /* From here on a failure falls back to the restart, which
+             * closes the decoder; the queues stay as they are. */
+            capture_queue_closed = true;
             if (xioctl(VIDIOC_STREAMOFF, &output_type) < 0 ||
                 xioctl(VIDIOC_STREAMOFF, &capture_type) < 0) {
                 fprintf(stderr, "seek: STREAMOFF errno=%d\n", errno);
@@ -3014,12 +2921,14 @@ int main(int argc, char **argv)
             }
             options.start_us = media_pipeline_start_us(pipeline);
             /* Buffers the renderer still shows are queued on RELEASE. */
+            capture_queue_closed = false;
             for (unsigned i = 0; i < capture_count; ++i)
                 if (!renderer_outstanding[i])
                     queue_capture(i, captures[i].length);
             if (xioctl(VIDIOC_STREAMON, &capture_type) < 0 ||
                 xioctl(VIDIOC_STREAMON, &output_type) < 0) {
                 fprintf(stderr, "seek: STREAMON errno=%d\n", errno);
+                capture_queue_closed = true;
                 break;
             }
             printf("seek_in_place requested_us=%" PRId64 " start_us=%" PRId64

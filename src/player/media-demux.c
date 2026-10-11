@@ -14,7 +14,7 @@
 #include <libavutil/error.h>
 #include <libavutil/pixdesc.h>
 
-#include "software-video.h"
+#include "decoded-video.h"
 
 /* Jellyfin's HLS segments are about 3 s long and start with a keyframe;
  * see media_demux_seek. */
@@ -68,21 +68,41 @@ static int64_t packet_time_us(int64_t value, AVRational time_base)
     return av_rescale_q(value, time_base, AV_TIME_BASE_Q);
 }
 
+/* PCVR: GPU decoders (decoded-video.h) take 4:2:0 with 8 or 10 bits of
+ * H.264 (8-bit profiles only; NVDEC and Vulkan Video lack High 10), HEVC
+ * and AV1. */
+static bool is_supported_on_desktop(const AVCodecParameters *parameters)
+{
+    bool eight = parameters->format == AV_PIX_FMT_NONE ||
+                 parameters->format == AV_PIX_FMT_YUV420P;
+    bool ten = parameters->format == AV_PIX_FMT_YUV420P10LE;
+    if (parameters->codec_id == AV_CODEC_ID_H264) {
+        int profile = parameters->profile & ~AV_PROFILE_H264_CONSTRAINED;
+        return eight && parameters->bits_per_raw_sample <= 8 &&
+               (profile == AV_PROFILE_H264_BASELINE ||
+                profile == AV_PROFILE_H264_MAIN ||
+                profile == AV_PROFILE_H264_HIGH);
+    }
+    if (parameters->codec_id == AV_CODEC_ID_HEVC)
+        return (eight || ten) &&
+               (parameters->profile == AV_PROFILE_HEVC_MAIN ||
+                parameters->profile == AV_PROFILE_HEVC_MAIN_10);
+    if (parameters->codec_id == AV_CODEC_ID_AV1)
+        return eight || ten;
+    return false;
+}
+
 /* Iris decodes HEVC Main and the 8-bit 4:2:0 H.264 profiles to NV12 and
  * HEVC Main10 to Q10C. 8-bit AV1 up to 4K is decoded in software if the
- * viewer opted in (software-video.h). */
+ * viewer opted in (decoded-video.h). Without Iris (a PC) the GPU decodes. */
 static bool is_supported_video(const AVCodecParameters *parameters)
 {
+    if (access(DECODED_VIDEO_IRIS_DEVICE, F_OK) < 0)
+        return is_supported_on_desktop(parameters);
     if (parameters->codec_id == AV_CODEC_ID_AV1) {
-        /* A desktop OpenXR host can hand AV1 to Vulkan Video.  The Frame
-         * still keeps its explicitly opted-in dav1d fallback below. */
-        if (access("/dev/video-dec0", R_OK) < 0)
-            return parameters->format == AV_PIX_FMT_NONE ||
-                   parameters->format == AV_PIX_FMT_YUV420P ||
-                   parameters->format == AV_PIX_FMT_YUV420P10LE;
-        if (!getenv(SOFTWARE_VIDEO_ENV) ||
-            parameters->width > SOFTWARE_VIDEO_MAX_WIDTH ||
-            parameters->height > SOFTWARE_VIDEO_MAX_HEIGHT)
+        if (!getenv(AV1_SOFTWARE_ENV) ||
+            parameters->width > AV1_SOFTWARE_MAX_WIDTH ||
+            parameters->height > AV1_SOFTWARE_MAX_HEIGHT)
             return false;
         return (parameters->format == AV_PIX_FMT_NONE ||
                 parameters->format == AV_PIX_FMT_YUV420P) &&
@@ -260,14 +280,6 @@ int media_demux_open(struct media_demux **result, const char *path,
         media_demux_close(&demux);
         return -1;
     }
-    demux->video_parameters = avcodec_parameters_alloc();
-    if (!demux->video_parameters ||
-        avcodec_parameters_copy(demux->video_parameters,
-                                video_parameters) < 0) {
-        set_error(error, error_size, "copy video parameters failed");
-        media_demux_close(&demux);
-        return -1;
-    }
     demux->info.video_stream_index = video;
     demux->info.video_codec = video_parameters->codec_id;
     demux->info.video_profile = video_parameters->profile;
@@ -300,6 +312,16 @@ int media_demux_open(struct media_demux **result, const char *path,
         demux->time_offset_us = demux->info.start_us;
     demux->info.duration_us = demux->format->duration;
     if (initialize_video_filter(demux, error, error_size) < 0) {
+        media_demux_close(&demux);
+        return -1;
+    }
+    /* The packets leave the filter as Annex B; a decoder (dav1d, the PC's
+     * hardware decoders) needs the matching extradata from its output. */
+    demux->video_parameters = avcodec_parameters_alloc();
+    if (!demux->video_parameters ||
+        avcodec_parameters_copy(demux->video_parameters,
+                                demux->video_bsf->par_out) < 0) {
+        set_error(error, error_size, "copy video parameters failed");
         media_demux_close(&demux);
         return -1;
     }

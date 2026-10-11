@@ -127,11 +127,21 @@ bounded playback without browsing, which is what the hardware tests use.
 The OpenXR host also suggests the standardized SteamVR PC controller profiles
 (Valve Index, Meta/Oculus Touch, Windows Mixed Reality and HTC Vive/Cosmos).
 The ordinary Linux OpenXR loader is selected automatically at build time; the
-Frame's bundled loader remains the default on the Frame. The host probes
-H.264 High and HEVC Main Vulkan-Video profiles on its OpenXR-selected GPU and
-requires an optimal, shader-samplable NV12 decode target. The actual Vulkan
-Video packet/session path is still being integrated; the current player path
-uses Frame-specific Iris DMA-BUFs.
+Frame's bundled loader remains the default on the Frame.
+
+PCVR (`decoded-video.c`, `DECODED_VIDEO_HARDWARE`): without
+`/dev/video-dec0` the session decodes every title with FFmpeg's hardware
+decoders (CUDA first, then Vulkan Video, then VA-API; `STEREONAUT_HWDEC`
+picks one) and downloads each frame, NV12 or for 10 bit P010, into one of
+eight memfds. INIT marks them `NV12_BUFFER_HOST`: the renderer imports each
+mapping with `VK_EXT_external_memory_host` and copies a new frame into a
+device-local image before sampling it (NV12 through the YCbCr sampler, P010
+as R16/RG16 planes through the TP10 plane shader). memfds avoid udmabuf's
+64 MiB buffer limit (8K P010 frames are 100 MB). Pacing, seeking and the
+rest of the session are shared with the dav1d path. On an RTX 4080 Vulkan
+Video and NVDEC both decode 8K 10-bit HEVC at about 145 fps, but FFmpeg's
+download of Vulkan frames reaches only 60 fps, CUDA 87 fps; hence CUDA
+first.
 
 The session seeks without restarting: for Iris it stops both V4L2 queues,
 seeks the pipeline, requeues every CAPTURE buffer the renderer does not show
@@ -145,13 +155,14 @@ Jellyfin titles are addressed as `jf:item:<id>:<folder>`; `jellyfin.c` talks to
 the server (Quick Connect, listings, `PlaybackInfo`) and the session plays the
 resulting Direct Play or HLS URL.
 
-Experimental AV1 (`software-video.c`): if `av1_software` is set in
+Experimental AV1 on the Frame (`decoded-video.c`, `DECODED_VIDEO_DAV1D`):
+if `av1_software` is set in
 `settings.json` (toggle "AV1 bis 4K per CPU" in the view tab), the session
 exports `STEREONAUT_AV1`, the demuxer accepts 8-bit AV1 up to 4096×2160 and
 the Jellyfin device profile offers it for Direct Play. Such titles skip Iris:
 a worker thread decodes with dav1d (`max_frame_delay=8`) and converts each
 frame to NV12 in one of eight memfd-backed `udmabuf` DMA-BUFs, which the
-renderer imports exactly like Iris CAPTURE buffers. `play_software` in the
+renderer imports exactly like Iris CAPTURE buffers. `play_decoded` in the
 session reuses the renderer protocol, audio-clock pacing and seek restart of
 the Iris loop. For a test run without changing the setting, start the
 launcher with `STEREONAUT_AV1=1`.

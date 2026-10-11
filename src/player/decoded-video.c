@@ -1,5 +1,5 @@
 #define _GNU_SOURCE /* memfd_create, F_ADD_SEALS */
-#include "software-video.h"
+#include "decoded-video.h"
 
 #include "media-pipeline.h"
 
@@ -20,11 +20,13 @@
 
 #include <libavcodec/avcodec.h>
 #include <libavutil/error.h>
+#include <libavutil/hwcontext.h>
+#include <libavutil/pixdesc.h>
 
-/* Row pitch and chroma offset aligned well beyond what Turnip requires for
- * linear images. */
+/* Row pitch, chroma offset and buffer size aligned beyond what Turnip
+ * requires for linear images; NVIDIA rounds planes and size to 64 KiB. */
 #define STRIDE_ALIGNMENT 256U
-#define PLANE_ALIGNMENT 4096U
+#define PLANE_ALIGNMENT 65536U
 
 enum buffer_state {
     BUFFER_FREE,    /* the worker may decode into it */
@@ -37,20 +39,27 @@ struct ready_frame {
     int64_t pts_us;
 };
 
-struct software_video {
-    struct software_video_layout layout;
+struct decoded_video {
+    struct decoded_video_layout layout;
     struct media_pipeline *pipeline;
+    enum decoded_video_decoder decoder;
+    const char *decoder_name;
     AVCodecContext *codec;
-    int memfds[SOFTWARE_VIDEO_BUFFERS];
-    uint8_t *mappings[SOFTWARE_VIDEO_BUFFERS];
+    /* Hardware decoding: the FFmpeg device, its frame format and the
+     * frame that describes a buffer as download target. */
+    AVBufferRef *hardware_device;
+    enum AVPixelFormat hardware_format;
+    AVFrame *download;
+    int memfds[DECODED_VIDEO_BUFFERS];
+    uint8_t *mappings[DECODED_VIDEO_BUFFERS];
     int64_t start_us;
 
     pthread_t thread;
     bool thread_started;
     pthread_mutex_t mutex;
     pthread_cond_t changed;
-    enum buffer_state states[SOFTWARE_VIDEO_BUFFERS];
-    struct ready_frame ready[SOFTWARE_VIDEO_BUFFERS];
+    enum buffer_state states[DECODED_VIDEO_BUFFERS];
+    struct ready_frame ready[DECODED_VIDEO_BUFFERS];
     unsigned ready_first, ready_count;
     bool stopping, finished, failed;
     char failure[512];
@@ -80,9 +89,10 @@ static uint64_t align_up(uint64_t value, uint64_t alignment)
     return (value + alignment - 1U) / alignment * alignment;
 }
 
-/* One frame buffer: a sealed memfd wrapped as a DMA-BUF by udmabuf, mapped
- * for the worker's writes. */
-static int create_buffer(struct software_video *video, int device,
+/* One frame buffer: a sealed memfd, on the Frame wrapped as a DMA-BUF by
+ * udmabuf (limited to 64 MiB per buffer by default, too small for 8K
+ * P010), mapped for the worker's writes. */
+static int create_buffer(struct decoded_video *video, int device,
                          unsigned index, char *error, size_t error_size)
 {
     size_t size = (size_t)video->layout.size;
@@ -99,18 +109,23 @@ static int create_buffer(struct software_video *video, int device,
                   strerror(errno));
         return -1;
     }
-    struct udmabuf_create create = {
-        .memfd = (uint32_t)memfd,
-        .flags = UDMABUF_FLAGS_CLOEXEC,
-        .offset = 0,
-        .size = size,
-    };
-    int dma_buf = ioctl(device, UDMABUF_CREATE, &create);
-    if (dma_buf < 0) {
-        set_error(error, error_size, "UDMABUF_CREATE: %s", strerror(errno));
-        return -1;
+    if (video->layout.host_memory) {
+        video->layout.fds[index] = memfd;
+    } else {
+        struct udmabuf_create create = {
+            .memfd = (uint32_t)memfd,
+            .flags = UDMABUF_FLAGS_CLOEXEC,
+            .offset = 0,
+            .size = size,
+        };
+        int dma_buf = ioctl(device, UDMABUF_CREATE, &create);
+        if (dma_buf < 0) {
+            set_error(error, error_size, "UDMABUF_CREATE: %s",
+                      strerror(errno));
+            return -1;
+        }
+        video->layout.fds[index] = dma_buf;
     }
-    video->layout.fds[index] = dma_buf;
     void *mapping = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED,
                          memfd, 0);
     if (mapping == MAP_FAILED) {
@@ -123,8 +138,8 @@ static int create_buffer(struct software_video *video, int device,
     return 0;
 }
 
-static int open_decoder(struct software_video *video, char *error,
-                        size_t error_size)
+static int open_dav1d(struct decoded_video *video, char *error,
+                      size_t error_size)
 {
     /* FFmpeg's own "av1" decoder needs a hardware accelerator. */
     const AVCodec *decoder = avcodec_find_decoder_by_name("libdav1d");
@@ -162,28 +177,131 @@ static int open_decoder(struct software_video *video, char *error,
         set_av_error(error, error_size, "open dav1d", result);
         return -1;
     }
+    video->decoder_name = "dav1d";
     return 0;
 }
 
-int software_video_open(struct software_video **result,
-                        struct media_pipeline *pipeline, int64_t start_us,
-                        char *error, size_t error_size)
+/* No software fallback: a profile the GPU decoder lacks is an error. */
+static enum AVPixelFormat pick_hardware_format(
+    AVCodecContext *codec, const enum AVPixelFormat *formats)
+{
+    const struct decoded_video *video = codec->opaque;
+    for (; *formats != AV_PIX_FMT_NONE; ++formats)
+        if (*formats == video->hardware_format)
+            return *formats;
+    return AV_PIX_FMT_NONE;
+}
+
+/* CUDA (NVDEC) where it exists, i.e. on NVIDIA: both it and Vulkan Video
+ * decode 8K 10-bit HEVC at about 145 fps on an RTX 4080, but FFmpeg
+ * downloads CUDA frames faster (87 against 60 fps for 100 MB P010 frames,
+ * too slow for 8K60 in the player). Vulkan Video covers AMD and Intel with
+ * one API; VA-API remains for drivers without it. */
+static const struct {
+    enum AVHWDeviceType type;
+    const char *name;
+} hardware_types[] = {
+    {AV_HWDEVICE_TYPE_CUDA, "cuda"},
+    {AV_HWDEVICE_TYPE_VULKAN, "vulkan"},
+    {AV_HWDEVICE_TYPE_VAAPI, "vaapi"},
+};
+
+static int open_hardware(struct decoded_video *video, char *error,
+                         size_t error_size)
+{
+    AVCodecParameters *parameters = avcodec_parameters_alloc();
+    if (!parameters ||
+        media_pipeline_copy_video_parameters(video->pipeline,
+                                             parameters) < 0) {
+        avcodec_parameters_free(&parameters);
+        set_error(error, error_size, "copy video parameters failed");
+        return -1;
+    }
+    /* FFmpeg's native decoders carry the hardware accelerators; for AV1
+     * avcodec_find_decoder may return libdav1d instead. */
+    const AVCodec *decoder = parameters->codec_id == AV_CODEC_ID_AV1
+                                 ? avcodec_find_decoder_by_name("av1")
+                                 : avcodec_find_decoder(parameters->codec_id);
+    const char *wanted = getenv("STEREONAUT_HWDEC");
+    char tried[256] = "";
+    for (size_t t = 0; decoder && t < sizeof(hardware_types) /
+                                          sizeof(hardware_types[0]); ++t) {
+        if (wanted && strcmp(wanted, hardware_types[t].name) != 0)
+            continue;
+        enum AVPixelFormat format = AV_PIX_FMT_NONE;
+        for (int i = 0;; ++i) {
+            const AVCodecHWConfig *config = avcodec_get_hw_config(decoder, i);
+            if (!config)
+                break;
+            if ((config->methods & AV_CODEC_HW_CONFIG_METHOD_HW_DEVICE_CTX) &&
+                config->device_type == hardware_types[t].type) {
+                format = config->pix_fmt;
+                break;
+            }
+        }
+        if (format == AV_PIX_FMT_NONE)
+            continue;
+        AVBufferRef *device = NULL;
+        int result = av_hwdevice_ctx_create(&device, hardware_types[t].type,
+                                            NULL, NULL, 0);
+        if (result >= 0) {
+            video->codec = avcodec_alloc_context3(decoder);
+            result = video->codec ? avcodec_parameters_to_context(
+                                        video->codec, parameters)
+                                  : AVERROR(ENOMEM);
+        }
+        if (result >= 0) {
+            video->hardware_format = format;
+            video->codec->opaque = video;
+            video->codec->get_format = pick_hardware_format;
+            video->codec->pkt_timebase = (AVRational){1, 1000000};
+            video->codec->hw_device_ctx = av_buffer_ref(device);
+            result = video->codec->hw_device_ctx
+                         ? avcodec_open2(video->codec, decoder, NULL)
+                         : AVERROR(ENOMEM);
+        }
+        if (result >= 0) {
+            video->hardware_device = device;
+            video->decoder_name = hardware_types[t].name;
+            avcodec_parameters_free(&parameters);
+            return 0;
+        }
+        avcodec_free_context(&video->codec);
+        av_buffer_unref(&device);
+        char detail[AV_ERROR_MAX_STRING_SIZE];
+        av_strerror(result, detail, sizeof(detail));
+        size_t used = strlen(tried);
+        snprintf(tried + used, sizeof(tried) - used, "%s%s: %s",
+                 used ? ", " : "", hardware_types[t].name, detail);
+    }
+    set_error(error, error_size, "no hardware decoder for %s (%s)",
+              avcodec_get_name(parameters->codec_id),
+              tried[0] ? tried : "none offered");
+    avcodec_parameters_free(&parameters);
+    return -1;
+}
+
+int decoded_video_open(struct decoded_video **result,
+                       struct media_pipeline *pipeline, int64_t start_us,
+                       enum decoded_video_decoder decoder, char *error,
+                       size_t error_size)
 {
     *result = NULL;
     const struct media_stream_info *info = media_pipeline_info(pipeline);
     if (!info || info->width <= 0 || info->height <= 0 ||
-        info->width > SOFTWARE_VIDEO_MAX_WIDTH ||
-        info->height > SOFTWARE_VIDEO_MAX_HEIGHT || (info->width & 1) ||
-        (info->height & 1)) {
-        set_error(error, error_size, "AV1 size outside the software limit");
+        (info->width & 1) || (info->height & 1) ||
+        (decoder == DECODED_VIDEO_DAV1D &&
+         (info->width > AV1_SOFTWARE_MAX_WIDTH ||
+          info->height > AV1_SOFTWARE_MAX_HEIGHT))) {
+        set_error(error, error_size, "video size outside the decoder limit");
         return -1;
     }
-    struct software_video *video = calloc(1, sizeof(*video));
+    struct decoded_video *video = calloc(1, sizeof(*video));
     if (!video) {
-        set_error(error, error_size, "allocate software decoder");
+        set_error(error, error_size, "allocate video decoder");
         return -1;
     }
-    for (unsigned i = 0; i < SOFTWARE_VIDEO_BUFFERS; ++i) {
+    for (unsigned i = 0; i < DECODED_VIDEO_BUFFERS; ++i) {
         video->memfds[i] = -1;
         video->layout.fds[i] = -1;
     }
@@ -191,41 +309,53 @@ int software_video_open(struct software_video **result,
     pthread_cond_init(&video->changed, NULL);
     video->pipeline = pipeline;
     video->start_us = start_us;
-    struct software_video_layout *layout = &video->layout;
+    video->decoder = decoder;
+    struct decoded_video_layout *layout = &video->layout;
     layout->width = (uint32_t)info->width;
     layout->height = (uint32_t)info->height;
-    layout->stride = (uint32_t)align_up(layout->width, STRIDE_ALIGNMENT);
+    layout->p010 = decoder == DECODED_VIDEO_HARDWARE &&
+                   info->pixel_format == AV_PIX_FMT_YUV420P10LE;
+    layout->stride = (uint32_t)align_up(
+        (uint64_t)layout->width * (layout->p010 ? 2U : 1U), STRIDE_ALIGNMENT);
     layout->uv_offset = align_up((uint64_t)layout->stride * layout->height,
                                  PLANE_ALIGNMENT);
     layout->size = align_up(layout->uv_offset + (uint64_t)layout->stride *
                                                     layout->height / 2U,
-                            (uint64_t)sysconf(_SC_PAGESIZE));
-    layout->count = SOFTWARE_VIDEO_BUFFERS;
+                            PLANE_ALIGNMENT);
+    layout->count = DECODED_VIDEO_BUFFERS;
+    layout->host_memory = decoder == DECODED_VIDEO_HARDWARE;
 
-    int device = open("/dev/udmabuf", O_RDWR | O_CLOEXEC);
-    if (device < 0) {
+    int device = layout->host_memory
+                     ? -1 : open("/dev/udmabuf", O_RDWR | O_CLOEXEC);
+    if (device < 0 && !layout->host_memory) {
         set_error(error, error_size, "open /dev/udmabuf: %s",
                   strerror(errno));
-        software_video_close(&video);
+        decoded_video_close(&video);
         return -1;
     }
     for (unsigned i = 0; i < layout->count; ++i) {
         if (create_buffer(video, device, i, error, error_size) < 0) {
-            close(device);
-            software_video_close(&video);
+            if (device >= 0)
+                close(device);
+            decoded_video_close(&video);
             return -1;
         }
     }
-    close(device);
-    if (open_decoder(video, error, error_size) < 0) {
-        software_video_close(&video);
+    if (device >= 0)
+        close(device);
+    video->download = av_frame_alloc();
+    if (!video->download ||
+        (decoder == DECODED_VIDEO_DAV1D
+             ? open_dav1d(video, error, error_size)
+             : open_hardware(video, error, error_size)) < 0) {
+        decoded_video_close(&video);
         return -1;
     }
     *result = video;
     return 0;
 }
 
-static void fail(struct software_video *video, const char *detail)
+static void fail(struct decoded_video *video, const char *detail)
 {
     pthread_mutex_lock(&video->mutex);
     if (!video->failed) {
@@ -238,15 +368,16 @@ static void fail(struct software_video *video, const char *detail)
 
 /* yuv420p -> NV12. The DMA-BUF sync makes the CPU writes visible to the
  * GPU. */
-static void copy_frame(struct software_video *video, unsigned index,
+static void copy_frame(struct decoded_video *video, unsigned index,
                        const AVFrame *frame)
 {
-    const struct software_video_layout *layout = &video->layout;
+    const struct decoded_video_layout *layout = &video->layout;
     uint8_t *base = video->mappings[index];
     struct dma_buf_sync sync = {
         .flags = DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE,
     };
-    ioctl(layout->fds[index], DMA_BUF_IOCTL_SYNC, &sync);
+    if (!layout->host_memory)
+        ioctl(layout->fds[index], DMA_BUF_IOCTL_SYNC, &sync);
     for (uint32_t y = 0; y < layout->height; ++y)
         memcpy(base + (size_t)y * layout->stride,
                frame->data[0] + (size_t)y * (size_t)frame->linesize[0],
@@ -262,10 +393,67 @@ static void copy_frame(struct software_video *video, unsigned index,
             row[x] = (uint16_t)(u[x] | (uint16_t)(v[x] << 8));
     }
     sync.flags = DMA_BUF_SYNC_END | DMA_BUF_SYNC_WRITE;
-    ioctl(layout->fds[index], DMA_BUF_IOCTL_SYNC, &sync);
+    if (!layout->host_memory)
+        ioctl(layout->fds[index], DMA_BUF_IOCTL_SYNC, &sync);
 }
 
-static int free_buffer(const struct software_video *video)
+static void keep_buffer(void *opaque, uint8_t *data)
+{
+    (void)opaque;
+    (void)data;
+}
+
+/* A hardware frame downloaded straight into the buffer (one copy from GPU
+ * to system memory); the renderer samples it from there. */
+static int download_frame(struct decoded_video *video, unsigned index,
+                          const AVFrame *frame, char *error,
+                          size_t error_size)
+{
+    const struct decoded_video_layout *layout = &video->layout;
+    enum AVPixelFormat format = layout->p010 ? AV_PIX_FMT_P010LE
+                                             : AV_PIX_FMT_NV12;
+    const AVHWFramesContext *frames =
+        frame->hw_frames_ctx
+            ? (const AVHWFramesContext *)frame->hw_frames_ctx->data
+            : NULL;
+    if (!frames || frames->sw_format != format) {
+        set_error(error, error_size, "decoder frames are %s, expected %s",
+                  frames ? av_get_pix_fmt_name(frames->sw_format) : "none",
+                  av_get_pix_fmt_name(format));
+        return -1;
+    }
+    uint8_t *base = video->mappings[index];
+    AVFrame *target = video->download;
+    target->format = format;
+    target->width = frame->width;
+    target->height = frame->height;
+    target->data[0] = base;
+    target->data[1] = base + layout->uv_offset;
+    target->linesize[0] = target->linesize[1] = (int)layout->stride;
+    target->buf[0] = av_buffer_create(base, (size_t)layout->size,
+                                      keep_buffer, NULL, 0);
+    if (!target->buf[0]) {
+        set_error(error, error_size, "wrap frame buffer");
+        return -1;
+    }
+    struct dma_buf_sync sync = {
+        .flags = DMA_BUF_SYNC_START | DMA_BUF_SYNC_WRITE,
+    };
+    if (!layout->host_memory)
+        ioctl(layout->fds[index], DMA_BUF_IOCTL_SYNC, &sync);
+    int result = av_hwframe_transfer_data(target, frame, 0);
+    sync.flags = DMA_BUF_SYNC_END | DMA_BUF_SYNC_WRITE;
+    if (!layout->host_memory)
+        ioctl(layout->fds[index], DMA_BUF_IOCTL_SYNC, &sync);
+    av_frame_unref(target);
+    if (result < 0) {
+        set_av_error(error, error_size, "download decoded frame", result);
+        return -1;
+    }
+    return 0;
+}
+
+static int free_buffer(const struct decoded_video *video)
 {
     for (unsigned i = 0; i < video->layout.count; ++i)
         if (video->states[i] == BUFFER_FREE)
@@ -277,7 +465,7 @@ static int free_buffer(const struct software_video *video)
  * frames out to the ready queue. */
 static void *decode_worker(void *argument)
 {
-    struct software_video *video = argument;
+    struct decoded_video *video = argument;
     AVFrame *frame = av_frame_alloc();
     char error[512] = {0};
     if (!frame) {
@@ -318,7 +506,7 @@ static void *decode_worker(void *argument)
                 media_packet_unref(&packet);
             }
             if (result < 0 && result != AVERROR_EOF) {
-                set_av_error(error, sizeof(error), "dav1d packet", result);
+                set_av_error(error, sizeof(error), "decode packet", result);
                 fail(video, error);
                 break;
             }
@@ -327,7 +515,7 @@ static void *decode_worker(void *argument)
         if (result == AVERROR_EOF)
             break;
         if (result < 0) {
-            set_av_error(error, sizeof(error), "dav1d frame", result);
+            set_av_error(error, sizeof(error), "decode frame", result);
             fail(video, error);
             break;
         }
@@ -342,22 +530,32 @@ static void *decode_worker(void *argument)
             av_frame_unref(frame);
             continue;
         }
-        if ((frame->format != AV_PIX_FMT_YUV420P &&
-             frame->format != AV_PIX_FMT_YUVJ420P) ||
+        bool hardware = video->decoder == DECODED_VIDEO_HARDWARE;
+        if ((hardware ? frame->format != video->hardware_format
+                      : frame->format != AV_PIX_FMT_YUV420P &&
+                            frame->format != AV_PIX_FMT_YUVJ420P) ||
             (uint32_t)frame->width != video->layout.width ||
             (uint32_t)frame->height != video->layout.height) {
             snprintf(error, sizeof(error),
-                     "AV1 frame %dx%d format %d differs from the stream",
+                     "frame %dx%d format %d differs from the stream",
                      frame->width, frame->height, frame->format);
             fail(video, error);
             break;
         }
-        copy_frame(video, (unsigned)index, frame);
+        if (hardware) {
+            if (download_frame(video, (unsigned)index, frame, error,
+                               sizeof(error)) < 0) {
+                fail(video, error);
+                break;
+            }
+        } else {
+            copy_frame(video, (unsigned)index, frame);
+        }
         av_frame_unref(frame);
         pthread_mutex_lock(&video->mutex);
         video->states[index] = BUFFER_READY;
         unsigned slot = (video->ready_first + video->ready_count) %
-                        SOFTWARE_VIDEO_BUFFERS;
+                        DECODED_VIDEO_BUFFERS;
         video->ready[slot] = (struct ready_frame){(unsigned)index,
                                                   pts_us == AV_NOPTS_VALUE
                                                       ? 0 : pts_us};
@@ -373,15 +571,20 @@ static void *decode_worker(void *argument)
     return NULL;
 }
 
-const struct software_video_layout *software_video_layout(
-    const struct software_video *video)
+const char *decoded_video_decoder_name(const struct decoded_video *video)
+{
+    return video->decoder_name;
+}
+
+const struct decoded_video_layout *decoded_video_layout(
+    const struct decoded_video *video)
 {
     return &video->layout;
 }
 
-int software_video_next(struct software_video *video, unsigned *index,
-                        int64_t *pts_us, int timeout_ms, char *error,
-                        size_t error_size)
+int decoded_video_next(struct decoded_video *video, unsigned *index,
+                       int64_t *pts_us, int timeout_ms, char *error,
+                       size_t error_size)
 {
     pthread_mutex_lock(&video->mutex);
     if (!video->thread_started) {
@@ -407,7 +610,7 @@ int software_video_next(struct software_video *video, unsigned *index,
     if (video->ready_count) {
         struct ready_frame ready = video->ready[video->ready_first];
         video->ready_first = (video->ready_first + 1U) %
-                             SOFTWARE_VIDEO_BUFFERS;
+                             DECODED_VIDEO_BUFFERS;
         video->ready_count--;
         video->states[ready.index] = BUFFER_TAKEN;
         *index = ready.index;
@@ -426,7 +629,7 @@ int software_video_next(struct software_video *video, unsigned *index,
     return result;
 }
 
-void software_video_release(struct software_video *video, unsigned index)
+void decoded_video_release(struct decoded_video *video, unsigned index)
 {
     if (index >= video->layout.count)
         return;
@@ -436,7 +639,7 @@ void software_video_release(struct software_video *video, unsigned index)
     pthread_mutex_unlock(&video->mutex);
 }
 
-void software_video_stop(struct software_video *video)
+void decoded_video_stop(struct decoded_video *video)
 {
     pthread_mutex_lock(&video->mutex);
     video->stopping = true;
@@ -454,7 +657,7 @@ void software_video_stop(struct software_video *video)
     pthread_mutex_unlock(&video->mutex);
 }
 
-void software_video_restart(struct software_video *video, int64_t start_us)
+void decoded_video_restart(struct decoded_video *video, int64_t start_us)
 {
     pthread_mutex_lock(&video->mutex);
     video->start_us = start_us;
@@ -463,7 +666,7 @@ void software_video_restart(struct software_video *video, int64_t start_us)
     pthread_mutex_unlock(&video->mutex);
 }
 
-uint64_t software_video_preroll_drops(struct software_video *video)
+uint64_t decoded_video_preroll_drops(struct decoded_video *video)
 {
     pthread_mutex_lock(&video->mutex);
     uint64_t drops = video->preroll_drops;
@@ -471,11 +674,11 @@ uint64_t software_video_preroll_drops(struct software_video *video)
     return drops;
 }
 
-void software_video_close(struct software_video **pointer)
+void decoded_video_close(struct decoded_video **pointer)
 {
     if (!pointer || !*pointer)
         return;
-    struct software_video *video = *pointer;
+    struct decoded_video *video = *pointer;
     if (video->thread_started) {
         pthread_mutex_lock(&video->mutex);
         video->stopping = true;
@@ -484,10 +687,13 @@ void software_video_close(struct software_video **pointer)
         pthread_join(video->thread, NULL);
     }
     avcodec_free_context(&video->codec);
-    for (unsigned i = 0; i < SOFTWARE_VIDEO_BUFFERS; ++i) {
+    av_buffer_unref(&video->hardware_device);
+    av_frame_free(&video->download);
+    for (unsigned i = 0; i < DECODED_VIDEO_BUFFERS; ++i) {
         if (video->mappings[i])
             munmap(video->mappings[i], (size_t)video->layout.size);
-        if (video->layout.fds[i] >= 0)
+        if (video->layout.fds[i] >= 0 &&
+            video->layout.fds[i] != video->memfds[i])
             close(video->layout.fds[i]);
         if (video->memfds[i] >= 0)
             close(video->memfds[i]);

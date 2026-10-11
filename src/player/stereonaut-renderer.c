@@ -1,4 +1,5 @@
-/* Continuously render decoded NV12 DMA-BUF frames on an OpenXR quad. */
+/* Continuously render decoded DMA-BUF frames (Iris, dav1d or a PC hardware
+ * decoder) on the validated OpenXR quad. */
 #define _POSIX_C_SOURCE 200809L
 #define XR_USE_GRAPHICS_API_VULKAN
 #define XR_USE_PLATFORM_XLIB
@@ -15,12 +16,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 #include <vulkan/vulkan.h>
-#include <libavutil/hwcontext_vulkan.h>
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 
@@ -32,9 +33,6 @@
 #include "title-settings.h"
 #include "trickplay.h"
 #include "ui-draw.h"
-#include "vulkan-video.h"
-#include "pcvr-vulkan-decode.h"
-#include "pcvr-packet-ipc.h"
 #include "nv12-playback-ipc.h"
 #include "player-ui-ipc.h"
 
@@ -149,7 +147,6 @@ _Static_assert(sizeof(struct view_uniform) <= UBO_STRIDE,
 struct video_buffer {
     int dma_buf_fd;
     bool tp10;
-    bool p010;
     VkImage image;          /* NV12, or the TP10 luma plane */
     VkDeviceMemory memory;
     VkImageView view;
@@ -158,7 +155,16 @@ struct video_buffer {
     VkImageView view_uv;
     VkSemaphore producer_semaphore;
     VkDescriptorSet descriptor_set;
+    /* DMA-BUF: wait for the producer's fence. Host memory: copy the new
+     * frame into the image before sampling. */
     bool producer_wait_pending;
+    /* NV12_BUFFER_HOST: the memfd's mapping as Vulkan host memory, copied
+     * into the device-local image(s) above for every new frame. */
+    bool host;
+    void *host_mapping;
+    size_t host_size;
+    VkBuffer host_buffer;
+    VkDeviceMemory host_memory;
 };
 
 struct app {
@@ -175,13 +181,7 @@ struct app {
     VkPhysicalDevice physical;
     VkDevice device;
     VkQueue queue;
-    VkQueue video_queue;
     uint32_t queue_family;
-    struct vulkan_video_support vulkan_video;
-    bool vulkan_api_13;
-    const char *enabled_device_extensions[12];
-    uint32_t enabled_device_extension_count;
-    bool dma_buf_import;
     VkCommandPool command_pool;
     VkCommandBuffer command;
     VkFence fence;
@@ -224,18 +224,10 @@ struct app {
     VkDescriptorPool descriptor_pool;
     VkSamplerYcbcrConversion conversion;
     VkSampler video_sampler;
-    VkSamplerYcbcrConversion p010_conversion;
-    VkSampler p010_sampler;
     VkSampler plane_sampler; /* TP10 planes: plain linear sampling */
     struct video_buffer video_buffers[NV12_IPC_MAX_BUFFERS];
     /* Last frame kept on screen while the session restarts after a seek. */
     struct video_buffer held;
-    /* Native PCVR decode output: FFmpeg owns image/memory, the renderer owns
-     * only the sampled view and keeps the AVFrame alive while presenting. */
-    struct pcvr_vulkan_decoder *pcvr_decoder;
-    AVFrame *pcvr_frame;
-    struct video_buffer pcvr_buffer;
-    bool pcvr_active, pcvr_ready;
     bool has_held;
     VkDescriptorSet spare_set;
     bool awaiting_frame;
@@ -273,9 +265,12 @@ struct app {
     PFN_vkImportSemaphoreFdKHR import_semaphore_fd;
     PFN_vkGetMemoryFdPropertiesKHR get_memory_fd_properties;
     PFN_vkGetImageDrmFormatModifierPropertiesEXT get_modifier_properties;
+    /* VK_EXT_external_memory_host, for PC decoder buffers (optional). */
+    PFN_vkGetMemoryHostPointerPropertiesEXT get_host_pointer_properties;
     VkDeviceSize dma_buf_size;
     uint32_t video_width, video_height, video_stride;
     uint32_t video_format; /* enum nv12_pixel_format */
+    uint32_t buffer_kind;  /* enum nv12_buffer_kind */
     uint32_t coded_width, coded_height;
     uint32_t projection_mode, stereo_layout;
     bool swap_eyes;
@@ -701,17 +696,24 @@ static void apply_init(struct app *app, const struct nv12_ipc_message *message,
     app->dma_buf_size = message->size;
     app->uv_offset = message->uv_offset;
     app->video_format = message->pixel_format;
+    app->buffer_kind = message->buffer_kind;
+    need(app->buffer_kind == NV12_BUFFER_DMA_BUF ||
+             (app->buffer_kind == NV12_BUFFER_HOST &&
+              app->get_host_pointer_properties),
+         "video buffers in host memory need VK_EXT_external_memory_host");
     app->coded_width = message->coded_width;
     app->coded_height = message->coded_height;
     need(app->video_format == NV12_FORMAT_NV12 ||
+             (app->video_format == NV12_FORMAT_P010 &&
+              app->coded_width == app->video_width &&
+              app->coded_height == app->video_height &&
+              app->video_stride >= 2U * app->video_width) ||
              (app->video_format == NV12_FORMAT_TP10 &&
               app->coded_width >= app->video_width &&
               app->coded_height >= app->video_height &&
               app->coded_width % 3U == 0 &&
               app->video_stride == app->coded_width / 3U * 4U),
          "unsupported video pixel format in IPC contract");
-    need(app->dma_buf_import,
-         "this Vulkan device cannot import the Frame DMA-BUF video path");
     app->projection_mode = message->projection_mode;
     app->stereo_layout = message->stereo_layout;
     app->swap_eyes = message->swap_eyes != 0;
@@ -770,27 +772,6 @@ static void send_volume(struct app *app)
 {
     struct nv12_ipc_message message = {
         .type = NV12_IPC_VOLUME, .volume = app->volume,
-    };
-    send_message(app, &message);
-}
-
-/* This is deliberately a query rather than an optimistic platform check in
- * the session process: OpenXR selects the GPU and only this process knows
- * whether its actual device has the matching Vulkan Video codec profile. */
-static void send_decoder_capabilities(struct app *app)
-{
-    uint32_t capabilities = 0;
-    if (app->vulkan_api_13 && app->vulkan_video.queue) {
-        if (app->vulkan_video.h264)
-            capabilities |= NV12_DECODER_H264_VULKAN;
-        if (app->vulkan_video.hevc)
-            capabilities |= NV12_DECODER_HEVC_VULKAN;
-        if (app->vulkan_video.av1)
-            capabilities |= NV12_DECODER_AV1_VULKAN;
-    }
-    struct nv12_ipc_message message = {
-        .type = NV12_IPC_DECODER_CAPABILITIES,
-        .decoder_capabilities = capabilities,
     };
     send_message(app, &message);
 }
@@ -1030,103 +1011,6 @@ static void release_current_video(struct app *app)
     app->current_video_index = -1;
 }
 
-static void write_video_descriptor(struct app *app, VkDescriptorSet set,
-                                   const struct video_buffer *buffer);
-static void create_p010_sampler(struct app *app);
-
-static void clear_pcvr_frame(struct app *app)
-{
-    if (app->pcvr_buffer.view)
-        vkDestroyImageView(app->device, app->pcvr_buffer.view, NULL);
-    app->pcvr_buffer.view = VK_NULL_HANDLE;
-    app->pcvr_buffer.image = VK_NULL_HANDLE;
-    app->pcvr_ready = false;
-    if (app->pcvr_frame)
-        av_frame_unref(app->pcvr_frame);
-}
-
-static void set_pcvr_frame(struct app *app, AVFrame *frame)
-{
-    /* FFmpeg's Vulkan frame carries a timeline semaphore.  The renderer's
-     * first integration keeps synchronization conservative: wait for the
-     * decode queue before replacing the sampled image.  This is zero-copy
-     * and correct across vendors; timeline hand-off can remove this bounded
-     * queue wait once the frame scheduler is in place. */
-    need_vk("vkQueueWaitIdle(PCVR decode)", vkQueueWaitIdle(app->video_queue));
-    clear_pcvr_frame(app);
-    av_frame_move_ref(app->pcvr_frame, frame);
-    AVVkFrame *vulkan = (AVVkFrame *)app->pcvr_frame->data[0];
-    need(vulkan && vulkan->img[0], "FFmpeg Vulkan frame has no image");
-    app->pcvr_buffer.image = vulkan->img[0];
-    VkSamplerYcbcrConversionInfo conversion = {
-        .sType = VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_INFO,
-        .conversion = app->pcvr_buffer.p010 ? app->p010_conversion
-                                             : app->conversion,
-    };
-    VkImageViewCreateInfo view = {
-        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-        .pNext = &conversion, .image = app->pcvr_buffer.image,
-        .viewType = VK_IMAGE_VIEW_TYPE_2D,
-        .format = app->pcvr_buffer.p010
-                      ? VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16
-                      : VK_FORMAT_G8_B8R8_2PLANE_420_UNORM,
-        .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                             .levelCount = 1, .layerCount = 1},
-    };
-    need_vk("vkCreateImageView(PCVR Vulkan Video)",
-            vkCreateImageView(app->device, &view, NULL,
-                              &app->pcvr_buffer.view));
-    write_video_descriptor(app, app->pcvr_buffer.descriptor_set,
-                           &app->pcvr_buffer);
-    app->pcvr_ready = true;
-    app->awaiting_frame = false;
-    app->seek_pending = false;
-    app->received_frames++;
-}
-
-static void initialize_pcvr_decoder(struct app *app,
-                                    const struct nv12_ipc_message *message)
-{
-    need(message->video_codec == AV_CODEC_ID_H264 ||
-             message->video_codec == AV_CODEC_ID_HEVC ||
-             message->video_codec == AV_CODEC_ID_AV1,
-         "unsupported PCVR Vulkan codec");
-    clear_pcvr_frame(app);
-    pcvr_vulkan_decoder_close(&app->pcvr_decoder);
-    char error[256] = {0};
-    struct pcvr_vulkan_decode_device device = {
-        .instance = app->instance, .physical = app->physical,
-        .device = app->device, .graphics_queue_family = app->queue_family,
-        .video_queue_family = app->vulkan_video.queue_family,
-        .enabled_device_extensions = app->enabled_device_extensions,
-        .enabled_device_extension_count = app->enabled_device_extension_count,
-    };
-    need(pcvr_vulkan_decoder_open(&app->pcvr_decoder, &device,
-                                  (enum AVCodecID)message->video_codec,
-                                  (int)message->width, (int)message->height,
-                                  error, sizeof(error)) == 0, error);
-    if (!app->pcvr_frame)
-        app->pcvr_frame = av_frame_alloc();
-    need(app->pcvr_frame != NULL, "allocate PCVR Vulkan frame");
-    app->pcvr_buffer = (struct video_buffer){
-        .dma_buf_fd = -1, .descriptor_set = app->video_buffers[0].descriptor_set,
-        .p010 = message->pixel_format == NV12_FORMAT_P010,
-    };
-    if (app->pcvr_buffer.p010)
-        create_p010_sampler(app);
-    app->video_width = message->width;
-    app->video_height = message->height;
-    app->coded_width = message->width;
-    app->coded_height = message->height;
-    app->video_format = NV12_FORMAT_NV12;
-    app->pcvr_active = true;
-    app->eos_received = false;
-    send_ipc(app, NV12_IPC_READY, 0);
-    send_volume(app);
-    printf("pcvr_vulkan_decoder codec=%u size=%ux%u\n",
-           message->video_codec, message->width, message->height);
-}
-
 static void receive_frame_messages(struct app *app)
 {
     for (;;) {
@@ -1152,39 +1036,7 @@ static void receive_frame_messages(struct app *app)
         }
         if (bytes < 0) { perror("recv NV12 IPC message"); exit(2); }
         need((size_t)bytes == sizeof(message), "short NV12 IPC message");
-        if (message.type == NV12_IPC_DECODER_QUERY) {
-            send_decoder_capabilities(app);
-        } else if (message.type == NV12_IPC_VULKAN_INIT) {
-            initialize_pcvr_decoder(app, &message);
-        } else if (message.type == NV12_IPC_VULKAN_PACKET) {
-            need(app->pcvr_active && app->pcvr_decoder,
-                 "PCVR packet without decoder");
-            AVPacket *packet = NULL;
-            need(pcvr_packet_receive(&received, &message, &packet) == 0,
-                 "receive PCVR Vulkan packet");
-            packet->pts = message.position_us;
-            packet->dts = message.duration_us;
-            char error[256] = {0};
-            int sent = pcvr_vulkan_decoder_send(app->pcvr_decoder, packet,
-                                                error, sizeof(error));
-            av_packet_free(&packet);
-            need(sent >= 0, error);
-            for (;;) {
-                AVFrame *frame = av_frame_alloc();
-                need(frame != NULL, "allocate decoded PCVR frame");
-                int decoded = pcvr_vulkan_decoder_receive(app->pcvr_decoder,
-                                                          frame, error,
-                                                          sizeof(error));
-                if (decoded < 0)
-                    need(false, error);
-                if (!decoded) {
-                    av_frame_free(&frame);
-                    break;
-                }
-                set_pcvr_frame(app, frame);
-                av_frame_free(&frame);
-            }
-        } else if (message.type == NV12_IPC_FRAME) {
+        if (message.type == NV12_IPC_FRAME) {
             need(message.index < app->video_buffer_count,
                  "NV12 IPC frame index is invalid");
             release_current_video(app);
@@ -1561,17 +1413,9 @@ static void initialize_xr_vulkan(struct app *app)
     printf("openxr_vulkan_requirements min=%" PRIu64 " max=%" PRIu64 "\n",
            requirements.minApiVersionSupported, requirements.maxApiVersionSupported);
 
-    /* FFmpeg's public Vulkan hardware context requires Vulkan 1.3.  Keep
-     * older OpenXR runtimes usable for the established DMA-BUF path, but
-     * advertise PCVR decode only when the runtime lets us create 1.3. */
-    app->vulkan_api_13 =
-        requirements.minApiVersionSupported <= VK_API_VERSION_1_3 &&
-        requirements.maxApiVersionSupported >= VK_API_VERSION_1_3;
     VkApplicationInfo vk_app = {.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
         .pApplicationName = "stereonaut-xr-quad", .applicationVersion = 1,
-        .pEngineName = "stereonaut", .engineVersion = 1,
-        .apiVersion = app->vulkan_api_13 ? VK_API_VERSION_1_3
-                                         : VK_API_VERSION_1_1};
+        .pEngineName = "stereonaut", .engineVersion = 1, .apiVersion = VK_API_VERSION_1_1};
     VkInstanceCreateInfo vk_info = {.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
         .pApplicationInfo = &vk_app};
     XrVulkanInstanceCreateInfoKHR xr_vk_info = {
@@ -1597,64 +1441,33 @@ static void initialize_xr_vulkan(struct app *app)
         }
     free(families);
     need(found, "OpenXR Vulkan device has no graphics queue");
-    app->vulkan_video = vulkan_video_probe(app->physical);
-    printf("vulkan_video queue=%d family=%u h264=%d hevc=%d av1=%d\n",
-           app->vulkan_video.queue, app->vulkan_video.queue_family,
-           app->vulkan_video.h264, app->vulkan_video.hevc,
-           app->vulkan_video.av1);
-    const char *dma_buf_extensions[] = {
+    const char *device_extensions[] = {
         VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME,
         VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME,
         VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
         VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME,
         VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME,
+        VK_KHR_SAMPLER_YCBCR_CONVERSION_EXTENSION_NAME,
     };
-    app->dma_buf_import = true;
-    for (size_t i = 0; i < ARRAY_COUNT(dma_buf_extensions); ++i)
-        if (!has_device_extension(app->physical, dma_buf_extensions[i]))
-            app->dma_buf_import = false;
-    VkPhysicalDeviceProperties physical_properties;
-    vkGetPhysicalDeviceProperties(app->physical, &physical_properties);
-    bool ycbcr_extension = has_device_extension(
-        app->physical, VK_KHR_SAMPLER_YCBCR_CONVERSION_EXTENSION_NAME);
-    need(ycbcr_extension ||
-             VK_VERSION_MAJOR(physical_properties.apiVersion) > 1 ||
-             (VK_VERSION_MAJOR(physical_properties.apiVersion) == 1 &&
-              VK_VERSION_MINOR(physical_properties.apiVersion) >= 1),
-         "Vulkan device lacks sampler YCbCr conversion");
-    uint32_t device_extension_count = 0;
-    if (app->dma_buf_import)
-        for (size_t i = 0; i < ARRAY_COUNT(dma_buf_extensions); ++i)
-            app->enabled_device_extensions[device_extension_count++] =
-                dma_buf_extensions[i];
-    if (ycbcr_extension)
-        app->enabled_device_extensions[device_extension_count++] =
-            VK_KHR_SAMPLER_YCBCR_CONVERSION_EXTENSION_NAME;
-    device_extension_count += vulkan_video_extensions(
-        &app->vulkan_video,
-        app->enabled_device_extensions + device_extension_count,
-        ARRAY_COUNT(app->enabled_device_extensions) - device_extension_count);
-    need(device_extension_count <= ARRAY_COUNT(app->enabled_device_extensions),
-         "too many Vulkan device extensions");
-    app->enabled_device_extension_count = device_extension_count;
+    for (size_t i = 0; i < ARRAY_COUNT(device_extensions); ++i)
+        need(has_device_extension(app->physical, device_extensions[i]),
+             "required NV12 DMA-BUF Vulkan extension is missing");
+    /* PC decoder buffers arrive as memfds (no udmabuf size limit). */
+    const char *enabled_extensions[ARRAY_COUNT(device_extensions) + 1];
+    memcpy(enabled_extensions, device_extensions, sizeof(device_extensions));
+    uint32_t enabled_count = ARRAY_COUNT(device_extensions);
+    bool host_import = has_device_extension(
+        app->physical, VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);
+    if (host_import)
+        enabled_extensions[enabled_count++] =
+            VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME;
     float priority = 1.0f;
-    VkDeviceQueueCreateInfo queue_infos[2] = {{
-        .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-        .queueFamilyIndex = app->queue_family, .queueCount = 1,
-        .pQueuePriorities = &priority,
-    }};
-    uint32_t queue_count = 1;
-    if (app->vulkan_video.queue &&
-        app->vulkan_video.queue_family != app->queue_family)
-        queue_infos[queue_count++] = (VkDeviceQueueCreateInfo){
-            .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-            .queueFamilyIndex = app->vulkan_video.queue_family,
-            .queueCount = 1, .pQueuePriorities = &priority,
-        };
+    VkDeviceQueueCreateInfo queue_info = {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+        .queueFamilyIndex = app->queue_family, .queueCount = 1, .pQueuePriorities = &priority};
     VkDeviceCreateInfo vk_device_info = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-        .queueCreateInfoCount = queue_count, .pQueueCreateInfos = queue_infos,
-        .enabledExtensionCount = device_extension_count,
-        .ppEnabledExtensionNames = app->enabled_device_extensions};
+        .queueCreateInfoCount = 1, .pQueueCreateInfos = &queue_info,
+        .enabledExtensionCount = enabled_count,
+        .ppEnabledExtensionNames = enabled_extensions};
     XrVulkanDeviceCreateInfoKHR xr_device_info = {
         .type = XR_TYPE_VULKAN_DEVICE_CREATE_INFO_KHR, .systemId = app->system,
         .pfnGetInstanceProcAddr = vkGetInstanceProcAddr, .vulkanPhysicalDevice = app->physical,
@@ -1663,12 +1476,9 @@ static void initialize_xr_vulkan(struct app *app)
     need_vk("xrCreateVulkanDeviceKHR Vulkan", vk_result);
     vkGetDeviceQueue(app->device, app->queue_family, 0, &app->queue);
     need(app->queue != VK_NULL_HANDLE, "vkGetDeviceQueue returned null");
-    if (app->vulkan_video.queue)
-        vkGetDeviceQueue(app->device, app->vulkan_video.queue_family, 0,
-                         &app->video_queue);
-    printf("openxr_vulkan_device=%s queue_family=%u dma_buf_import=%d\n",
-           physical_properties.deviceName, app->queue_family,
-           app->dma_buf_import);
+    VkPhysicalDeviceProperties properties;
+    vkGetPhysicalDeviceProperties(app->physical, &properties);
+    printf("openxr_vulkan_device=%s queue_family=%u\n", properties.deviceName, app->queue_family);
     app->import_semaphore_fd = (PFN_vkImportSemaphoreFdKHR)
         vkGetDeviceProcAddr(app->device, "vkImportSemaphoreFdKHR");
     app->get_memory_fd_properties = (PFN_vkGetMemoryFdPropertiesKHR)
@@ -1676,10 +1486,13 @@ static void initialize_xr_vulkan(struct app *app)
     app->get_modifier_properties = (PFN_vkGetImageDrmFormatModifierPropertiesEXT)
         vkGetDeviceProcAddr(app->device,
                             "vkGetImageDrmFormatModifierPropertiesEXT");
-    if (app->dma_buf_import)
-        need(app->import_semaphore_fd && app->get_memory_fd_properties &&
-                 app->get_modifier_properties,
-             "required external-memory entry point is missing");
+    need(app->import_semaphore_fd && app->get_memory_fd_properties &&
+             app->get_modifier_properties,
+         "required external-memory entry point is missing");
+    if (host_import)
+        app->get_host_pointer_properties =
+            (PFN_vkGetMemoryHostPointerPropertiesEXT)vkGetDeviceProcAddr(
+                app->device, "vkGetMemoryHostPointerPropertiesEXT");
 }
 
 static void initialize_swapchain(struct app *app)
@@ -1714,22 +1527,27 @@ static void initialize_swapchain(struct app *app)
     printf("openxr_swapchain format=%d dimensions=%ux%u images=%u\n", app->color_format, app->width, app->height, app->image_count);
 }
 
-/* One TP10 plane as a 32-bpp UBWC image: TP10 packs three 10-bit samples
- * per word, so the plane has the byte geometry (and Turnip's UBWC layout) of
- * an RGBA8 image a third as wide. The patched Turnip samples such views as
- * FMT6_TP10_Y (RGBA8) or FMT6_TP10_UV (RGB10A2) when STEREONAUT_TP10 is set
- * (tools/mesa-tp10). */
-static void import_tp10_plane(struct app *app, struct video_buffer *buffer,
-                              VkFormat format, VkDeviceSize offset,
-                              uint32_t rows, VkImage *image,
-                              VkDeviceMemory *memory, VkImageView *view)
+/* One plane of a two-plane frame as its own image, sampled by the plane
+ * shader (tp10-projection.frag) instead of a YCbCr sampler.
+ * TP10 (Iris Main10): TP10 packs three 10-bit samples per word, so a plane
+ * has the byte geometry (and Turnip's UBWC layout) of an RGBA8 image a
+ * third as wide. The patched Turnip samples such views as FMT6_TP10_Y
+ * (RGBA8) or FMT6_TP10_UV (RGB10A2) when STEREONAUT_TP10 is set
+ * (tools/mesa-tp10).
+ * P010 (PC hardware decoders): linear R16 luma and RG16 chroma, the 10 bits
+ * in the high bits, which the shader reads like TP10's normalized codes. */
+static void import_plane(struct app *app, struct video_buffer *buffer,
+                         VkFormat format, uint64_t drm_modifier,
+                         uint32_t width, VkDeviceSize offset, uint32_t rows,
+                         VkImage *image, VkDeviceMemory *memory,
+                         VkImageView *view)
 {
     const VkSubresourceLayout plane = {
         .offset = offset, .rowPitch = app->video_stride,
     };
     VkImageDrmFormatModifierExplicitCreateInfoEXT modifier = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_EXPLICIT_CREATE_INFO_EXT,
-        .drmFormatModifier = DRM_FORMAT_MOD_QCOM_COMPRESSED,
+        .drmFormatModifier = drm_modifier,
         .drmFormatModifierPlaneCount = 1, .pPlaneLayouts = &plane,
     };
     VkExternalMemoryImageCreateInfo external = {
@@ -1740,7 +1558,7 @@ static void import_tp10_plane(struct app *app, struct video_buffer *buffer,
     VkImageCreateInfo info = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .pNext = &external,
         .imageType = VK_IMAGE_TYPE_2D, .format = format,
-        .extent = {app->coded_width / 3U, rows, 1},
+        .extent = {width, rows, 1},
         .mipLevels = 1, .arrayLayers = 1,
         .samples = VK_SAMPLE_COUNT_1_BIT,
         .tiling = VK_IMAGE_TILING_DRM_FORMAT_MODIFIER_EXT,
@@ -1748,30 +1566,30 @@ static void import_tp10_plane(struct app *app, struct video_buffer *buffer,
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
     };
-    need_vk("vkCreateImage(TP10 plane)",
+    need_vk("vkCreateImage(video plane)",
             vkCreateImage(app->device, &info, NULL, image));
     VkImageDrmFormatModifierPropertiesEXT chosen = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_PROPERTIES_EXT,
     };
-    need_vk("vkGetImageDrmFormatModifierPropertiesEXT(TP10)",
+    need_vk("vkGetImageDrmFormatModifierPropertiesEXT(plane)",
             app->get_modifier_properties(app->device, *image, &chosen));
-    need(chosen.drmFormatModifier == DRM_FORMAT_MOD_QCOM_COMPRESSED,
-         "Vulkan substituted the TP10 modifier");
+    need(chosen.drmFormatModifier == drm_modifier,
+         "Vulkan substituted the video plane modifier");
     VkMemoryRequirements requirements;
     vkGetImageMemoryRequirements(app->device, *image, &requirements);
     need(requirements.size <= app->dma_buf_size,
-         "TP10 plane layout exceeds the DMA-BUF");
+         "video plane layout exceeds the DMA-BUF");
     VkMemoryFdPropertiesKHR fd_properties = {
         .sType = VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR,
     };
-    need_vk("vkGetMemoryFdPropertiesKHR(TP10)",
+    need_vk("vkGetMemoryFdPropertiesKHR(plane)",
             app->get_memory_fd_properties(
                 app->device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
                 buffer->dma_buf_fd, &fd_properties));
     uint32_t bits = requirements.memoryTypeBits & fd_properties.memoryTypeBits;
-    need(bits != 0, "TP10 DMA-BUF memory-type intersection is empty");
+    need(bits != 0, "plane DMA-BUF memory-type intersection is empty");
     int imported_fd = dup(buffer->dma_buf_fd);
-    if (imported_fd < 0) { perror("dup TP10 DMA-BUF"); exit(2); }
+    if (imported_fd < 0) { perror("dup plane DMA-BUF"); exit(2); }
     VkImportMemoryFdInfoKHR import = {
         .sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR,
         .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
@@ -1786,9 +1604,9 @@ static void import_tp10_plane(struct app *app, struct video_buffer *buffer,
         .pNext = &dedicated, .allocationSize = app->dma_buf_size,
         .memoryTypeIndex = memory_type(app->physical, bits, 0),
     };
-    need_vk("vkAllocateMemory(import TP10)",
+    need_vk("vkAllocateMemory(import plane)",
             vkAllocateMemory(app->device, &allocation, NULL, memory));
-    need_vk("vkBindImageMemory(import TP10)",
+    need_vk("vkBindImageMemory(import plane)",
             vkBindImageMemory(app->device, *image, *memory, 0));
     VkImageViewCreateInfo view_info = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
@@ -1796,31 +1614,234 @@ static void import_tp10_plane(struct app *app, struct video_buffer *buffer,
         .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                              .levelCount = 1, .layerCount = 1},
     };
-    need_vk("vkCreateImageView(TP10)",
+    need_vk("vkCreateImageView(plane)",
             vkCreateImageView(app->device, &view_info, NULL, view));
+}
+
+/* A device-local image the host buffer is copied into: NV12 through the
+ * YCbCr sampler, or one P010 plane for the plane shader. */
+static void create_upload_image(struct app *app, VkFormat format,
+                                uint32_t width, uint32_t height, bool ycbcr,
+                                VkImage *image, VkDeviceMemory *memory,
+                                VkImageView *view)
+{
+    VkImageCreateInfo info = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .imageType = VK_IMAGE_TYPE_2D, .format = format,
+        .extent = {width, height, 1}, .mipLevels = 1, .arrayLayers = 1,
+        .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+    };
+    need_vk("vkCreateImage(upload)",
+            vkCreateImage(app->device, &info, NULL, image));
+    VkMemoryRequirements requirements;
+    vkGetImageMemoryRequirements(app->device, *image, &requirements);
+    VkMemoryAllocateInfo allocation = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize = requirements.size,
+        .memoryTypeIndex = memory_type(app->physical,
+                                       requirements.memoryTypeBits,
+                                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
+    };
+    need_vk("vkAllocateMemory(upload)",
+            vkAllocateMemory(app->device, &allocation, NULL, memory));
+    need_vk("vkBindImageMemory(upload)",
+            vkBindImageMemory(app->device, *image, *memory, 0));
+    VkSamplerYcbcrConversionInfo conversion = {
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_INFO,
+        .conversion = app->conversion,
+    };
+    VkImageViewCreateInfo view_info = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .pNext = ycbcr ? &conversion : NULL,
+        .image = *image, .viewType = VK_IMAGE_VIEW_TYPE_2D, .format = format,
+        .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                             .levelCount = 1, .layerCount = 1},
+    };
+    need_vk("vkCreateImageView(upload)",
+            vkCreateImageView(app->device, &view_info, NULL, view));
+}
+
+/* NV12_BUFFER_HOST: map the memfd, import the mapping as host memory of a
+ * transfer buffer and create the images it is copied into. Sampling
+ * device-local images is also much cheaper than reading system memory over
+ * PCIe for every eye and display frame. */
+static void import_host_buffer(struct app *app, uint32_t i)
+{
+    struct video_buffer *buffer = &app->video_buffers[i];
+    bool p010 = app->video_format == NV12_FORMAT_P010;
+    buffer->host = true;
+    buffer->tp10 = p010;
+    buffer->host_size = (size_t)app->dma_buf_size;
+    void *mapping = mmap(NULL, buffer->host_size, PROT_READ | PROT_WRITE,
+                         MAP_SHARED, buffer->dma_buf_fd, 0);
+    need(mapping != MAP_FAILED, "map host video buffer");
+    buffer->host_mapping = mapping;
+    VkExternalMemoryBufferCreateInfo external = {
+        .sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO,
+        .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
+    };
+    VkBufferCreateInfo buffer_info = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .pNext = &external,
+        .size = app->dma_buf_size, .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+    };
+    need_vk("vkCreateBuffer(host video)",
+            vkCreateBuffer(app->device, &buffer_info, NULL,
+                           &buffer->host_buffer));
+    VkMemoryHostPointerPropertiesEXT pointer = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT,
+    };
+    need_vk("vkGetMemoryHostPointerPropertiesEXT",
+            app->get_host_pointer_properties(
+                app->device,
+                VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
+                mapping, &pointer));
+    VkMemoryRequirements requirements;
+    vkGetBufferMemoryRequirements(app->device, buffer->host_buffer,
+                                  &requirements);
+    uint32_t bits = requirements.memoryTypeBits & pointer.memoryTypeBits;
+    need(bits != 0, "host video memory-type intersection is empty");
+    VkImportMemoryHostPointerInfoEXT import = {
+        .sType = VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT,
+        .handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
+        .pHostPointer = mapping,
+    };
+    VkMemoryAllocateInfo allocation = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .pNext = &import,
+        .allocationSize = app->dma_buf_size,
+        .memoryTypeIndex = memory_type(app->physical, bits, 0),
+    };
+    need_vk("vkAllocateMemory(import host video)",
+            vkAllocateMemory(app->device, &allocation, NULL,
+                             &buffer->host_memory));
+    need_vk("vkBindBufferMemory(host video)",
+            vkBindBufferMemory(app->device, buffer->host_buffer,
+                               buffer->host_memory, 0));
+    if (p010) {
+        create_upload_image(app, VK_FORMAT_R16_UNORM, app->video_width,
+                            app->video_height, false, &buffer->image,
+                            &buffer->memory, &buffer->view);
+        create_upload_image(app, VK_FORMAT_R16G16_UNORM,
+                            app->video_width / 2U, app->video_height / 2U,
+                            false, &buffer->image_uv, &buffer->memory_uv,
+                            &buffer->view_uv);
+    } else {
+        create_upload_image(app, VK_FORMAT_G8_B8R8_2PLANE_420_UNORM,
+                            app->video_width, app->video_height, true,
+                            &buffer->image, &buffer->memory, &buffer->view);
+    }
+    printf("host_import index=%u format=%s bytes=%zu\n", i,
+           p010 ? "p010" : "nv12", buffer->host_size);
+}
+
+/* Records the copy of a new host-memory frame into its image(s); the
+ * images stay in GENERAL like imported DMA-BUFs. */
+static void record_host_upload(struct app *app,
+                               const struct video_buffer *video)
+{
+    uint32_t count = video->tp10 ? 2U : 1U;
+    VkImageMemoryBarrier barriers[2];
+    for (uint32_t i = 0; i < count; ++i)
+        barriers[i] = (VkImageMemoryBarrier){
+            .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+            .srcAccessMask = VK_ACCESS_SHADER_READ_BIT,
+            .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+            .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+            .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = i ? video->image_uv : video->image,
+            .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                 .levelCount = 1, .layerCount = 1},
+        };
+    vkCmdPipelineBarrier(app->command,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL,
+                         count, barriers);
+    /* bufferRowLength counts texels of the plane's format. */
+    uint32_t stride = app->video_stride;
+    if (video->tp10) {
+        VkBufferImageCopy luma = {
+            .bufferRowLength = stride / 2U,
+            .imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                 .layerCount = 1},
+            .imageExtent = {app->video_width, app->video_height, 1},
+        };
+        VkBufferImageCopy chroma = {
+            .bufferOffset = app->uv_offset, .bufferRowLength = stride / 4U,
+            .imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                 .layerCount = 1},
+            .imageExtent = {app->video_width / 2U, app->video_height / 2U, 1},
+        };
+        vkCmdCopyBufferToImage(app->command, video->host_buffer, video->image,
+                               VK_IMAGE_LAYOUT_GENERAL, 1, &luma);
+        vkCmdCopyBufferToImage(app->command, video->host_buffer,
+                               video->image_uv, VK_IMAGE_LAYOUT_GENERAL, 1,
+                               &chroma);
+    } else {
+        VkBufferImageCopy planes[2] = {
+            {.bufferRowLength = stride,
+             .imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_PLANE_0_BIT,
+                                  .layerCount = 1},
+             .imageExtent = {app->video_width, app->video_height, 1}},
+            {.bufferOffset = app->uv_offset, .bufferRowLength = stride / 2U,
+             .imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_PLANE_1_BIT,
+                                  .layerCount = 1},
+             .imageExtent = {app->video_width / 2U, app->video_height / 2U,
+                             1}},
+        };
+        vkCmdCopyBufferToImage(app->command, video->host_buffer, video->image,
+                               VK_IMAGE_LAYOUT_GENERAL, 2, planes);
+    }
+    for (uint32_t i = 0; i < count; ++i) {
+        barriers[i].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barriers[i].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        barriers[i].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    }
+    vkCmdPipelineBarrier(app->command, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                             VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         0, 0, NULL, 0, NULL, count, barriers);
 }
 
 static void import_video_buffer(struct app *app, uint32_t i)
 {
+    if (app->buffer_kind == NV12_BUFFER_HOST) {
+        import_host_buffer(app, i);
+        return;
+    }
     struct video_buffer *tp10_buffer = &app->video_buffers[i];
-    tp10_buffer->tp10 = app->video_format == NV12_FORMAT_TP10;
+    /* TP10 and P010 both go through the plane shader. */
+    bool p010 = app->video_format == NV12_FORMAT_P010;
+    tp10_buffer->tp10 = app->video_format == NV12_FORMAT_TP10 || p010;
     if (tp10_buffer->tp10) {
-        import_tp10_plane(app, tp10_buffer, VK_FORMAT_R8G8B8A8_UNORM, 0,
-                          app->coded_height, &tp10_buffer->image,
-                          &tp10_buffer->memory, &tp10_buffer->view);
-        import_tp10_plane(app, tp10_buffer,
-                          VK_FORMAT_A2B10G10R10_UNORM_PACK32, app->uv_offset,
-                          (app->coded_height + 1U) / 2U,
-                          &tp10_buffer->image_uv, &tp10_buffer->memory_uv,
-                          &tp10_buffer->view_uv);
+        uint64_t modifier = p010 ? DRM_FORMAT_MOD_LINEAR
+                                 : DRM_FORMAT_MOD_QCOM_COMPRESSED;
+        uint32_t width = p010 ? app->coded_width : app->coded_width / 3U;
+        import_plane(app, tp10_buffer,
+                     p010 ? VK_FORMAT_R16_UNORM : VK_FORMAT_R8G8B8A8_UNORM,
+                     modifier, width, 0, app->coded_height,
+                     &tp10_buffer->image, &tp10_buffer->memory,
+                     &tp10_buffer->view);
+        import_plane(app, tp10_buffer,
+                     p010 ? VK_FORMAT_R16G16_UNORM
+                          : VK_FORMAT_A2B10G10R10_UNORM_PACK32,
+                     modifier, p010 ? width / 2U : width, app->uv_offset,
+                     (app->coded_height + 1U) / 2U,
+                     &tp10_buffer->image_uv, &tp10_buffer->memory_uv,
+                     &tp10_buffer->view_uv);
         VkSemaphoreCreateInfo semaphore = {
             .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
         };
         need_vk("vkCreateSemaphore(producer)",
                 vkCreateSemaphore(app->device, &semaphore, NULL,
                                   &tp10_buffer->producer_semaphore));
-        printf("tp10_import index=%u coded=%ux%u\n", i, app->coded_width,
-               app->coded_height);
+        printf("%s_import index=%u coded=%ux%u\n", p010 ? "p010" : "tp10",
+               i, app->coded_width, app->coded_height);
         return;
     }
     VkSamplerYcbcrConversionInfo conversion_info = {
@@ -1942,44 +1963,35 @@ static void video_levels_uniform(uint32_t levels, float out[4])
  * the shader applies the title's levels and BT.709. */
 static void create_video_sampler(struct app *app)
 {
+    VkDrmFormatModifierPropertiesListEXT list = {
+        .sType = VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT,
+    };
+    VkFormatProperties2 format_properties = {
+        .sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2, .pNext = &list,
+    };
+    vkGetPhysicalDeviceFormatProperties2(
+        app->physical, VK_FORMAT_G8_B8R8_2PLANE_420_UNORM,
+        &format_properties);
+    need(list.drmFormatModifierCount > 0, "NV12 exposes no DRM modifiers");
+    list.pDrmFormatModifierProperties =
+        calloc(list.drmFormatModifierCount,
+               sizeof(*list.pDrmFormatModifierProperties));
+    need(list.pDrmFormatModifierProperties != NULL,
+         "allocate NV12 modifier properties");
+    vkGetPhysicalDeviceFormatProperties2(
+        app->physical, VK_FORMAT_G8_B8R8_2PLANE_420_UNORM,
+        &format_properties);
     VkFormatFeatureFlags features = 0;
-    if (app->dma_buf_import) {
-        VkDrmFormatModifierPropertiesListEXT list = {
-            .sType = VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT,
-        };
-        VkFormatProperties2 format_properties = {
-            .sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2, .pNext = &list,
-        };
-        vkGetPhysicalDeviceFormatProperties2(
-            app->physical, VK_FORMAT_G8_B8R8_2PLANE_420_UNORM,
-            &format_properties);
-        need(list.drmFormatModifierCount > 0,
-             "NV12 exposes no DRM modifiers");
-        list.pDrmFormatModifierProperties = calloc(
-            list.drmFormatModifierCount,
-            sizeof(*list.pDrmFormatModifierProperties));
-        need(list.pDrmFormatModifierProperties != NULL,
-             "allocate NV12 modifier properties");
-        vkGetPhysicalDeviceFormatProperties2(
-            app->physical, VK_FORMAT_G8_B8R8_2PLANE_420_UNORM,
-            &format_properties);
-        for (uint32_t i = 0; i < list.drmFormatModifierCount; ++i) {
-            VkDrmFormatModifierPropertiesEXT *item =
-                &list.pDrmFormatModifierProperties[i];
-            if (item->drmFormatModifier == DRM_FORMAT_MOD_LINEAR &&
-                item->drmFormatModifierPlaneCount == 2)
-                features = item->drmFormatModifierTilingFeatures;
-        }
-        free(list.pDrmFormatModifierProperties);
-    } else {
-        VkFormatProperties format_properties;
-        vkGetPhysicalDeviceFormatProperties(
-            app->physical, VK_FORMAT_G8_B8R8_2PLANE_420_UNORM,
-            &format_properties);
-        features = format_properties.optimalTilingFeatures;
+    for (uint32_t i = 0; i < list.drmFormatModifierCount; ++i) {
+        VkDrmFormatModifierPropertiesEXT *item =
+            &list.pDrmFormatModifierProperties[i];
+        if (item->drmFormatModifier == DRM_FORMAT_MOD_LINEAR &&
+            item->drmFormatModifierPlaneCount == 2)
+            features = item->drmFormatModifierTilingFeatures;
     }
+    free(list.pDrmFormatModifierProperties);
     need(features & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT,
-         "two-plane NV12 is not sampleable");
+         "linear two-plane NV12 is not sampleable");
     need(features &
              VK_FORMAT_FEATURE_SAMPLED_IMAGE_YCBCR_CONVERSION_LINEAR_FILTER_BIT,
          "linear-filtered NV12 YCbCr conversion is unsupported");
@@ -2037,53 +2049,6 @@ static void create_video_sampler(struct app *app)
                                                           : "cosited_even");
 }
 
-static void create_p010_sampler(struct app *app)
-{
-    if (app->p010_sampler)
-        return;
-    VkFormatProperties properties;
-    vkGetPhysicalDeviceFormatProperties(
-        app->physical, VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16,
-        &properties);
-    VkFormatFeatureFlags features = properties.optimalTilingFeatures;
-    need((features & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) &&
-             (features & VK_FORMAT_FEATURE_SAMPLED_IMAGE_YCBCR_CONVERSION_LINEAR_FILTER_BIT),
-         "P010 Vulkan Video output is not sampleable");
-    VkSamplerYcbcrConversionCreateInfo conversion = {
-        .sType = VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_CREATE_INFO,
-        .format = VK_FORMAT_G10X6_B10X6R10X6_2PLANE_420_UNORM_3PACK16,
-        .ycbcrModel = VK_SAMPLER_YCBCR_MODEL_CONVERSION_RGB_IDENTITY,
-        .ycbcrRange = VK_SAMPLER_YCBCR_RANGE_ITU_FULL,
-        .components = {VK_COMPONENT_SWIZZLE_IDENTITY,
-                       VK_COMPONENT_SWIZZLE_IDENTITY,
-                       VK_COMPONENT_SWIZZLE_IDENTITY,
-                       VK_COMPONENT_SWIZZLE_IDENTITY},
-        .xChromaOffset = VK_CHROMA_LOCATION_MIDPOINT,
-        .yChromaOffset = VK_CHROMA_LOCATION_MIDPOINT,
-        .chromaFilter = VK_FILTER_LINEAR,
-    };
-    need_vk("vkCreateSamplerYcbcrConversion(P010)",
-            vkCreateSamplerYcbcrConversion(app->device, &conversion, NULL,
-                                           &app->p010_conversion));
-    VkSamplerYcbcrConversionInfo conversion_info = {
-        .sType = VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_INFO,
-        .conversion = app->p010_conversion,
-    };
-    VkSamplerCreateInfo sampler = {
-        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
-        .pNext = &conversion_info, .magFilter = VK_FILTER_LINEAR,
-        .minFilter = VK_FILTER_LINEAR,
-        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST,
-        .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-        .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-        .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-        .maxLod = 0.0f,
-    };
-    need_vk("vkCreateSampler(P010)", vkCreateSampler(app->device, &sampler,
-                                                       NULL,
-                                                       &app->p010_sampler));
-}
-
 static void create_pipeline(struct app *app)
 {
     VkAttachmentDescription attachment = {.format = app->color_format, .samples = VK_SAMPLE_COUNT_1_BIT,
@@ -2117,7 +2082,7 @@ static void create_pipeline(struct app *app)
          .descriptorCount = 1,
          .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT |
                        VK_SHADER_STAGE_COMPUTE_BIT,
-         .pImmutableSamplers = NULL},
+         .pImmutableSamplers = &app->video_sampler},
         {.binding = 2, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
          .descriptorCount = 1,
          .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT |
@@ -2420,7 +2385,7 @@ static void write_video_descriptor(struct app *app, VkDescriptorSet set,
         .range = sizeof(struct view_uniform),
     };
     VkDescriptorImageInfo descriptor_image = {
-        .sampler = buffer->p010 ? app->p010_sampler : app->video_sampler,
+        .sampler = app->video_sampler,
         .imageView = view,
         .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
     };
@@ -2546,6 +2511,12 @@ static void destroy_video_buffer(struct app *app, struct video_buffer *buffer)
         vkDestroyImage(app->device, buffer->image_uv, NULL);
     if (buffer->memory_uv)
         vkFreeMemory(app->device, buffer->memory_uv, NULL);
+    if (buffer->host_buffer)
+        vkDestroyBuffer(app->device, buffer->host_buffer, NULL);
+    if (buffer->host_memory)
+        vkFreeMemory(app->device, buffer->host_memory, NULL);
+    if (buffer->host_mapping)
+        munmap(buffer->host_mapping, buffer->host_size);
     if (buffer->dma_buf_fd >= 0)
         close(buffer->dma_buf_fd);
     *buffer = (struct video_buffer){.dma_buf_fd = -1, .descriptor_set = set};
@@ -4334,8 +4305,6 @@ static void render_frame(struct app *app)
     struct video_buffer *video = NULL;
     if (app->playing && app->current_video_index >= 0)
         video = &app->video_buffers[app->current_video_index];
-    else if (app->playing && app->pcvr_ready)
-        video = &app->pcvr_buffer;
     else if (app->playing && app->has_held)
         video = &app->held;
     XrView views[2] = {{.type = XR_TYPE_VIEW}, {.type = XR_TYPE_VIEW}};
@@ -4549,13 +4518,16 @@ static void render_frame(struct app *app)
         .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                              .levelCount = 1, .layerCount = 1},
     };
-    VkImageMemoryBarrier video_acquires[2] = {video_acquire, video_acquire};
-    if (video == &app->pcvr_buffer) {
-        /* FFmpeg creates its frames for the renderer's queue-family set;
-         * their timeline semaphore establishes decode -> sampling order. */
-        video_acquires[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        video_acquires[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    if (video && video->host) {
+        /* Own images, not shared with a foreign producer. */
+        video_acquire.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        video_acquire.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        if (video->producer_wait_pending) {
+            record_host_upload(app, video);
+            video->producer_wait_pending = false;
+        }
     }
+    VkImageMemoryBarrier video_acquires[2] = {video_acquire, video_acquire};
     uint32_t video_images = video && video->tp10 ? 2U : 1U;
     if (video_images == 2U)
         video_acquires[1].image = video->image_uv;
@@ -4608,13 +4580,11 @@ static void render_frame(struct app *app)
     VkImageMemoryBarrier video_release = video_acquire;
     video_release.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
     video_release.dstAccessMask = 0;
-    video_release.srcQueueFamilyIndex = app->queue_family;
-    video_release.dstQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
-    VkImageMemoryBarrier video_releases[2] = {video_release, video_release};
-    if (video == &app->pcvr_buffer) {
-        video_releases[0].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        video_releases[0].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    if (!video || !video->host) {
+        video_release.srcQueueFamilyIndex = app->queue_family;
+        video_release.dstQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
     }
+    VkImageMemoryBarrier video_releases[2] = {video_release, video_release};
     if (video_images == 2U)
         video_releases[1].image = video->image_uv;
     if (video)

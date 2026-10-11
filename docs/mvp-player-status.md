@@ -64,6 +64,12 @@ geprüft:
   bleiben). Bis zum ersten Bild: lokal 0,1 s, Jellyfin 0,5 s; vorher
   1,8–2 s plus Neustart (5400×2700 HEVC, 3,6 s Keyframe-Abstand).
   Der Neustart bleibt als Rückfall, wenn der Seek scheitert.
+- PCVR (Branch `pcvr-support`): Ohne Iris decodiert die Session am PC mit
+  FFmpeg-Hardwaredecodern (CUDA, Vulkan Video, VA-API) H.264, HEVC und AV1
+  mit 8/10 Bit; der Renderer kopiert die Bilder aus geteiltem Speicher in
+  Grafikspeicher. Am PC (RTX 4080) ohne Headset geprüft: bis 8192×4096 bei
+  60 fps ohne Verluste, Seek 25 ms lokal, Jellyfin Direct Play. Im Headset
+  am PC noch nicht getestet.
 - Experimentell: AV1 8 Bit bis 4096×2160 per Software (dav1d), Schalter
   „AV1 bis 4K per CPU“ im Reiter „Ansicht“ (Standard aus, gilt ab dem
   nächsten Titel); Jellyfin spielt solche Titel dann direkt statt zu

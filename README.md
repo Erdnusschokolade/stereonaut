@@ -7,8 +7,8 @@
 > run or reuse any of it; use it at your own risk.
 
 A native VR video player for the **Steam Frame** (SteamOS, aarch64,
-Snapdragon 8 Gen 3), with an OpenXR host that also recognizes common Linux
-PCVR controller profiles. It plays 180°, 360°, fisheye and flat videos in mono,
+Snapdragon 8 Gen 3), that also runs as a PCVR app on Linux with SteamVR. It
+plays 180°, 360°, fisheye and flat videos in mono,
 side-by-side or top-bottom stereo, from local files or a Jellyfin server, up
 to 8K60 – decoded entirely in hardware.
 
@@ -54,11 +54,12 @@ Frame the bundled SteamVR loader is used; elsewhere the build uses the normal
 `pkg-config` OpenXR loader (override either with `OPENXR_LOADER`). All builds
 use `-std=c11 -O2 -Wall -Wextra -Werror`.
 
-The PCVR work currently covers the OpenXR runtime and controller layer (Index,
-Touch, Windows Mixed Reality, Vive and Cosmos), plus Vulkan-Video
-capability checks for H.264 High and HEVC Main with shader-samplable NV12
-output on the OpenXR GPU. The actual Vulkan-Video packet/session path is
-still being integrated; the built-in Iris decoder is Frame-specific.
+On a PC (no Iris decoder present) the GPU decodes H.264, HEVC and AV1 with 8
+or 10 bits through FFmpeg: CUDA/NVDEC on NVIDIA, otherwise Vulkan Video or
+VA-API. Each frame is downloaded into shared memory that the renderer copies
+into a device-local image. Tested on an RTX 4080 up to 8192×4096 at 60 fps
+(HEVC 8/10 bit, AV1 10 bit) with SteamVR; PC controller profiles (Index,
+Touch, Windows Mixed Reality, Vive, Cosmos) are suggested to the runtime.
 
 ```sh
 src/player/build-stereonaut-session.sh   # session, renderer (XR host), launcher, shaders

@@ -15,7 +15,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "software-video.h"
+#include "decoded-video.h"
 
 #define RESPONSE_LIMIT (48U * 1024U * 1024U)
 #define LIST_LIMIT 5000
@@ -23,7 +23,7 @@
 /* Direct Play HEVC Main 8 bit (plus Main10 with the patched Turnip, see
  * STEREONAUT_TP10) and 8-bit 4:2:0 H.264 (Baseline, Main, High) in mkv/mp4,
  * plus 8-bit AV1 up to 4K if software decoding is enabled
- * (software-video.h); everything else becomes an HLS transcode to HEVC.
+ * (decoded-video.h); everything else becomes an HLS transcode to HEVC.
  * The codec list, the HEVC profiles and bit depth and the AV1 profile are
  * filled in by jf_resolve_playback(). */
 static const char DEVICE_PROFILE_FORMAT[] =
@@ -54,7 +54,7 @@ static const char AV1_CODEC_PROFILE_FORMAT[] =
     "{\"Condition\":\"LessThanEqual\",\"Property\":\"Height\","
     "\"Value\":\"%d\",\"IsRequired\":true},"
     "{\"Condition\":\"LessThanEqual\",\"Property\":\"VideoBitDepth\","
-    "\"Value\":\"8\",\"IsRequired\":true}]}";
+    "\"Value\":\"%d\",\"IsRequired\":true}]}";
 
 struct buffer {
     char *data;
@@ -791,15 +791,18 @@ int jf_resolve_playback(const struct jf_config *config, const char *item_id,
     char path[256], body[2304];
     snprintf(path, sizeof(path), "/Items/%s/PlaybackInfo?UserId=%s", item_id,
              config->user_id);
-    bool main10 = getenv("STEREONAUT_TP10") != NULL;
-    bool av1 = getenv(SOFTWARE_VIDEO_ENV) != NULL;
+    /* A PC (no Iris) decodes Main10 and AV1 up to 10 bit on the GPU. */
+    bool desktop = access(DECODED_VIDEO_IRIS_DEVICE, F_OK) < 0;
+    bool main10 = desktop || getenv("STEREONAUT_TP10") != NULL;
+    bool av1 = desktop || getenv(AV1_SOFTWARE_ENV) != NULL;
     char av1_profile[512] = "";
     char profile[2048];
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-nonliteral"
     if (av1)
         snprintf(av1_profile, sizeof(av1_profile), AV1_CODEC_PROFILE_FORMAT,
-                 SOFTWARE_VIDEO_MAX_WIDTH, SOFTWARE_VIDEO_MAX_HEIGHT);
+                 desktop ? 8192 : AV1_SOFTWARE_MAX_WIDTH,
+                 desktop ? 8192 : AV1_SOFTWARE_MAX_HEIGHT, desktop ? 10 : 8);
     snprintf(profile, sizeof(profile), DEVICE_PROFILE_FORMAT,
              av1 ? "hevc,h264,av1" : "hevc,h264",
              main10 ? "main|main 10" : "main", main10 ? "10" : "8",
