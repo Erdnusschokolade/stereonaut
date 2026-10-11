@@ -79,17 +79,27 @@ missing_libraries() {
 }
 
 # Dialogs appear on the SteamVR desktop (visible in the headset) or the
-# desktop session; without zenity the answer is "no".
+# desktop session, dark like the player (under gamescope libadwaita gets no
+# usable colour scheme and falls back to light); without zenity the answer
+# is "no".
+has_dialogs() {
+    command -v zenity >/dev/null 2>&1
+}
+
+dialog() {
+    ADW_DEBUG_COLOR_SCHEME=prefer-dark GTK_THEME=Adwaita:dark zenity "$@"
+}
+
 ask() {
-    command -v zenity >/dev/null 2>&1 &&
-        zenity --question --title=Stereonaut --text="$1" \
+    has_dialogs &&
+        dialog --question --title=Stereonaut --text="$1" \
             --ok-label="Neu bauen" --cancel-label="Abbrechen" --timeout=120
 }
 
 report_error() {
     echo "$1"
-    if command -v zenity >/dev/null 2>&1; then
-        zenity --error --title=Stereonaut --timeout=120 \
+    if has_dialogs; then
+        dialog --error --title=Stereonaut --timeout=120 \
             --text="$1
 
 Details: $log" || true
@@ -106,8 +116,8 @@ rebuild() {
             echo 0 >"$status"
         fi
         echo 100
-    } | if command -v zenity >/dev/null 2>&1; then
-        zenity --progress --pulsate --no-cancel --auto-close \
+    } | if has_dialogs; then
+        dialog --progress --pulsate --no-cancel --auto-close \
             --title=Stereonaut --text="Stereonaut wird neu gebaut …" || true
     else
         cat >/dev/null
