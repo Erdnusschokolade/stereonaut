@@ -546,11 +546,18 @@ int media_demux_seek(struct media_demux *demux, int64_t target_us,
     }
     int64_t target = av_rescale_q(target_us + demux->time_offset_us,
                                   AV_TIME_BASE_Q, stream->time_base);
-    if (seek_backward(demux, target, error, error_size) < 0)
+    int64_t chosen = target;
+    /* If the index already reaches past the target (MP4; Matroska after
+     * its first seek, which reads the cues), one seek goes straight to the
+     * nearest keyframe. Otherwise seek back first, which completes the
+     * index, and on to the next keyframe if that one is nearer. */
+    bool indexed = !demux->time_offset_us &&
+                   avformat_index_get_entry_from_timestamp(stream, target, 0);
+    if (indexed)
+        chosen = nearest_keyframe(stream, target);
+    if (seek_backward(demux, chosen, error, error_size) < 0)
         return -1;
-    if (!demux->time_offset_us) {
-        /* The index is complete now (Matroska reads its cues on the first
-         * seek); go on to the following keyframe if that one is nearer. */
+    if (!indexed && !demux->time_offset_us) {
         int64_t keyframe = nearest_keyframe(stream, target);
         if (keyframe > target &&
             seek_backward(demux, keyframe, error, error_size) < 0)
