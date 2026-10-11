@@ -34,7 +34,8 @@ Frame specifically and has not been tried on other headsets.
   Main 8 for everything else, playback reporting and trickplay previews on
   the seek bar.
 - Room-fixed playback panel: seek bar with chapter marks, ±10 s, volume,
-  end action (stop/repeat/next), auto-hide.
+  end action (stop/repeat/next), auto-hide. Seeks jump to a keyframe within
+  the running session, typically in 0.15 to 0.6 s over Jellyfin.
 - Per-title projection, stereo layout, eye swap, position, 6DoF head motion
   and picture adjustments; automatic detection of projection and stereo
   layout from file names, Jellyfin trickplay or the first decoded frames.
@@ -58,8 +59,11 @@ On a PC (no Iris decoder present) the GPU decodes H.264, HEVC and AV1 with 8
 or 10 bits through FFmpeg: CUDA/NVDEC on NVIDIA, otherwise Vulkan Video or
 VA-API. Each frame is downloaded into shared memory that the renderer copies
 into a device-local image. Tested on an RTX 4080 up to 8192×4096 at 60 fps
-(HEVC 8/10 bit, AV1 10 bit) with SteamVR; PC controller profiles (Index,
-Touch, Windows Mixed Reality, Vive, Cosmos) are suggested to the runtime.
+(HEVC 8/10 bit, AV1 10 bit) with SteamVR, in the headset with the Steam
+Frame streaming from the PC. The panels are drawn into the eye images there,
+since SteamVR on a PC shows quad layers with shimmering text. PC controller
+profiles (Index, Touch, Windows Mixed Reality, Vive, Cosmos) are suggested
+to the runtime.
 
 ```sh
 src/player/build-stereonaut-session.sh   # session, renderer (XR host), launcher, shaders

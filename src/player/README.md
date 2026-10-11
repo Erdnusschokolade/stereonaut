@@ -96,24 +96,37 @@ The playback renderer adds a head-relative native OpenXR quad panel over the
 video layer. The same two-hand aim/select actions used by the browser drive
 Back, -10 s, Play/Pause and +10 s. Position, duration and state arrive over
 the frame IPC socket. Pause leaves the OpenXR loop and current DMA-BUF frame
-alive while stopping audio and bounded decoder feed. A seek resumes at the
-keyframe nearest to the target within the running session (see below); the
-older re-exec of the session at the new position remains as the fallback.
+alive while stopping audio and bounded decoder feed. A seek resumes at a
+keyframe within the running session (see below); the older re-exec of the
+session at the new position remains as the last fallback.
 
 The playback panel is world-fixed and movable. Pressing the squeeze button
 while the aim ray hits the panel grabs it (it follows the controller and turns
 towards the head about the vertical axis); squeezing on empty space toggles its
 visibility. A seek bar above the buttons is dragged with the trigger and
 seeks on release (`NV12_ACTION_SEEK_TO`). The renderer reports the panel pose
-to the session (`NV12_IPC_PANEL`), which forwards it through the seek re-exec
-via `--panel x,y,z,yaw,visible`.
+to the session (`NV12_IPC_PANEL`), which forwards it through a decoder
+reopen or the seek re-exec (`--panel x,y,z,yaw,visible`).
 
-A seek keeps the renderer alive: the session sends `NV12_IPC_HOLD`, the
-renderer retains only the frame on screen and acknowledges with
-`NV12_IPC_HELD`, and the re-executed session adopts the renderer through the
-inherited socket (`--renderer fd,pid`) and sends a fresh `INIT`. The held frame
-stays visible, with the panel and a LOADING marker, until the first frame of
-the new stream arrives.
+When a seek sets up a new decoder the renderer stays alive: the session
+sends `NV12_IPC_HOLD`, the renderer retains only the frame on screen and
+acknowledges with `NV12_IPC_HELD`, and the session sends a fresh `INIT` with
+the new buffers, either from the same process (decoder reopen) or after a
+re-exec that adopts the renderer through the inherited socket
+(`--renderer fd,pid`). The held frame stays visible, with the panel and a
+LOADING marker, until the first frame of the new stream arrives.
+
+On the Frame both panels are OpenXR quad layers. On a PC the renderer draws
+them into the eye images itself, from a mipmapped image with trilinear and
+anisotropic filtering: SteamVR on a PC composites quad layers so that text
+shimmers and steps while the head moves, even with mipmaps.
+`STEREONAUT_UI_LAYER=quad|eye` overrides the choice.
+
+The video shaders average up to 4x4 bilinear taps over each pixel's
+footprint when the video is drawn smaller than it is (a 4K flat screen gets
+about a quarter of its pixels in the Frame's eye image), and fade the flat
+screen's outermost pixel into the background. 8K 180° video stays at one
+tap.
 
 The OpenXR host (`stereonaut-renderer`) is a single long-lived process with a
 browser mode and a player mode, so SteamVR never sees the app disappear
@@ -147,9 +160,25 @@ The session seeks without restarting: for Iris it stops both V4L2 queues,
 seeks the pipeline, requeues every CAPTURE buffer the renderer does not show
 and starts the queues again; the software decoder joins its thread and
 flushes dav1d. The renderer gets `NV12_IPC_SEEKING`, keeps the current frame
-and shows "LADEN" until the next one. Only if this fails does the session
-fall back to the re-exec described above. `--seek-test FRAMES:US` triggers
-such a seek in a bounded test run.
+and shows "LADEN" until the next one. Iris refuses the second `STREAMON`
+for HEVC Main10 every time and for 8K now and then (ENOMEM with a kernel
+warning). Main10 therefore never seeks in place, and after such a refusal
+the title stops trying: the session closes Iris, seeks the still open
+source and sets Iris up as at the start, which a freshly opened device
+accepts (8K Main10 over Jellyfin: 0.3 to 0.6 s instead of 1.3 s for a
+re-exec, most of which went into opening the source again). Only if seeking
+the source fails does the session fall back to the re-exec described above.
+Seeks that set up a new decoder log each phase (`seek_restart_phase`).
+`--seek-test FRAMES:US` triggers such a seek in a bounded test run.
+
+The demuxer picks the keyframe nearest to the target but requires it to
+cover at least half the way in the seek's direction; otherwise it takes the
+first keyframe beyond the halfway point (reading forward if the index does
+not reach it yet), so a short skip over a long GOP neither stays put nor
+moves backwards. The keyframe is searched forwards: MP4 index entries carry
+decoding times, and a backward search for one of them landed a keyframe
+early. The position the seek starts from travels through the pipeline and,
+for a re-exec, `--seek-from-us`.
 
 Jellyfin titles are addressed as `jf:item:<id>:<folder>`; `jellyfin.c` talks to
 the server (Quick Connect, listings, `PlaybackInfo`) and the session plays the
@@ -163,6 +192,6 @@ the Jellyfin device profile offers it for Direct Play. Such titles skip Iris:
 a worker thread decodes with dav1d (`max_frame_delay=8`) and converts each
 frame to NV12 in one of eight memfd-backed `udmabuf` DMA-BUFs, which the
 renderer imports exactly like Iris CAPTURE buffers. `play_decoded` in the
-session reuses the renderer protocol, audio-clock pacing and seek restart of
+session reuses the renderer protocol, audio-clock pacing and seek re-exec of
 the Iris loop. For a test run without changing the setting, start the
 launcher with `STEREONAUT_AV1=1`.

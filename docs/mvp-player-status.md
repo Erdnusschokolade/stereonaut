@@ -27,8 +27,25 @@ Einschalten decodiert dav1d AV1 bis 4K auf der CPU (siehe unten).
   und Seite, Fehlertexte, Start über KDE und die SteamVR-Bibliothek.
 - Lokale Dateien und Jellyfin (Quick Connect, Bibliotheken, Vorschaubilder,
   Direct Play und Transkodierung, 4K bis 8K60).
-- Pause, ±10 s, Seek-Leiste mit Trickplay-Vorschau, Seek als Neustart mit
-  gehaltenem letztem Bild; Griff zum Verschieben und Ein-/Ausblenden.
+- Pause, ±10 s, Seek-Leiste mit Trickplay-Vorschau; Griff zum Verschieben
+  und Ein-/Ausblenden.
+- Spulen ohne Neustart der Session auf den Keyframe in Spulrichtung (siehe
+  Grenzen), das letzte Bild bleibt bis zum neuen stehen. Bis zum ersten
+  Bild über Jellyfin: H.264 4K meist 0,15–0,2 s, HEVC 8K um 0,25 s,
+  HEVC Main10 8K 0,3–0,6 s; vorher 1,3 s und mehr (Neustart der Session).
+  Main10 lehnt Iris nach dem Anhalten der Queues ab (`STREAMON` ENOMEM mit
+  Kernel-Warnung, bei 8 Bit gelegentlich auch); dann öffnet die Session
+  Iris neu und behält Quelle, Jellyfin-Verbindung und Renderer. Der
+  Neustart der Session bleibt nur als letzter Rückfall.
+- Flaches Video: verkleinert gezeichnetes Video wird über mehrere Abtastungen
+  gemittelt (4K flach statt Treppen an scharfen Kanten), die Ränder der
+  Leinwand sind geglättet. Renderer-GPU-Last am Frame: 4K flach 28 %,
+  8K 180° 16 %.
+- PCVR über SteamVR am PC, mit dem Frame per Streaming im Headset geprüft:
+  Wiedergabe, Spulen und Panels. Die Panels zeichnet der Renderer am PC
+  selbst ins Augenbild (Mipmaps, anisotrop); als Quad-Layer flimmerte Schrift
+  in SteamVR am PC bei Kopfbewegung. Am PC wirkt die Schrift dadurch etwas
+  weicher als nativ auf dem Frame.
 - Projektion, Stereo, Augentausch, Position, 6DoF und Bildwerte je Titel.
 - H.264 nativ, HEVC Main10 nativ mit dem eigenen Turnip (`STEREONAUT_TP10`).
 - Jellyfin-Wiedergabemeldungen (Start, Fortschritt, Pause, Stopp).
@@ -59,17 +76,12 @@ geprüft:
   noch nicht bestätigt (`binding_learn … grip_value=` im Log).
 - Schnelleres Öffnen von Bibliotheken (Liste ohne Stream-Infos, Codec und
   Auflösung werden seitenweise nachgeladen; VR-Bibliothek 0,25 s statt 2 s).
-- Schnelleres Spulen: Seek auf den nächstgelegenen Keyframe (kein Vorlauf
-  mehr) und ohne Neustart der Session (Decoder, Stream und Renderer-Puffer
-  bleiben). Bis zum ersten Bild: lokal 0,1 s, Jellyfin 0,5 s; vorher
-  1,8–2 s plus Neustart (5400×2700 HEVC, 3,6 s Keyframe-Abstand).
-  Der Neustart bleibt als Rückfall, wenn der Seek scheitert.
-- PCVR (Branch `pcvr-support`): Ohne Iris decodiert die Session am PC mit
-  FFmpeg-Hardwaredecodern (CUDA, Vulkan Video, VA-API) H.264, HEVC und AV1
-  mit 8/10 Bit; der Renderer kopiert die Bilder aus geteiltem Speicher in
-  Grafikspeicher. Am PC (RTX 4080) ohne Headset geprüft: bis 8192×4096 bei
-  60 fps ohne Verluste, Seek 25 ms lokal, Jellyfin Direct Play. Im Headset
-  am PC noch nicht getestet.
+- PCVR: Ohne Iris decodiert die Session am PC mit FFmpeg-Hardwaredecodern
+  (CUDA, Vulkan Video, VA-API) H.264, HEVC und AV1 mit 8/10 Bit; der
+  Renderer kopiert die Bilder aus geteiltem Speicher in Grafikspeicher. Am
+  PC (RTX 4080) ohne Headset gemessen: bis 8192×4096 bei 60 fps ohne
+  Verluste, Seek 25 ms lokal. Im Headset nur mit dem Frame per Streaming
+  geprüft (siehe oben), andere PC-Headsets ungetestet.
 - Experimentell: AV1 8 Bit bis 4096×2160 per Software (dav1d), Schalter
   „AV1 bis 4K per CPU“ im Reiter „Ansicht“ (Standard aus, gilt ab dem
   nächsten Titel); Jellyfin spielt solche Titel dann direkt statt zu
@@ -80,9 +92,11 @@ geprüft:
 
 - HEVC Main10 nur mit dem eigenen Turnip (`tools/mesa-tp10`); ohne ihn
   transkodiert Jellyfin bzw. lokale Main10-Dateien werden abgewiesen.
-- Seek landet auf dem nächstgelegenen Keyframe (vor oder nach dem Ziel),
-  nicht sekundengenau. Eine lückenlose A-B-Schleife bräuchte zusätzlich einen
-  Bitstream-Splice mit durchlaufender Zeitachse.
+- Seek landet auf dem Keyframe, der dem Ziel am nächsten liegt, aber
+  mindestens die halbe Strecke in Spulrichtung zurücklegt; nicht
+  sekundengenau. Bei 10 s Keyframe-Abstand springen ±10 s also um 10 s,
+  bei längeren Abständen weiter. Eine lückenlose A-B-Schleife bräuchte
+  zusätzlich einen Bitstream-Splice mit durchlaufender Zeitachse.
 - Passthrough ist nicht umgesetzt. SteamVR bietet auf dem Frame inzwischen
   `XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND` an (Abfrage 2026-10-10).
 - Parallel laufende Player mit Iris-Nutzung (Playa) führen zu
