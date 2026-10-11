@@ -167,6 +167,19 @@ struct video_buffer {
     VkDeviceMemory host_memory;
 };
 
+/* A UI panel drawn into the eye images (PC, see panels_in_eye_images): a
+ * mipmapped image the renderer samples itself. On the Frame the panels are
+ * quad layers and only width and height are used. */
+struct ui_texture {
+    uint32_t width, height;
+    uint32_t mip_levels;
+    VkImage image;
+    VkDeviceMemory memory;
+    VkImageView view;
+    VkDescriptorSet descriptor_set;
+    bool ready;
+};
+
 struct app {
     XrInstance xr;
     XrSystemId system;
@@ -350,6 +363,14 @@ struct app {
     bool ui_image_initialized[MAX_IMAGES];
     VkFormat ui_format;
     bool ui_bgra;
+    struct ui_texture ui_texture, browser_texture;
+    bool panels_in_eye_images;
+    VkSampler panel_sampler;
+    VkDescriptorSetLayout panel_descriptor_layout;
+    VkDescriptorPool panel_descriptor_pool;
+    VkPipelineLayout panel_pipeline_layout;
+    VkPipeline panel_pipeline;
+    float panel_anisotropy; /* 1 without samplerAnisotropy */
     VkBuffer ui_staging_buffer;
     VkDeviceMemory ui_staging_memory;
     uint32_t *ui_pixels; /* mapped staging memory: write-only */
@@ -1461,13 +1482,18 @@ static void initialize_xr_vulkan(struct app *app)
     if (host_import)
         enabled_extensions[enabled_count++] =
             VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME;
+    /* Panels drawn into the eye images are sampled anisotropically. */
+    VkPhysicalDeviceFeatures supported, features = {0};
+    vkGetPhysicalDeviceFeatures(app->physical, &supported);
+    features.samplerAnisotropy = supported.samplerAnisotropy;
     float priority = 1.0f;
     VkDeviceQueueCreateInfo queue_info = {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
         .queueFamilyIndex = app->queue_family, .queueCount = 1, .pQueuePriorities = &priority};
     VkDeviceCreateInfo vk_device_info = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
         .queueCreateInfoCount = 1, .pQueueCreateInfos = &queue_info,
         .enabledExtensionCount = enabled_count,
-        .ppEnabledExtensionNames = enabled_extensions};
+        .ppEnabledExtensionNames = enabled_extensions,
+        .pEnabledFeatures = &features};
     XrVulkanDeviceCreateInfoKHR xr_device_info = {
         .type = XR_TYPE_VULKAN_DEVICE_CREATE_INFO_KHR, .systemId = app->system,
         .pfnGetInstanceProcAddr = vkGetInstanceProcAddr, .vulkanPhysicalDevice = app->physical,
@@ -1479,6 +1505,10 @@ static void initialize_xr_vulkan(struct app *app)
     VkPhysicalDeviceProperties properties;
     vkGetPhysicalDeviceProperties(app->physical, &properties);
     printf("openxr_vulkan_device=%s queue_family=%u\n", properties.deviceName, app->queue_family);
+    app->panel_anisotropy = 1.0f;
+    if (features.samplerAnisotropy)
+        app->panel_anisotropy =
+            fminf(8.0f, properties.limits.maxSamplerAnisotropy);
     app->import_semaphore_fd = (PFN_vkImportSemaphoreFdKHR)
         vkGetDeviceProcAddr(app->device, "vkImportSemaphoreFdKHR");
     app->get_memory_fd_properties = (PFN_vkGetMemoryFdPropertiesKHR)
@@ -2181,6 +2211,183 @@ static struct player_ui_state player_state(const struct app *app)
     };
 }
 
+/* Where the panels are drawn. SteamVR on a PC composites quad layers so
+ * that text and thin lines shimmer and step when the head moves, also when
+ * the image has mipmaps or is filtered down beforehand; the video, which the
+ * renderer draws into the eye images itself, stays clean. On a PC the
+ * panels are therefore drawn into the eye images as well, from a mipmapped
+ * image with trilinear and anisotropic filtering. The Frame's compositor
+ * shows quad layers cleanly and sharper. STEREONAUT_UI_LAYER=quad|eye
+ * overrides. */
+static bool panels_in_eye_images(void)
+{
+    const char *forced = getenv("STEREONAUT_UI_LAYER");
+    if (forced && strcmp(forced, "quad") == 0)
+        return false;
+    if (forced && strcmp(forced, "eye") == 0)
+        return true;
+    return access("/dev/video-dec0", F_OK) < 0;
+}
+
+/* A panel's quad-layer swapchain or, drawn into the eye images, its
+ * mipmapped image (then no swapchain). */
+static XrSwapchain create_ui_texture(struct app *app,
+                                     struct ui_texture *texture,
+                                     uint32_t width, uint32_t height,
+                                     const char *what)
+{
+    *texture = (struct ui_texture){.width = width, .height = height};
+    if (!app->panels_in_eye_images) {
+        XrSwapchainCreateInfo info = {
+            .type = XR_TYPE_SWAPCHAIN_CREATE_INFO,
+            .usageFlags = XR_SWAPCHAIN_USAGE_SAMPLED_BIT |
+                          XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT,
+            .format = app->ui_format,
+            .sampleCount = 1,
+            .width = width,
+            .height = height,
+            .faceCount = 1,
+            .arraySize = 1,
+            .mipCount = 1,
+        };
+        XrSwapchain swapchain = XR_NULL_HANDLE;
+        need_xr(what, xrCreateSwapchain(app->session, &info, &swapchain));
+        return swapchain;
+    }
+    uint32_t size = width > height ? width : height;
+    while (size >> texture->mip_levels)
+        ++texture->mip_levels;
+    VkImageCreateInfo image = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .imageType = VK_IMAGE_TYPE_2D, .format = app->ui_format,
+        .extent = {width, height, 1}, .mipLevels = texture->mip_levels,
+        .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT,
+        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                 VK_IMAGE_USAGE_TRANSFER_SRC_BIT |
+                 VK_IMAGE_USAGE_SAMPLED_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+    };
+    need_vk("vkCreateImage(panel)",
+            vkCreateImage(app->device, &image, NULL, &texture->image));
+    VkMemoryRequirements requirements;
+    vkGetImageMemoryRequirements(app->device, texture->image, &requirements);
+    VkMemoryAllocateInfo allocation = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize = requirements.size,
+        .memoryTypeIndex = memory_type(app->physical,
+                                       requirements.memoryTypeBits,
+                                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
+    };
+    need_vk("vkAllocateMemory(panel)",
+            vkAllocateMemory(app->device, &allocation, NULL,
+                             &texture->memory));
+    need_vk("vkBindImageMemory(panel)",
+            vkBindImageMemory(app->device, texture->image, texture->memory,
+                              0));
+    VkImageViewCreateInfo view = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .image = texture->image, .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = app->ui_format,
+        .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                             .levelCount = texture->mip_levels,
+                             .layerCount = 1},
+    };
+    need_vk("vkCreateImageView(panel)",
+            vkCreateImageView(app->device, &view, NULL, &texture->view));
+    return XR_NULL_HANDLE;
+}
+
+static VkImageMemoryBarrier ui_barrier(VkImage image, uint32_t level,
+                                       uint32_t levels, VkAccessFlags from,
+                                       VkAccessFlags to,
+                                       VkImageLayout old_layout,
+                                       VkImageLayout new_layout)
+{
+    return (VkImageMemoryBarrier){
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask = from, .dstAccessMask = to,
+        .oldLayout = old_layout, .newLayout = new_layout,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = image,
+        .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                             .baseMipLevel = level, .levelCount = levels,
+                             .layerCount = 1},
+    };
+}
+
+/* Copies the staged drawing into the quad layer's swapchain image (target)
+ * or into the panel image, whose smaller mip levels are then filtered down
+ * from it level by level. */
+static void record_ui_upload(VkCommandBuffer command,
+                             struct ui_texture *texture, VkImage target,
+                             VkBuffer staging, bool initialized)
+{
+    VkImage image = texture->image ? texture->image : target;
+    uint32_t levels = texture->image ? texture->mip_levels : 1U;
+    bool ready = texture->image ? texture->ready : initialized;
+    VkImageMemoryBarrier to_copy = ui_barrier(
+        image, 0, levels, ready ? VK_ACCESS_SHADER_READ_BIT : 0,
+        VK_ACCESS_TRANSFER_WRITE_BIT,
+        ready ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
+              : VK_IMAGE_LAYOUT_UNDEFINED,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+    vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL,
+                         1, &to_copy);
+    VkBufferImageCopy copy = {
+        .imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                             .layerCount = 1},
+        .imageExtent = {texture->width, texture->height, 1},
+    };
+    vkCmdCopyBufferToImage(command, staging, image,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
+    int32_t width = (int32_t)texture->width;
+    int32_t height = (int32_t)texture->height;
+    for (uint32_t level = 1; level < levels; ++level) {
+        VkImageMemoryBarrier to_source = ui_barrier(
+            image, level - 1, 1, VK_ACCESS_TRANSFER_WRITE_BIT,
+            VK_ACCESS_TRANSFER_READ_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+        vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                             VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0,
+                             NULL, 1, &to_source);
+        int32_t next_width = width > 1 ? width / 2 : 1;
+        int32_t next_height = height > 1 ? height / 2 : 1;
+        VkImageBlit blit = {
+            .srcSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                               .mipLevel = level - 1, .layerCount = 1},
+            .srcOffsets = {{0, 0, 0}, {width, height, 1}},
+            .dstSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                               .mipLevel = level, .layerCount = 1},
+            .dstOffsets = {{0, 0, 0}, {next_width, next_height, 1}},
+        };
+        vkCmdBlitImage(command, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                       image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
+                       VK_FILTER_LINEAR);
+        width = next_width;
+        height = next_height;
+    }
+    /* All but the last level are now transfer sources. */
+    VkImageMemoryBarrier to_sample[2] = {
+        ui_barrier(image, 0, levels - 1, VK_ACCESS_TRANSFER_READ_BIT,
+                   VK_ACCESS_SHADER_READ_BIT,
+                   VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
+        ui_barrier(image, levels - 1, 1, VK_ACCESS_TRANSFER_WRITE_BIT,
+                   VK_ACCESS_SHADER_READ_BIT,
+                   VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                   VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
+    };
+    vkCmdPipelineBarrier(command, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL, 0,
+                         NULL, levels > 1 ? 2U : 1U,
+                         levels > 1 ? to_sample : &to_sample[1]);
+    texture->ready = true;
+}
+
 static void create_ui_swapchain(struct app *app)
 {
     uint32_t count = 0;
@@ -2203,20 +2410,14 @@ static void create_ui_swapchain(struct app *app)
          "no supported UI swapchain format");
     app->ui_bgra = app->ui_format == VK_FORMAT_B8G8R8A8_SRGB ||
                    app->ui_format == VK_FORMAT_B8G8R8A8_UNORM;
-    XrSwapchainCreateInfo info = {
-        .type = XR_TYPE_SWAPCHAIN_CREATE_INFO,
-        .usageFlags = XR_SWAPCHAIN_USAGE_SAMPLED_BIT |
-                      XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT,
-        .format = app->ui_format,
-        .sampleCount = 1,
-        .width = UI_WIDTH,
-        .height = UI_HEIGHT,
-        .faceCount = 1,
-        .arraySize = 1,
-        .mipCount = 1,
-    };
-    need_xr("xrCreateSwapchain(UI)",
-            xrCreateSwapchain(app->session, &info, &app->ui_swapchain));
+    app->ui_swapchain = create_ui_texture(app, &app->ui_texture, UI_WIDTH,
+                                          UI_HEIGHT, "xrCreateSwapchain(UI)");
+    printf("ui_panel format=%d dimensions=%ux%u drawn_into=%s mips=%u\n",
+           app->ui_format, UI_WIDTH, UI_HEIGHT,
+           app->panels_in_eye_images ? "eye_images" : "quad_layer",
+           app->ui_texture.mip_levels);
+    if (!app->ui_swapchain)
+        return;
     need_xr("xrEnumerateSwapchainImages(UI count)",
             xrEnumerateSwapchainImages(app->ui_swapchain, 0,
                                        &app->ui_image_count, NULL));
@@ -2229,8 +2430,6 @@ static void create_ui_swapchain(struct app *app)
                 app->ui_swapchain, app->ui_image_count,
                 &app->ui_image_count,
                 (XrSwapchainImageBaseHeader *)app->ui_images));
-    printf("ui_swapchain format=%d dimensions=%ux%u images=%u\n",
-           app->ui_format, UI_WIDTH, UI_HEIGHT, app->ui_image_count);
 }
 
 static void create_ui_resources(struct app *app)
@@ -2292,15 +2491,17 @@ static void upload_ui(struct app *app)
         .type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO,
     };
     uint32_t index = 0;
-    need_xr("xrAcquireSwapchainImage(UI)",
-            xrAcquireSwapchainImage(app->ui_swapchain, &acquire, &index));
     XrSwapchainImageWaitInfo wait = {
         .type = XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO,
         .timeout = XR_INFINITE_DURATION,
     };
-    need_xr("xrWaitSwapchainImage(UI)",
-            xrWaitSwapchainImage(app->ui_swapchain, &wait));
-    need(index < app->ui_image_count, "invalid UI swapchain index");
+    if (app->ui_swapchain) {
+        need_xr("xrAcquireSwapchainImage(UI)",
+                xrAcquireSwapchainImage(app->ui_swapchain, &acquire, &index));
+        need_xr("xrWaitSwapchainImage(UI)",
+                xrWaitSwapchainImage(app->ui_swapchain, &wait));
+        need(index < app->ui_image_count, "invalid UI swapchain index");
+    }
     need_vk("vkWaitForFences(UI)",
             vkWaitForFences(app->device, 1, &app->ui_fence,
                             VK_TRUE, UINT64_C(5000000000)));
@@ -2315,45 +2516,9 @@ static void upload_ui(struct app *app)
     };
     need_vk("vkBeginCommandBuffer(UI)",
             vkBeginCommandBuffer(app->ui_command, &begin));
-    VkImageMemoryBarrier transfer = {
-        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-        .srcAccessMask = app->ui_image_initialized[index]
-                             ? VK_ACCESS_SHADER_READ_BIT : 0,
-        .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-        .oldLayout = app->ui_image_initialized[index]
-                         ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                         : VK_IMAGE_LAYOUT_UNDEFINED,
-        .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        .image = app->ui_images[index].image,
-        .subresourceRange = {
-            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-            .levelCount = 1, .layerCount = 1,
-        },
-    };
-    vkCmdPipelineBarrier(app->ui_command,
-                         app->ui_image_initialized[index]
-                             ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
-                             : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
-                         0, NULL, 0, NULL, 1, &transfer);
-    VkBufferImageCopy copy = {
-        .imageSubresource = {
-            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-            .layerCount = 1,
-        },
-        .imageExtent = {UI_WIDTH, UI_HEIGHT, 1},
-    };
-    vkCmdCopyBufferToImage(app->ui_command, app->ui_staging_buffer,
-                           app->ui_images[index].image,
-                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
-    VkImageMemoryBarrier sample = transfer;
-    sample.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    sample.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    sample.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    sample.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    vkCmdPipelineBarrier(app->ui_command, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
-                         0, NULL, 0, NULL, 1, &sample);
+    record_ui_upload(app->ui_command, &app->ui_texture,
+                     app->ui_images[index].image, app->ui_staging_buffer,
+                     app->ui_image_initialized[index]);
     need_vk("vkEndCommandBuffer(UI)",
             vkEndCommandBuffer(app->ui_command));
     VkSubmitInfo submit = {
@@ -2370,8 +2535,9 @@ static void upload_ui(struct app *app)
     XrSwapchainImageReleaseInfo release = {
         .type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO,
     };
-    need_xr("xrReleaseSwapchainImage(UI)",
-            xrReleaseSwapchainImage(app->ui_swapchain, &release));
+    if (app->ui_swapchain)
+        need_xr("xrReleaseSwapchainImage(UI)",
+                xrReleaseSwapchainImage(app->ui_swapchain, &release));
     app->ui_dirty = false;
 }
 
@@ -3354,32 +3520,24 @@ static XrCompositionLayerQuad make_ui_layer(const struct app *app)
 
 static void create_browser_texture(struct app *app)
 {
-    XrSwapchainCreateInfo info = {
-        .type = XR_TYPE_SWAPCHAIN_CREATE_INFO,
-        .usageFlags = XR_SWAPCHAIN_USAGE_SAMPLED_BIT |
-                      XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT,
-        .format = app->ui_format,
-        .sampleCount = 1,
-        .width = BROWSER_UI_WIDTH,
-        .height = BROWSER_UI_HEIGHT,
-        .faceCount = 1,
-        .arraySize = 1,
-        .mipCount = 1,
-    };
-    need_xr("xrCreateSwapchain(browser)",
-            xrCreateSwapchain(app->session, &info, &app->browser_swapchain));
-    need_xr("xrEnumerateSwapchainImages(browser count)",
-            xrEnumerateSwapchainImages(app->browser_swapchain, 0,
-                                       &app->browser_image_count, NULL));
-    need(app->browser_image_count > 0 && app->browser_image_count <= MAX_IMAGES,
-         "unexpected browser swapchain image count");
-    for (uint32_t i = 0; i < app->browser_image_count; ++i)
-        app->browser_images[i].type = XR_TYPE_SWAPCHAIN_IMAGE_VULKAN2_KHR;
-    need_xr("xrEnumerateSwapchainImages(browser list)",
-            xrEnumerateSwapchainImages(
-                app->browser_swapchain, app->browser_image_count,
-                &app->browser_image_count,
-                (XrSwapchainImageBaseHeader *)app->browser_images));
+    app->browser_swapchain = create_ui_texture(
+        app, &app->browser_texture, BROWSER_UI_WIDTH, BROWSER_UI_HEIGHT,
+        "xrCreateSwapchain(browser)");
+    if (app->browser_swapchain) {
+        need_xr("xrEnumerateSwapchainImages(browser count)",
+                xrEnumerateSwapchainImages(app->browser_swapchain, 0,
+                                           &app->browser_image_count, NULL));
+        need(app->browser_image_count > 0 &&
+                 app->browser_image_count <= MAX_IMAGES,
+             "unexpected browser swapchain image count");
+        for (uint32_t i = 0; i < app->browser_image_count; ++i)
+            app->browser_images[i].type = XR_TYPE_SWAPCHAIN_IMAGE_VULKAN2_KHR;
+        need_xr("xrEnumerateSwapchainImages(browser list)",
+                xrEnumerateSwapchainImages(
+                    app->browser_swapchain, app->browser_image_count,
+                    &app->browser_image_count,
+                    (XrSwapchainImageBaseHeader *)app->browser_images));
+    }
     VkCommandBufferAllocateInfo commands = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
         .commandPool = app->command_pool,
@@ -3560,6 +3718,164 @@ static void fill_static_swapchain(struct app *app, XrSwapchain swapchain,
 
 #define POINTER_PIXELS 64U
 
+/* Pipeline for the panels drawn into the eye images: a textured quad,
+ * blended over the video with premultiplied alpha like a quad layer. */
+static void create_panel_pipeline(struct app *app)
+{
+    if (!app->panels_in_eye_images)
+        return;
+    VkSamplerCreateInfo sampler = {
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .magFilter = VK_FILTER_LINEAR, .minFilter = VK_FILTER_LINEAR,
+        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+        .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .anisotropyEnable = app->panel_anisotropy > 1.0f,
+        .maxAnisotropy = app->panel_anisotropy,
+        .maxLod = VK_LOD_CLAMP_NONE,
+    };
+    need_vk("vkCreateSampler(panel)",
+            vkCreateSampler(app->device, &sampler, NULL,
+                            &app->panel_sampler));
+    VkDescriptorSetLayoutBinding binding = {
+        .binding = 0,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .pImmutableSamplers = &app->panel_sampler,
+    };
+    VkDescriptorSetLayoutCreateInfo layout = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .bindingCount = 1, .pBindings = &binding,
+    };
+    need_vk("vkCreateDescriptorSetLayout(panel)",
+            vkCreateDescriptorSetLayout(app->device, &layout, NULL,
+                                        &app->panel_descriptor_layout));
+    VkPushConstantRange push = {
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+        .size = sizeof(struct mat4),
+    };
+    VkPipelineLayoutCreateInfo pipeline_layout = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1, .pSetLayouts = &app->panel_descriptor_layout,
+        .pushConstantRangeCount = 1, .pPushConstantRanges = &push,
+    };
+    need_vk("vkCreatePipelineLayout(panel)",
+            vkCreatePipelineLayout(app->device, &pipeline_layout, NULL,
+                                   &app->panel_pipeline_layout));
+    VkDescriptorPoolSize size = {
+        .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = 2,
+    };
+    VkDescriptorPoolCreateInfo pool = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .maxSets = 2, .poolSizeCount = 1, .pPoolSizes = &size,
+    };
+    need_vk("vkCreateDescriptorPool(panel)",
+            vkCreateDescriptorPool(app->device, &pool, NULL,
+                                   &app->panel_descriptor_pool));
+    struct ui_texture *textures[2] = {&app->ui_texture, &app->browser_texture};
+    for (size_t i = 0; i < ARRAY_COUNT(textures); ++i) {
+        VkDescriptorSetAllocateInfo allocate = {
+            .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+            .descriptorPool = app->panel_descriptor_pool,
+            .descriptorSetCount = 1,
+            .pSetLayouts = &app->panel_descriptor_layout,
+        };
+        need_vk("vkAllocateDescriptorSets(panel)",
+                vkAllocateDescriptorSets(app->device, &allocate,
+                                         &textures[i]->descriptor_set));
+        VkDescriptorImageInfo image = {
+            .imageView = textures[i]->view,
+            .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+        };
+        VkWriteDescriptorSet write = {
+            .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = textures[i]->descriptor_set, .dstBinding = 0,
+            .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            .pImageInfo = &image,
+        };
+        vkUpdateDescriptorSets(app->device, 1, &write, 0, NULL);
+    }
+    VkShaderModule vert = shader(app->device, "ui-panel.vert.spv");
+    VkShaderModule frag = shader(app->device, "ui-panel.frag.spv");
+    VkPipelineShaderStageCreateInfo stages[2] = {
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+         .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = vert, .pName = "main"},
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+         .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = frag,
+         .pName = "main"},
+    };
+    VkPipelineVertexInputStateCreateInfo vertex = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+    };
+    VkPipelineInputAssemblyStateCreateInfo assembly = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
+    };
+    VkViewport viewport = {.width = (float)app->width,
+                           .height = (float)app->height, .maxDepth = 1};
+    VkRect2D scissor = {.extent = {app->width, app->height}};
+    VkPipelineViewportStateCreateInfo view = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+        .viewportCount = 1, .pViewports = &viewport,
+        .scissorCount = 1, .pScissors = &scissor,
+    };
+    VkPipelineRasterizationStateCreateInfo raster = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .polygonMode = VK_POLYGON_MODE_FILL, .cullMode = VK_CULL_MODE_NONE,
+        .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE, .lineWidth = 1,
+    };
+    VkPipelineMultisampleStateCreateInfo multisample = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+    };
+    VkPipelineColorBlendAttachmentState blend_attachment = {
+        .blendEnable = VK_TRUE,
+        .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+        .colorBlendOp = VK_BLEND_OP_ADD,
+        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+        .alphaBlendOp = VK_BLEND_OP_ADD,
+        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+    };
+    VkPipelineColorBlendStateCreateInfo blend = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        .attachmentCount = 1, .pAttachments = &blend_attachment,
+    };
+    VkGraphicsPipelineCreateInfo pipeline = {
+        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .stageCount = 2, .pStages = stages, .pVertexInputState = &vertex,
+        .pInputAssemblyState = &assembly, .pViewportState = &view,
+        .pRasterizationState = &raster, .pMultisampleState = &multisample,
+        .pColorBlendState = &blend, .layout = app->panel_pipeline_layout,
+        .renderPass = app->render_pass,
+    };
+    need_vk("vkCreateGraphicsPipelines(panel)",
+            vkCreateGraphicsPipelines(app->device, VK_NULL_HANDLE, 1,
+                                      &pipeline, NULL, &app->panel_pipeline));
+    vkDestroyShaderModule(app->device, vert, NULL);
+    vkDestroyShaderModule(app->device, frag, NULL);
+}
+
+/* Model matrix of a panel quad (unit square in the shader) with the pose
+ * and size of its quad layer. */
+static struct mat4 panel_model(const XrCompositionLayerQuad *quad)
+{
+    struct mat4 model = rotation_from_pose(quad->pose);
+    for (unsigned row = 0; row < 3; ++row) {
+        model.v[row] *= quad->size.width;
+        model.v[4 + row] *= quad->size.height;
+    }
+    model.v[12] = quad->pose.position.x;
+    model.v[13] = quad->pose.position.y;
+    model.v[14] = quad->pose.position.z;
+    return model;
+}
+
 static void create_pointer_texture(struct app *app)
 {
     XrSwapchainCreateInfo info = {
@@ -3612,15 +3928,17 @@ static void upload_browser(struct app *app)
         .type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO,
     };
     uint32_t index = 0;
-    need_xr("xrAcquireSwapchainImage(browser)",
-            xrAcquireSwapchainImage(app->browser_swapchain, &acquire, &index));
     XrSwapchainImageWaitInfo wait = {
         .type = XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO,
         .timeout = XR_INFINITE_DURATION,
     };
-    need_xr("xrWaitSwapchainImage(browser)",
-            xrWaitSwapchainImage(app->browser_swapchain, &wait));
-    need(index < app->browser_image_count, "invalid browser swapchain index");
+    if (app->browser_swapchain) {
+        need_xr("xrAcquireSwapchainImage(browser)",
+                xrAcquireSwapchainImage(app->browser_swapchain, &acquire, &index));
+        need_xr("xrWaitSwapchainImage(browser)",
+                xrWaitSwapchainImage(app->browser_swapchain, &wait));
+        need(index < app->browser_image_count, "invalid browser swapchain index");
+    }
     need_vk("vkWaitForFences(browser)",
             vkWaitForFences(app->device, 1, &app->browser_fence, VK_TRUE,
                             UINT64_C(5000000000)));
@@ -3636,39 +3954,10 @@ static void upload_browser(struct app *app)
     };
     need_vk("vkBeginCommandBuffer(browser)",
             vkBeginCommandBuffer(app->browser_command, &begin));
-    bool initialized = app->browser_image_initialized[index];
-    VkImageMemoryBarrier transfer = {
-        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-        .srcAccessMask = initialized ? VK_ACCESS_SHADER_READ_BIT : 0,
-        .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
-        .oldLayout = initialized ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL
-                                 : VK_IMAGE_LAYOUT_UNDEFINED,
-        .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        .image = app->browser_images[index].image,
-        .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                             .levelCount = 1, .layerCount = 1},
-    };
-    vkCmdPipelineBarrier(app->browser_command,
-                         initialized ? VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT
-                                     : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL,
-                         1, &transfer);
-    VkBufferImageCopy copy = {
-        .imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                             .layerCount = 1},
-        .imageExtent = {BROWSER_UI_WIDTH, BROWSER_UI_HEIGHT, 1},
-    };
-    vkCmdCopyBufferToImage(app->browser_command, app->browser_staging_buffer,
-                           app->browser_images[index].image,
-                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &copy);
-    VkImageMemoryBarrier sample = transfer;
-    sample.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    sample.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    sample.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    sample.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    vkCmdPipelineBarrier(app->browser_command, VK_PIPELINE_STAGE_TRANSFER_BIT,
-                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL, 0,
-                         NULL, 1, &sample);
+    record_ui_upload(app->browser_command, &app->browser_texture,
+                     app->browser_images[index].image,
+                     app->browser_staging_buffer,
+                     app->browser_image_initialized[index]);
     need_vk("vkEndCommandBuffer(browser)",
             vkEndCommandBuffer(app->browser_command));
     VkSubmitInfo submit = {
@@ -3687,8 +3976,9 @@ static void upload_browser(struct app *app)
     XrSwapchainImageReleaseInfo release = {
         .type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO,
     };
-    need_xr("xrReleaseSwapchainImage(browser)",
-            xrReleaseSwapchainImage(app->browser_swapchain, &release));
+    if (app->browser_swapchain)
+        need_xr("xrReleaseSwapchainImage(browser)",
+                xrReleaseSwapchainImage(app->browser_swapchain, &release));
 }
 
 static XrCompositionLayerQuad make_browser_layer(const struct app *app)
@@ -4560,6 +4850,14 @@ static void render_frame(struct app *app)
                              NULL, 0, NULL);
         app->disparity_pending = true;
     }
+    XrCompositionLayerQuad ui_layer = app->playing
+                                          ? make_ui_layer(app)
+                                          : make_browser_layer(app);
+    bool show_ui = app->playing ? app->ui_visible : true;
+    const struct ui_texture *panel = NULL;
+    if (app->panels_in_eye_images && show_ui)
+        panel = app->playing ? &app->ui_texture : &app->browser_texture;
+    struct mat4 panel_matrix = panel_model(&ui_layer);
     for (uint32_t eye = 0; eye < 2; ++eye) {
         VkClearValue clear = {.color = {{0.005f, 0.005f, 0.008f, 1.0f}}};
         VkRenderPassBeginInfo pass = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
@@ -4573,6 +4871,21 @@ static void render_frame(struct app *app)
             vkCmdBindDescriptorSets(app->command, VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     app->pipeline_layout, 0, 1,
                                     &video->descriptor_set, 1, &offset);
+            vkCmdDraw(app->command, 4, 1, 0, 0);
+        }
+        if (panel && panel->ready) {
+            struct mat4 mvp = multiply(
+                projection_from_fov(views[eye].fov),
+                multiply(view_from_pose(views[eye].pose), panel_matrix));
+            vkCmdBindPipeline(app->command, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              app->panel_pipeline);
+            vkCmdBindDescriptorSets(app->command,
+                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    app->panel_pipeline_layout, 0, 1,
+                                    &panel->descriptor_set, 0, NULL);
+            vkCmdPushConstants(app->command, app->panel_pipeline_layout,
+                               VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(mvp),
+                               &mvp);
             vkCmdDraw(app->command, 4, 1, 0, 0);
         }
         vkCmdEndRenderPass(app->command);
@@ -4632,9 +4945,6 @@ static void render_frame(struct app *app)
         projection_views[eye].subImage = (XrSwapchainSubImage){.swapchain = app->swapchain, .imageRect = {.extent = {(int32_t)app->width, (int32_t)app->height}}, .imageArrayIndex = eye};
     }
     XrCompositionLayerProjection layer = {.type = XR_TYPE_COMPOSITION_LAYER_PROJECTION, .space = app->space, .viewCount = 2, .views = projection_views};
-    XrCompositionLayerQuad ui_layer = app->playing
-                                          ? make_ui_layer(app)
-                                          : make_browser_layer(app);
     XrCompositionLayerQuad pointer_layer = make_pointer_layer(app);
     XrCompositionLayerQuad gaze_layer = make_gaze_marker_layer(app);
     const XrCompositionLayerBaseHeader *layers[4] = {
@@ -4643,9 +4953,10 @@ static void render_frame(struct app *app)
     uint32_t layer_count = 1;
     if (app->playing && app->gaze_marker_visible)
         layers[layer_count++] = (const XrCompositionLayerBaseHeader *)&gaze_layer;
-    bool show_ui = app->playing ? app->ui_visible : true;
     if (show_ui) {
-        layers[layer_count++] = (const XrCompositionLayerBaseHeader *)&ui_layer;
+        if (!app->panels_in_eye_images)
+            layers[layer_count++] =
+                (const XrCompositionLayerBaseHeader *)&ui_layer;
         if (app->pointer_layer_visible)
             layers[layer_count++] =
                 (const XrCompositionLayerBaseHeader *)&pointer_layer;
@@ -4723,11 +5034,13 @@ int main(int argc, char **argv)
     need_xr("xrCreateReferenceSpace(VIEW)",
             xrCreateReferenceSpace(app.session, &space_info, &app.view_space));
     initialize_swapchain(&app);
+    app.panels_in_eye_images = panels_in_eye_images();
     create_ui_swapchain(&app);
     create_video_sampler(&app);
     create_render_resources(&app);
     create_ui_resources(&app);
     create_browser_texture(&app);
+    create_panel_pipeline(&app);
     create_pointer_texture(&app);
     create_gaze_markers(&app);
     printf("host_ready\n");

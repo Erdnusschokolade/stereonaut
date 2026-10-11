@@ -69,6 +69,12 @@ glslc -fshader-stage=frag \
 glslc -fshader-stage=frag \
   "$project_dir/tools/openxr-playback/tp10-projection.frag" \
   -o "$build_dir/tp10-projection.frag.spv"
+glslc -fshader-stage=vert \
+  "$project_dir/tools/openxr-playback/ui-panel.vert" \
+  -o "$build_dir/ui-panel.vert.spv"
+glslc -fshader-stage=frag \
+  "$project_dir/tools/openxr-playback/ui-panel.frag" \
+  -o "$build_dir/ui-panel.frag.spv"
 glslc -fshader-stage=comp \
   "$project_dir/tools/openxr-playback/stereo-disparity.comp" \
   -o "$build_dir/stereo-disparity.comp.spv"

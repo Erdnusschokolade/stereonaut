@@ -12,11 +12,8 @@
  * (autofocus), controller buttons and information. The host owns all state and passes it in;
  * nothing here knows about OpenXR or Vulkan. */
 
-/* The playback panel sits closer to the viewer than the media browser.
- * Keep roughly the same angular pixel density, otherwise text and vector
- * controls look visibly upscaled on high-resolution PCVR headsets. */
-#define PLAYER_UI_WIDTH 2048U
-#define PLAYER_UI_HEIGHT 870U
+#define PLAYER_UI_WIDTH 1600U
+#define PLAYER_UI_HEIGHT 680U
 #define PLAYER_UI_PANEL_WIDTH_METERS 1.4f
 #define PLAYER_UI_PANEL_HEIGHT_METERS 0.595f
 
