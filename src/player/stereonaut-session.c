@@ -148,7 +148,7 @@ struct playback_options {
     bool start_paused;
     /* Iris refused to restart the queues after a seek in place (STREAMON
      * ENOMEM with a kernel warning, now and then with 8K): later seeks of
-     * this title restart the session straight away. */
+     * this title reopen the decoder straight away. */
     bool no_seek_in_place;
     /* Seek restart: the position the seek started from, which keeps the
      * resume keyframe in the seek's direction (media_demux_seek); -1 if
@@ -325,6 +325,18 @@ static double monotonic_seconds(void)
     if (clock_gettime(CLOCK_MONOTONIC, &value) < 0)
         fail_errno("clock_gettime");
     return (double)value.tv_sec + (double)value.tv_nsec / 1000000000.0;
+}
+
+/* Seek restart: when the seek was requested (monotonic_seconds of the
+ * session before the restart; CLOCK_MONOTONIC is system-wide), so the
+ * restarted session can log how long each phase took. 0 otherwise. */
+static double seek_requested_at;
+
+static void log_seek_phase(const char *phase)
+{
+    if (seek_requested_at > 0.0)
+        printf("seek_restart_phase=%s ms=%.0f\n", phase,
+               (monotonic_seconds() - seek_requested_at) * 1000.0);
 }
 
 static void send_renderer_message(uint32_t type, uint32_t index,
@@ -766,6 +778,7 @@ static void start_renderer(
            " swap_eyes=%u\n",
            (long)renderer_pid, count, options->projection_mode,
            options->stereo_layout, options->swap_eyes);
+    log_seek_phase("renderer_imported");
 }
 
 static bool process_renderer_messages(
@@ -1011,6 +1024,10 @@ static struct playback_options parse_playback_options(int argc, char **argv)
             options.start_paused = true;
         } else if (strcmp(argv[i], "--no-seek-in-place") == 0) {
             options.no_seek_in_place = true;
+        } else if (strcmp(argv[i], "--seek-requested-at") == 0) {
+            if (++i >= argc)
+                fail_message("--seek-requested-at requires seconds");
+            seek_requested_at = strtod(argv[i], NULL);
         } else if (strcmp(argv[i], "--seek-from-us") == 0) {
             if (++i >= argc)
                 fail_message("--seek-from-us requires a timestamp");
@@ -2128,6 +2145,7 @@ static unsigned setup_capture(
     }
     printf("capture_buffers=%u exported_dmabufs=%u cpu_mapped=0\n",
            request.count, request.count);
+    log_seek_phase("decoder_buffers");
     return request.count;
 }
 
@@ -2229,6 +2247,7 @@ struct transport {
     uint32_t requested;         /* NV12_ACTION_* that ends the playback loop */
     int64_t requested_start_us; /* its seek target */
     int64_t from_us;            /* and the position it was requested at */
+    double requested_at;        /* monotonic_seconds */
     double last_status_sent;
 };
 
@@ -2300,6 +2319,7 @@ static double update_transport(struct transport *transport,
             target = info->duration_us - 1;
         transport->requested_start_us = target;
         transport->from_us = position;
+        transport->requested_at = now;
         transport->requested = renderer_action;
         printf("player_action=%u position_us=%" PRId64 " target_us=%" PRId64
                "\n",
@@ -2345,13 +2365,10 @@ static void prepare_view(struct playback_options *options,
         format_source == NV12_FORMAT_SOURCE_DEFAULT && !layout->tp10;
 }
 
-/* Seek restart: exec this program again at the new position with the
- * current view, panel and renderer, which the new process adopts. */
-static void restart_session(char **argv, struct playback_options *options,
-                            int64_t start_us, bool paused)
+/* The view the viewer chose during playback, for the next start of the
+ * decoder (seek restart or reopen). */
+static void keep_view(struct playback_options *options)
 {
-    char start_text[32];
-    snprintf(start_text, sizeof(start_text), "%" PRId64, start_us);
     if (view_state_valid) {
         options->projection_mode = view_state.projection_mode;
         options->fisheye_fov = view_state.fisheye_fov;
@@ -2359,6 +2376,16 @@ static void restart_session(char **argv, struct playback_options *options,
         options->swap_eyes = view_state.swap_eyes;
         options->video_levels = view_state.video_levels;
     }
+}
+
+/* Seek restart: exec this program again at the new position with the
+ * current view, panel and renderer, which the new process adopts. */
+static void restart_session(char **argv, struct playback_options *options,
+                            int64_t start_us, bool paused)
+{
+    char start_text[32];
+    snprintf(start_text, sizeof(start_text), "%" PRId64, start_us);
+    keep_view(options);
     const char *projection = options->projection_mode ==
                                      NV12_PROJECTION_EQUIRECT_180
                                  ? "180"
@@ -2432,6 +2459,13 @@ static void restart_session(char **argv, struct playback_options *options,
         restart_argv[restart_argc++] = "--paused";
     if (options->no_seek_in_place)
         restart_argv[restart_argc++] = "--no-seek-in-place";
+    char requested_text[32];
+    if (seek_requested_at > 0.0) {
+        snprintf(requested_text, sizeof(requested_text), "%.6f",
+                 seek_requested_at);
+        restart_argv[restart_argc++] = "--seek-requested-at";
+        restart_argv[restart_argc++] = requested_text;
+    }
     char from_text[32];
     if (options->seek_from_us >= 0) {
         snprintf(from_text, sizeof(from_text), "%" PRId64,
@@ -2486,7 +2520,7 @@ static int play_software(char **argv, struct playback_options *options,
     bool audio_started = false;
     double playback_start = monotonic_seconds();
     double last_progress = playback_start;
-    double seek_started = 0.0;
+    double seek_started = seek_requested_at;
     uint64_t shown = 0, late_drops = 0;
     for (;;) {
         if (stop_requested) {
@@ -2554,6 +2588,7 @@ static int play_software(char **argv, struct playback_options *options,
             printf("seek_latency_ms=%.0f\n",
                    (last_progress - seek_started) * 1000.0);
             seek_started = 0.0;
+            seek_requested_at = 0.0;
         }
         if (!audio_started && options->start_paused) {
             /* The audio clock starts with the next "play". */
@@ -2617,6 +2652,7 @@ static int play_software(char **argv, struct playback_options *options,
         if (transport.requested == NV12_ACTION_BACK)
             return 0;
         options->seek_from_us = transport.from_us;
+        seek_requested_at = transport.requested_at;
         restart_session(argv, options, transport.requested_start_us,
                         transport.paused);
     }
@@ -2654,6 +2690,7 @@ int main(int argc, char **argv)
     sigemptyset(&stop_action.sa_mask);
     sigaction(SIGTERM, &stop_action, NULL);
     struct playback_options options = parse_playback_options(argc, argv);
+    log_seek_phase("exec");
     panel_state = options.panel;
     title_settings_key(argv[1], title_key, sizeof(title_key));
     {
@@ -2692,6 +2729,7 @@ int main(int argc, char **argv)
         int resolved = resolve_jellyfin_input(argv[1],
                                               options.jellyfin_resumed,
                                               input_url, sizeof(input_url));
+        log_seek_phase("jellyfin");
         if (stop_requested)
             return 0;
         if (resolved == JF_BROKEN_ITEM)
@@ -2721,6 +2759,7 @@ int main(int argc, char **argv)
         return strncmp(input, "http", 4) == 0 ? EXIT_SOURCE_FAILED : 2;
     }
     volume_pipeline = pipeline;
+    log_seek_phase("pipeline_open");
     if (options.start_us > 0) {
         /* Playback starts at the keyframe nearest to the requested time. */
         printf("seek_keyframe requested_us=%" PRId64 " start_us=%" PRId64
@@ -2770,6 +2809,8 @@ int main(int argc, char **argv)
     (void)execute_transfer;
     (void)cleanup_vulkan;
 
+    /* A seek that reopens the decoder starts over here (see below). */
+open_decoder:
     video_fd = open("/dev/video-dec0", O_RDWR | O_NONBLOCK | O_CLOEXEC);
     if (video_fd < 0)
         fail_errno("open /dev/video-dec0");
@@ -2876,7 +2917,7 @@ int main(int argc, char **argv)
     uint64_t seek_preroll_drops = 0;
     struct timing_stats decode_stats = {0};
     double maximum_feed_lateness_ms = 0.0;
-    double seek_started = 0.0;
+    double seek_started = seek_requested_at;
 
     while (!last_seen) {
         if (stop_requested) {
@@ -2902,9 +2943,9 @@ int main(int argc, char **argv)
             !options.no_seek_in_place && !layout.tp10) {
             /* Seek within the session (stateful decoder seek: both queues
              * off, coded data from the new keyframe, queues on again); a
-             * failure falls back to the restart below. Not with Main10
-             * (TP10): Iris refused STREAMON every time, also with only the
-             * OUTPUT queue stopped and restarted. */
+             * failure falls back to reopening the decoder below. Not with
+             * Main10 (TP10): Iris refused STREAMON every time, also with
+             * only the OUTPUT queue stopped and restarted. */
             send_renderer_message(NV12_IPC_SEEKING, 0, 0);
             enum v4l2_buf_type output_type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
             enum v4l2_buf_type capture_type =
@@ -3199,6 +3240,7 @@ int main(int argc, char **argv)
                         printf("seek_latency_ms=%.0f\n",
                                (monotonic_seconds() - seek_started) * 1000.0);
                         seek_started = 0.0;
+                        seek_requested_at = 0.0;
                     }
                     if (!audio_started && options.start_paused) {
                         /* The audio clock starts with the next "play". */
@@ -3378,11 +3420,41 @@ int main(int argc, char **argv)
                 close(captures[i].dma_buf_fd) < 0)
                 fail_errno("close CAPTURE DMA-BUF control");
         media_packet_unref(&next_packet);
+        if (transport.requested != NV12_ACTION_BACK && capture_started) {
+            /* Seek by reopening the decoder: the source stays open (opening
+             * it again for a restart took about a second for 8K over
+             * Jellyfin), jumps to the new keyframe, and Iris is set up as
+             * at the start. A freshly opened Iris accepts what it refused
+             * after a seek in place. The renderer keeps the held frame
+             * until the new buffers arrive. */
+            if (media_pipeline_seek(pipeline, transport.requested_start_us,
+                                    transport.from_us, true, pipeline_error,
+                                    sizeof(pipeline_error)) == 0) {
+                options.start_us = media_pipeline_start_us(pipeline);
+                options.start_paused = transport.paused;
+                options.adopt_renderer_fd = renderer_fd;
+                options.adopt_renderer_pid = renderer_pid;
+                if (panel_state.valid)
+                    options.panel = panel_state;
+                keep_view(&options);
+                memset(renderer_outstanding, 0,
+                       sizeof(renderer_outstanding));
+                capture_queue_closed = false;
+                seek_requested_at = transport.requested_at;
+                printf("decoder_reopen requested_us=%" PRId64
+                       " start_us=%" PRId64 "\n",
+                       transport.requested_start_us, options.start_us);
+                log_seek_phase("source_seek");
+                goto open_decoder;
+            }
+            fprintf(stderr, "seek: %s\n", pipeline_error);
+        }
         volume_pipeline = NULL;
         media_pipeline_close(&pipeline);
         if (transport.requested == NV12_ACTION_BACK)
             return 0;
         options.seek_from_us = transport.from_us;
+        seek_requested_at = transport.requested_at;
         restart_session(argv, &options, transport.requested_start_us,
                         transport.paused);
     }
