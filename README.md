@@ -55,9 +55,10 @@ Frame the bundled SteamVR loader is used; elsewhere the build uses the normal
 use `-std=c11 -O2 -Wall -Wextra -Werror`.
 
 The PCVR work currently covers the OpenXR runtime and controller layer (Index,
-Touch, Windows Mixed Reality, Vive and Cosmos). Actual video playback remains
-dependent on a decoder that exports linear NV12 DMA-BUFs; the built-in Iris
-decoder is Frame-specific.
+Touch, Windows Mixed Reality, Vive and Cosmos), plus Vulkan-Video
+capability checks for H.264 High and HEVC Main with shader-samplable NV12
+output on the OpenXR GPU. The actual Vulkan-Video packet/session path is
+still being integrated; the built-in Iris decoder is Frame-specific.
 
 ```sh
 src/player/build-stereonaut-session.sh   # session, renderer (XR host), launcher, shaders

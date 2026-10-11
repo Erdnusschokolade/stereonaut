@@ -127,9 +127,11 @@ bounded playback without browsing, which is what the hardware tests use.
 The OpenXR host also suggests the standardized SteamVR PC controller profiles
 (Valve Index, Meta/Oculus Touch, Windows Mixed Reality and HTC Vive/Cosmos).
 The ordinary Linux OpenXR loader is selected automatically at build time; the
-Frame's bundled loader remains the default on the Frame. PCVR playback still
-needs a decoder that can export linear NV12 DMA-BUFs, while the integrated
-Iris decoder is specific to the Frame.
+Frame's bundled loader remains the default on the Frame. The host probes
+H.264 High and HEVC Main Vulkan-Video profiles on its OpenXR-selected GPU and
+requires an optimal, shader-samplable NV12 decode target. The actual Vulkan
+Video packet/session path is still being integrated; the current player path
+uses Frame-specific Iris DMA-BUFs.
 
 The session seeks without restarting: for Iris it stops both V4L2 queues,
 seeks the pipeline, requeues every CAPTURE buffer the renderer does not show

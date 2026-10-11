@@ -31,6 +31,7 @@
 #include "title-settings.h"
 #include "trickplay.h"
 #include "ui-draw.h"
+#include "vulkan-video.h"
 #include "nv12-playback-ipc.h"
 #include "player-ui-ipc.h"
 
@@ -170,7 +171,10 @@ struct app {
     VkPhysicalDevice physical;
     VkDevice device;
     VkQueue queue;
+    VkQueue video_queue;
     uint32_t queue_family;
+    struct vulkan_video_support vulkan_video;
+    bool dma_buf_import;
     VkCommandPool command_pool;
     VkCommandBuffer command;
     VkFence fence;
@@ -691,6 +695,8 @@ static void apply_init(struct app *app, const struct nv12_ipc_message *message,
               app->coded_width % 3U == 0 &&
               app->video_stride == app->coded_width / 3U * 4U),
          "unsupported video pixel format in IPC contract");
+    need(app->dma_buf_import,
+         "this Vulkan device cannot import the Frame DMA-BUF video path");
     app->projection_mode = message->projection_mode;
     app->stereo_layout = message->stereo_layout;
     app->swap_eyes = message->swap_eyes != 0;
@@ -1418,23 +1424,62 @@ static void initialize_xr_vulkan(struct app *app)
         }
     free(families);
     need(found, "OpenXR Vulkan device has no graphics queue");
-    const char *device_extensions[] = {
+    app->vulkan_video = vulkan_video_probe(app->physical);
+    printf("vulkan_video queue=%d family=%u h264=%d hevc=%d av1=%d\n",
+           app->vulkan_video.queue, app->vulkan_video.queue_family,
+           app->vulkan_video.h264, app->vulkan_video.hevc,
+           app->vulkan_video.av1);
+    const char *dma_buf_extensions[] = {
         VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME,
         VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME,
         VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
         VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME,
         VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME,
-        VK_KHR_SAMPLER_YCBCR_CONVERSION_EXTENSION_NAME,
     };
-    for (size_t i = 0; i < ARRAY_COUNT(device_extensions); ++i)
-        need(has_device_extension(app->physical, device_extensions[i]),
-             "required NV12 DMA-BUF Vulkan extension is missing");
+    app->dma_buf_import = true;
+    for (size_t i = 0; i < ARRAY_COUNT(dma_buf_extensions); ++i)
+        if (!has_device_extension(app->physical, dma_buf_extensions[i]))
+            app->dma_buf_import = false;
+    VkPhysicalDeviceProperties physical_properties;
+    vkGetPhysicalDeviceProperties(app->physical, &physical_properties);
+    bool ycbcr_extension = has_device_extension(
+        app->physical, VK_KHR_SAMPLER_YCBCR_CONVERSION_EXTENSION_NAME);
+    need(ycbcr_extension ||
+             VK_VERSION_MAJOR(physical_properties.apiVersion) > 1 ||
+             (VK_VERSION_MAJOR(physical_properties.apiVersion) == 1 &&
+              VK_VERSION_MINOR(physical_properties.apiVersion) >= 1),
+         "Vulkan device lacks sampler YCbCr conversion");
+    const char *device_extensions[12];
+    uint32_t device_extension_count = 0;
+    if (app->dma_buf_import)
+        for (size_t i = 0; i < ARRAY_COUNT(dma_buf_extensions); ++i)
+            device_extensions[device_extension_count++] =
+                dma_buf_extensions[i];
+    if (ycbcr_extension)
+        device_extensions[device_extension_count++] =
+            VK_KHR_SAMPLER_YCBCR_CONVERSION_EXTENSION_NAME;
+    device_extension_count += vulkan_video_extensions(
+        &app->vulkan_video, device_extensions + device_extension_count,
+        ARRAY_COUNT(device_extensions) - device_extension_count);
+    need(device_extension_count <= ARRAY_COUNT(device_extensions),
+         "too many Vulkan device extensions");
     float priority = 1.0f;
-    VkDeviceQueueCreateInfo queue_info = {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-        .queueFamilyIndex = app->queue_family, .queueCount = 1, .pQueuePriorities = &priority};
+    VkDeviceQueueCreateInfo queue_infos[2] = {{
+        .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+        .queueFamilyIndex = app->queue_family, .queueCount = 1,
+        .pQueuePriorities = &priority,
+    }};
+    uint32_t queue_count = 1;
+    if (app->vulkan_video.queue &&
+        app->vulkan_video.queue_family != app->queue_family)
+        queue_infos[queue_count++] = (VkDeviceQueueCreateInfo){
+            .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+            .queueFamilyIndex = app->vulkan_video.queue_family,
+            .queueCount = 1, .pQueuePriorities = &priority,
+        };
     VkDeviceCreateInfo vk_device_info = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-        .queueCreateInfoCount = 1, .pQueueCreateInfos = &queue_info,
-        .enabledExtensionCount = ARRAY_COUNT(device_extensions),
+        .queueCreateInfoCount = queue_count, .pQueueCreateInfos = queue_infos,
+        .enabledExtensionCount = device_extension_count,
         .ppEnabledExtensionNames = device_extensions};
     XrVulkanDeviceCreateInfoKHR xr_device_info = {
         .type = XR_TYPE_VULKAN_DEVICE_CREATE_INFO_KHR, .systemId = app->system,
@@ -1444,9 +1489,12 @@ static void initialize_xr_vulkan(struct app *app)
     need_vk("xrCreateVulkanDeviceKHR Vulkan", vk_result);
     vkGetDeviceQueue(app->device, app->queue_family, 0, &app->queue);
     need(app->queue != VK_NULL_HANDLE, "vkGetDeviceQueue returned null");
-    VkPhysicalDeviceProperties properties;
-    vkGetPhysicalDeviceProperties(app->physical, &properties);
-    printf("openxr_vulkan_device=%s queue_family=%u\n", properties.deviceName, app->queue_family);
+    if (app->vulkan_video.queue)
+        vkGetDeviceQueue(app->device, app->vulkan_video.queue_family, 0,
+                         &app->video_queue);
+    printf("openxr_vulkan_device=%s queue_family=%u dma_buf_import=%d\n",
+           physical_properties.deviceName, app->queue_family,
+           app->dma_buf_import);
     app->import_semaphore_fd = (PFN_vkImportSemaphoreFdKHR)
         vkGetDeviceProcAddr(app->device, "vkImportSemaphoreFdKHR");
     app->get_memory_fd_properties = (PFN_vkGetMemoryFdPropertiesKHR)
@@ -1454,9 +1502,10 @@ static void initialize_xr_vulkan(struct app *app)
     app->get_modifier_properties = (PFN_vkGetImageDrmFormatModifierPropertiesEXT)
         vkGetDeviceProcAddr(app->device,
                             "vkGetImageDrmFormatModifierPropertiesEXT");
-    need(app->import_semaphore_fd && app->get_memory_fd_properties &&
-             app->get_modifier_properties,
-         "required external-memory entry point is missing");
+    if (app->dma_buf_import)
+        need(app->import_semaphore_fd && app->get_memory_fd_properties &&
+                 app->get_modifier_properties,
+             "required external-memory entry point is missing");
 }
 
 static void initialize_swapchain(struct app *app)
@@ -1719,35 +1768,44 @@ static void video_levels_uniform(uint32_t levels, float out[4])
  * the shader applies the title's levels and BT.709. */
 static void create_video_sampler(struct app *app)
 {
-    VkDrmFormatModifierPropertiesListEXT list = {
-        .sType = VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT,
-    };
-    VkFormatProperties2 format_properties = {
-        .sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2, .pNext = &list,
-    };
-    vkGetPhysicalDeviceFormatProperties2(
-        app->physical, VK_FORMAT_G8_B8R8_2PLANE_420_UNORM,
-        &format_properties);
-    need(list.drmFormatModifierCount > 0, "NV12 exposes no DRM modifiers");
-    list.pDrmFormatModifierProperties =
-        calloc(list.drmFormatModifierCount,
-               sizeof(*list.pDrmFormatModifierProperties));
-    need(list.pDrmFormatModifierProperties != NULL,
-         "allocate NV12 modifier properties");
-    vkGetPhysicalDeviceFormatProperties2(
-        app->physical, VK_FORMAT_G8_B8R8_2PLANE_420_UNORM,
-        &format_properties);
     VkFormatFeatureFlags features = 0;
-    for (uint32_t i = 0; i < list.drmFormatModifierCount; ++i) {
-        VkDrmFormatModifierPropertiesEXT *item =
-            &list.pDrmFormatModifierProperties[i];
-        if (item->drmFormatModifier == DRM_FORMAT_MOD_LINEAR &&
-            item->drmFormatModifierPlaneCount == 2)
-            features = item->drmFormatModifierTilingFeatures;
+    if (app->dma_buf_import) {
+        VkDrmFormatModifierPropertiesListEXT list = {
+            .sType = VK_STRUCTURE_TYPE_DRM_FORMAT_MODIFIER_PROPERTIES_LIST_EXT,
+        };
+        VkFormatProperties2 format_properties = {
+            .sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2, .pNext = &list,
+        };
+        vkGetPhysicalDeviceFormatProperties2(
+            app->physical, VK_FORMAT_G8_B8R8_2PLANE_420_UNORM,
+            &format_properties);
+        need(list.drmFormatModifierCount > 0,
+             "NV12 exposes no DRM modifiers");
+        list.pDrmFormatModifierProperties = calloc(
+            list.drmFormatModifierCount,
+            sizeof(*list.pDrmFormatModifierProperties));
+        need(list.pDrmFormatModifierProperties != NULL,
+             "allocate NV12 modifier properties");
+        vkGetPhysicalDeviceFormatProperties2(
+            app->physical, VK_FORMAT_G8_B8R8_2PLANE_420_UNORM,
+            &format_properties);
+        for (uint32_t i = 0; i < list.drmFormatModifierCount; ++i) {
+            VkDrmFormatModifierPropertiesEXT *item =
+                &list.pDrmFormatModifierProperties[i];
+            if (item->drmFormatModifier == DRM_FORMAT_MOD_LINEAR &&
+                item->drmFormatModifierPlaneCount == 2)
+                features = item->drmFormatModifierTilingFeatures;
+        }
+        free(list.pDrmFormatModifierProperties);
+    } else {
+        VkFormatProperties format_properties;
+        vkGetPhysicalDeviceFormatProperties(
+            app->physical, VK_FORMAT_G8_B8R8_2PLANE_420_UNORM,
+            &format_properties);
+        features = format_properties.optimalTilingFeatures;
     }
-    free(list.pDrmFormatModifierProperties);
     need(features & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT,
-         "linear two-plane NV12 is not sampleable");
+         "two-plane NV12 is not sampleable");
     need(features &
              VK_FORMAT_FEATURE_SAMPLED_IMAGE_YCBCR_CONVERSION_LINEAR_FILTER_BIT,
          "linear-filtered NV12 YCbCr conversion is unsupported");
