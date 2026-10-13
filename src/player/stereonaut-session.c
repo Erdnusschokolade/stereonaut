@@ -2732,8 +2732,8 @@ int main(int argc, char **argv)
     }
     bool detect_format = !options.format_source_set &&
                          format_source == NV12_FORMAT_SOURCE_DEFAULT;
-    /* Opt-in AV1 software decoding: the demuxer accepts AV1 and the
-     * Jellyfin profile offers it (decoded-video.h). */
+    /* AV1 software decoding unless switched off: the demuxer accepts AV1
+     * and the Jellyfin profile offers it (decoded-video.h). */
     if (settings_get_bool("av1_software", true))
         setenv(AV1_SOFTWARE_ENV, "1", 1);
     char pipeline_error[512] = {0};

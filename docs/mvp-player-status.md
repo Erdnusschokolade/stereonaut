@@ -1,6 +1,6 @@
 # Stereonaut – Projektstand
 
-Stand: 2026-10-11, Branch `main` (zuvor `player/mvp` und
+Stand: 2026-10-13, Branch `main` (zuvor `player/mvp` und
 `hardware/main10-baseline`)
 
 Der erste vollständige Player (MVP) ist abgeschlossen; er wird
@@ -18,8 +18,8 @@ Audio:  libavcodec/libswresample -> 48 kHz S16 -> ALSA (Master-Clock)
 ```
 
 Jellyfin liefert Direct Play für diese Formate und transkodiert alles andere
-nach HEVC Main 8 (Server-Grenze 4096 px Breite). Experimentell und nur nach
-Einschalten decodiert dav1d AV1 bis 4K auf der CPU (siehe unten).
+nach HEVC Main 8 (Server-Grenze 4096 px Breite). Experimentell decodiert
+dav1d AV1 bis 4K auf der CPU (Standard an, siehe unten).
 
 ## Im Headset bestätigt
 
@@ -91,10 +91,24 @@ geprüft:
   Verluste, Seek 25 ms lokal. Im Headset nur mit dem Frame per Streaming
   geprüft (siehe oben), andere PC-Headsets ungetestet.
 - Experimentell: AV1 8 Bit bis 4096×2160 per Software (dav1d), Schalter
-  „AV1 bis 4K per CPU“ im Reiter „Ansicht“ (Standard aus, gilt ab dem
-  nächsten Titel); Jellyfin spielt solche Titel dann direkt statt zu
+  „AV1 bis 4K per CPU“ unter Einstellungen → Wiedergabe (Standard an, gilt
+  ab dem nächsten Titel); Jellyfin spielt solche Titel dann direkt statt zu
   transkodieren. Ohne Headset bis 60 fps ohne Verluste, siehe
   `docs/hardware-investigation.md`.
+- Passthrough: Wo kein Video liegt (Browser-Hintergrund, um die flache
+  Leinwand, außerhalb von 180° oder Fisheye), zeigt sich der Raum, sofern
+  SteamVR `XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND` anbietet (Frame seit dem
+  SteamVR-Update vom 2026-10-10). Schalter für alle Titel unter
+  Einstellungen → Wiedergabe und als Knopf auf der Bedienkarte, Abdunkeln
+  des Raums einstellbar.
+- Chroma-Key je Titel im Reiter „Passthrough“: Grün, Blau oder eine im
+  Video mit dem Trigger aufgenommene Farbe (Schwelle, Weichheit, Farbsaum).
+- Controller-Modelle von SteamVR (`XR_EXT_render_model`) mit bewegten
+  Tasten und Sticks sowie ein Zeigestrahl zum Panel bzw. Video.
+- Einstellungsseite über dem Browser („Einstellungen“ in der Leiste) mit
+  Spul-Vorschau, Panel-Ausblenden, AV1, Passthrough, Autofokus-Details,
+  Tastenbelegung und Sprache; das Popup im Player behält, was den Titel
+  betrifft.
 
 ## Bekannte Grenzen
 
@@ -105,8 +119,6 @@ geprüft:
   sekundengenau. Bei 10 s Keyframe-Abstand springen ±10 s also um 10 s,
   bei längeren Abständen weiter. Eine lückenlose A-B-Schleife bräuchte
   zusätzlich einen Bitstream-Splice mit durchlaufender Zeitachse.
-- Passthrough ist nicht umgesetzt. SteamVR bietet auf dem Frame inzwischen
-  `XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND` an (Abfrage 2026-10-10).
 - Parallel laufende Player mit Iris-Nutzung (Playa) führen zu
   `VIDIOC_REQBUFS OUTPUT: ENOMEM`.
 - Gelegentliches Stocken bei einem HLS-Transkodier-Titel ist ungeklärt.

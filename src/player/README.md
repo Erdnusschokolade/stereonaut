@@ -211,14 +211,13 @@ the server (Quick Connect, listings, `PlaybackInfo`) and the session plays the
 resulting Direct Play or HLS URL.
 
 Experimental AV1 on the Frame (`decoded-video.c`, `DECODED_VIDEO_DAV1D`):
-if `av1_software` is set in
-`settings.json` (toggle "AV1 up to 4K on the CPU" on the settings page),
-the session
+unless `av1_software` is off in `settings.json` (toggle "AV1 up to 4K on
+the CPU" on the settings page, on by default), the session
 exports `STEREONAUT_AV1`, the demuxer accepts 8-bit AV1 up to 4096×2160 and
 the Jellyfin device profile offers it for Direct Play. Such titles skip Iris:
 a worker thread decodes with dav1d (`max_frame_delay=8`) and converts each
 frame to NV12 in one of eight memfd-backed `udmabuf` DMA-BUFs, which the
 renderer imports exactly like Iris CAPTURE buffers. `play_decoded` in the
 session reuses the renderer protocol, audio-clock pacing and seek re-exec of
-the Iris loop. For a test run without changing the setting, start the
-launcher with `STEREONAUT_AV1=1`.
+the Iris loop. With the setting off, `STEREONAUT_AV1=1` on the launcher
+still enables it for a test run.
