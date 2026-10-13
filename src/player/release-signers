@@ -1,0 +1,3 @@
+# Keys whose signatures release packages may carry (ssh-keygen -Y verify,
+# namespace stereonaut-release). SHA256:gaZx5m5IhP22KDK0Rmo2t1sFce7aX8AQZWLa9ID7l7o
+stereonaut-release ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJRLht/mANTa0u6OjUT0PE6xWjvSorF0v7mvYAM+UbSy
