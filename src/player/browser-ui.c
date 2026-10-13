@@ -409,12 +409,16 @@ static void draw_rail(struct browser_ui *ui, struct ui_canvas *canvas,
         {UI_ICON_SETTINGS, N_("Settings")},
     };
     int active = rail_active(ui);
-    for (int i = 0; i < RAIL_COUNT; ++i)
-        if (hover < 0 || hover == ID_RAIL + i)
-            draw_rail_item(ui, canvas,
-                           RAIL_FIRST_Y + i * (RAIL_ITEM_H + 12),
-                           items[i].icon, tr(items[i].label), i == active,
-                           hover == ID_RAIL + i);
+    for (int i = 0; i < RAIL_COUNT; ++i) {
+        if (hover >= 0 && hover != ID_RAIL + i)
+            continue;
+        int y = RAIL_FIRST_Y + i * (RAIL_ITEM_H + 12);
+        draw_rail_item(ui, canvas, y, items[i].icon, tr(items[i].label),
+                       i == active, hover == ID_RAIL + i);
+        if (i == RAIL_SETTINGS && ui->settings_badge)
+            ui_fill_circle(canvas, RAIL_ITEM_X + RAIL_ITEM_W - 32,
+                           y + RAIL_ITEM_H / 2.0f, 9, color_accent);
+    }
     if (hover < 0 || hover == ID_EXIT)
         draw_rail_item(ui, canvas, RAIL_EXIT_Y, UI_ICON_POWER, tr("Quit"),
                        false, hover == ID_EXIT);

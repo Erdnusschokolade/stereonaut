@@ -55,6 +55,23 @@ Frame specifically and has not been tried on other headsets.
 - Experimental, on by default: AV1 (8 bit, up to 4096×2160) decoded on the
   CPU with dav1d, since the shipped kernel exposes no AV1 hardware decoder.
 
+## Installing on the Steam Frame
+
+In desktop mode, open Konsole and run:
+
+```sh
+cd "$(mktemp -d)"
+curl -LO https://github.com/Erdnusschokolade/stereonaut/releases/latest/download/stereonaut-steamos-aarch64.tar.gz
+curl -LO https://github.com/Erdnusschokolade/stereonaut/releases/latest/download/stereonaut-steamos-aarch64.tar.gz.sha256
+sha256sum -c stereonaut-steamos-aarch64.tar.gz.sha256 &&
+  tar -xzf stereonaut-steamos-aarch64.tar.gz && ./stereonaut-*/install.sh
+```
+
+Stereonaut then appears in the SteamVR library. Later versions install from
+the headset: Settings → Updates checks the release page (at start, unless
+switched off) and installs a newer release after verifying its signature,
+then restarts.
+
 ## Building
 
 The code is built on the Steam Frame itself or on Linux with a PCVR OpenXR
@@ -92,7 +109,10 @@ same SteamOS build (an atomic image, so the libraries match), checks the
 libraries with `ldd` on any other build and rebuilds from the included
 sources if one is missing, then installs as below and adds the SteamVR
 library entry unless it exists (`--no-steamvr` skips it, `--rebuild`
-always rebuilds).
+always rebuilds). `tools/release/publish-release.sh DIRECTORY KEY` signs
+the packages (`ssh-keygen -Y sign`, checked against
+`src/player/release-signers` in the package) and publishes them with `gh`
+under the version, which must be a pushed git tag.
 
 HEVC Main10 needs a Turnip (Mesa) build with TP10 texture formats; see
 `tools/mesa-tp10/` and `docs/main10-linear-output.md`. Without it, Main10 is

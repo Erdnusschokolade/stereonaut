@@ -219,6 +219,12 @@ static int preview_player(const char *path, int hover, bool popup, int tab)
                             : -1,
         .language = i18n_choice(),
         .system_language = i18n_detect(),
+        .update_installed = "v0.1.0",
+        .update_latest = "v0.2.0",
+        .update_status = tr("Downloading …"),
+        .update_can_check = true,
+        .update_can_install = true,
+        .update_auto = true,
         .debug_text = "Gaze: eye · disparity +11.40° · score 0.98 · "
                       "structure 0.0020 · valid · offset 7.80°",
     };

@@ -206,6 +206,23 @@ and unused entries and translations whose printf conversions differ;
 `--list CODE` prints the missing ones as entries to fill in. The launcher
 sends its messages in English and the host translates them.
 
+Updates (settings page, tab "Updates"): `updater.c` runs
+`stereonaut-update.sh` from the install directory as a child process and
+reads its lines without blocking. `check` follows GitHub's redirect of
+`/releases/latest` to the tag (no API, no JSON); `install TAG` downloads
+`stereonaut-steamos-ARCH.tar.gz` and its `.sig`, verifies the signature
+with `ssh-keygen -Y verify` against `release-signers` (namespace
+`stereonaut-release`), checks that the package's MANIFEST holds the
+requested version (a signed older package cannot pass for a newer tag),
+and runs its `install.sh`. The host then asks the launcher for a restart
+(`PLAYER_UI_RESTART_REQUESTED`); the launcher ends the host and executes
+`~/.local/bin/stereonaut` again in the same process, which SteamVR keeps as
+the running app. The installed version is the MANIFEST of the release
+package; a build from the sources has none. Without `release-signers`
+updates are off. `STEREONAUT_RELEASES` (a base URL) and
+`STEREONAUT_RELEASE_SIGNERS` replace the release page and the keys for
+tests.
+
 Jellyfin titles are addressed as `jf:item:<id>:<folder>`; `jellyfin.c` talks to
 the server (Quick Connect, listings, `PlaybackInfo`) and the session plays the
 resulting Direct Play or HLS URL.

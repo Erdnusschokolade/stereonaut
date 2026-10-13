@@ -13,6 +13,9 @@ enum player_ui_result_type {
     /* "Back" while the title is still loading: the session cannot answer
      * then, so the launcher stops it. */
     PLAYER_UI_STOP_REQUESTED = 3,
+    /* An update is installed: the launcher ends the host and starts the
+     * installed Stereonaut again. */
+    PLAYER_UI_RESTART_REQUESTED = 4,
 };
 
 struct player_ui_result {

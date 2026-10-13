@@ -40,6 +40,22 @@ install -m 0644 \
     "$build_dir/laser.frag.spv" \
     "$install_dir/"
 
+# Updates from the release page (settings page): the script, the keys a
+# release must be signed with and, for a release package, its MANIFEST with
+# the installed version. A build from the sources has no version.
+project_dir=$(CDPATH= cd -- "$script_dir/../.." && pwd)
+install -m 0755 "$script_dir/stereonaut-update.sh" "$install_dir/"
+if [ -f "$script_dir/release-signers" ]; then
+    install -m 0644 "$script_dir/release-signers" "$install_dir/"
+else
+    rm -f "$install_dir/release-signers"
+fi
+if [ -f "$project_dir/MANIFEST" ]; then
+    install -m 0644 "$project_dir/MANIFEST" "$install_dir/"
+else
+    rm -f "$install_dir/MANIFEST"
+fi
+
 # Optional: the Turnip build with TP10 sampling (tools/mesa-tp10), copied to
 # build/libvulkan_freedreno.so. Only Stereonaut loads it; it enables native
 # HEVC Main10. Without it Main10 is transcoded by Jellyfin as before.
@@ -57,12 +73,14 @@ fi
 # update has replaced a library it was linked against (see below). Skipped
 # when this script already runs from that copy.
 source_dir="${XDG_DATA_HOME:-$HOME/.local/share}/stereonaut/source"
-project_dir=$(CDPATH= cd -- "$script_dir/../.." && pwd)
 if [ "$project_dir" != "$source_dir" ]; then
     rm -rf "$source_dir"
     install -d "$source_dir/src" "$source_dir/tools"
+    manifest=
+    [ -f "$project_dir/MANIFEST" ] && manifest=MANIFEST
     (cd "$project_dir" && tar -cf - --exclude=src/player/build \
-        src/player tools/openxr-playback) | tar -C "$source_dir" -xf -
+        src/player tools/openxr-playback $manifest) |
+        tar -C "$source_dir" -xf -
     printf 'installed sources for rebuilds: %s\n' "$source_dir"
 fi
 
@@ -76,7 +94,13 @@ set -eu
 state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/stereonaut"
 mkdir -p "$state_dir"
 log="$state_dir/launcher.log"
-exec >"$log" 2>&1
+# After an update the launcher starts this again: keep the update's lines.
+if [ -n "${STEREONAUT_RESTART:-}" ]; then
+    exec >>"$log" 2>&1
+    echo "--- restarted after an update"
+else
+    exec >"$log" 2>&1
+fi
 source_dir="${XDG_DATA_HOME:-$HOME/.local/share}/stereonaut/source"
 cd "$HOME/.local/lib/stereonaut"
 

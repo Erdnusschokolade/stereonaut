@@ -135,6 +135,8 @@ _Static_assert(PLAYER_UI_ADJUST_END <= PLAYER_UI_BINDING,
 _Static_assert(PLAYER_UI_BINDING + BINDING_ACTION_COUNT <=
                    PLAYER_UI_BINDING_CLEAR,
                "binding controls overlap");
+_Static_assert(PLAYER_UI_TAB + PLAYER_UI_TAB_COUNT <= PLAYER_UI_TAB_END,
+               "tab controls overlap");
 
 static const struct ui_color color_card = UI_RGBA(17, 18, 22, 225);
 static const struct ui_color color_border = UI_RGBA(255, 255, 255, 18);
@@ -398,6 +400,49 @@ static void layout_language(const struct player_ui_state *state,
                      "exists."));
 }
 
+/* Updates tab: versions and the check (first column), the status and the
+ * update (second), the check at start (third). */
+static void layout_updates(const struct player_ui_state *state,
+                           struct popup_layout *layout)
+{
+    add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(0), 0,
+               tr("Installed version"));
+    add_widget(layout, WIDGET_TEXT, COLUMN_X(0), ROW_LABEL_Y(0) + 32,
+               COLUMN_W,
+               state->update_installed && state->update_installed[0]
+                   ? state->update_installed
+                   : tr("built from the sources"));
+    add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(1), 0,
+               tr("Newest release"));
+    add_widget(layout, WIDGET_TEXT, COLUMN_X(0), ROW_LABEL_Y(1) + 32,
+               COLUMN_W,
+               state->update_latest && state->update_latest[0]
+                   ? state->update_latest
+                   : tr("not known yet"));
+    if (state->update_can_check)
+        add_chip(layout, PLAYER_UI_UPDATE_CHECK, COLUMN_X(0), ROW_CHIP_Y(2),
+                 COLUMN_W, tr("Check now"), false);
+
+    add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(0), 0,
+               tr("Status"));
+    if (state->update_status && state->update_status[0])
+        add_paragraph(layout, COLUMN_X(1), ROW_LABEL_Y(0) + 32, 4,
+                      state->update_status);
+    if (state->update_can_install)
+        add_chip(layout, PLAYER_UI_UPDATE_INSTALL, COLUMN_X(1),
+                 ROW_CHIP_Y(2), COLUMN_W, tr("Update now"), true);
+
+    static const char *const off_on[2] = {N_("Off"), N_("On")};
+    add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(0), 0,
+               tr("Check at start"));
+    add_chip_row(layout, 2, 0, 2, PLAYER_UI_UPDATE_AUTO, off_on,
+                 state->update_auto ? 1 : 0);
+    add_paragraph(layout, COLUMN_X(2), ROW_LABEL_Y(1) + 6, 4,
+                  tr("Updates come from the release page of Stereonaut and "
+                     "must carry its signature. Stereonaut restarts "
+                     "afterwards."));
+}
+
 static void layout_popup(const struct player_ui_state *state,
                          struct popup_layout *layout)
 {
@@ -406,7 +451,7 @@ static void layout_popup(const struct player_ui_state *state,
         N_("View"),     N_("Position"),  N_("Picture"),
         N_("Focus"),    N_("Passthrough"), N_("Info"),
         N_("Playback"), N_("Autofocus"), N_("Buttons"),
-        N_("Language"),
+        N_("Language"), N_("Updates"),
     };
     int first = state->settings_page ? PLAYER_UI_FIRST_SETTINGS_TAB : 0;
     int end = state->settings_page ? PLAYER_UI_TAB_COUNT
@@ -652,6 +697,8 @@ static void layout_popup(const struct player_ui_state *state,
         layout_buttons(state, layout);
     } else if (state->popup_tab == PLAYER_UI_TAB_LANGUAGE) {
         layout_language(state, layout);
+    } else if (state->popup_tab == PLAYER_UI_TAB_UPDATES) {
+        layout_updates(state, layout);
     }
 }
 

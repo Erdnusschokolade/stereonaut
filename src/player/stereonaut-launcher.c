@@ -303,6 +303,22 @@ int main(int argc, char **argv)
             shutdown_host();
             return 0;
         }
+        if (result.type == PLAYER_UI_RESTART_REQUESTED) {
+            /* The wrapper checks the libraries and starts the new
+             * launcher in the same process, which SteamVR keeps as the
+             * running app. */
+            shutdown_host();
+            char wrapper[PLAYER_UI_PATH_MAX];
+            const char *home = getenv("HOME");
+            snprintf(wrapper, sizeof(wrapper), "%s/.local/bin/stereonaut",
+                     home ? home : "");
+            printf("restart=%s\n", wrapper);
+            fflush(stdout);
+            setenv("STEREONAUT_RESTART", "1", 1);
+            execl(wrapper, wrapper, (char *)NULL);
+            perror("restart");
+            return 1;
+        }
         if (result.type != PLAYER_UI_FILE_SELECTED || !result.path[0]) {
             fprintf(stderr, "XR host returned unknown action\n");
             shutdown_host();

@@ -54,6 +54,7 @@ struct browser_ui {
     size_t restore_page;  /* page to show for the next listing */
     int hover;
     int detail;           /* listing index shown in the detail card or -1 */
+    bool settings_badge;  /* dot on "Settings": an update is available */
     bool pointer_visible;
     int pointer_x;
     int pointer_y;

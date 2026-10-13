@@ -52,7 +52,7 @@ cc -std=c11 -O2 -Wall -Wextra -Werror \
   "$script_dir/trickplay.c" "$script_dir/settings.c" \
   "$script_dir/title-settings.c" "$script_dir/local-thumbnail.c" \
   "$script_dir/controller-bindings.c" "$script_dir/render-models.c" \
-  "$script_dir/gltf-model.c" "$script_dir"/i18n*.c \
+  "$script_dir/gltf-model.c" "$script_dir/updater.c" "$script_dir"/i18n*.c \
   $(pkg-config --libs libcurl json-c freetype2 libjpeg libpng libavformat \
                 libavcodec libavutil) \
   -lvulkan -lm -pthread $openxr_loader

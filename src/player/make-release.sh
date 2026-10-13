@@ -11,7 +11,9 @@
 # means the same libraries, so install.sh installs the binaries as they are
 # there and checks the libraries (rebuilding if needed) elsewhere.
 # --turnip adds the TP10 Turnip (tools/mesa-tp10) for HEVC Main10.
-# Writes NAME.tar.gz and NAME.tar.gz.sha256 to OUTPUT_DIR (default: build).
+# Writes NAME.tar.gz, a copy named stereonaut-steamos-ARCH.tar.gz and their
+# .sha256 files to OUTPUT_DIR (default: build); sign and publish them with
+# tools/release/publish-release.sh.
 set -eu
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -28,7 +30,7 @@ while [ $# -gt 0 ]; do
         shift 2
         ;;
     -h | --help)
-        sed -n '2,15s/^# \{0,1\}//p' "$0"
+        sed -n '2,17s/^# \{0,1\}//p' "$0"
         exit 0
         ;;
     *)
@@ -115,6 +117,11 @@ EOF
 mkdir -p "$output_dir"
 archive="$output_dir/$name.tar.gz"
 tar -C "$work" -czf "$archive" "$name"
-(cd "$output_dir" && sha256sum "$name.tar.gz" >"$name.tar.gz.sha256")
+# The same package under a fixed name, so that
+# releases/latest/download/stereonaut-steamos-ARCH.tar.gz always works.
+stable="stereonaut-steamos-$arch.tar.gz"
+cp "$archive" "$output_dir/$stable"
+(cd "$output_dir" && sha256sum "$name.tar.gz" >"$name.tar.gz.sha256" &&
+    sha256sum "$stable" >"$stable.sha256")
 printf 'release package: %s (%s)\n' "$archive" "$(du -h "$archive" | cut -f1)"
-printf 'checksum: %s.sha256\n' "$archive"
+printf 'fixed name: %s/%s\n' "$output_dir" "$stable"

@@ -36,6 +36,7 @@
 #include "settings.h"
 #include "title-settings.h"
 #include "trickplay.h"
+#include "updater.h"
 #include "ui-draw.h"
 #include "nv12-playback-ipc.h"
 #include "player-ui-ipc.h"
@@ -446,6 +447,9 @@ struct app {
     int settings_hover;
     uint32_t *settings_cpu;
     int system_language; /* what "automatic" finds, see i18n_detect */
+    struct updater updater;
+    bool update_auto;          /* check for a release at start */
+    char update_status[256];   /* status line of the updates tab */
     float adjust[PLAYER_ADJUST_COUNT];   /* see player_adjust_info */
     char title_key[TITLE_KEY_SIZE];      /* titles.json entry, "" if none */
     /* Home: where the viewer looked when Stereonaut started or was last
@@ -2352,6 +2356,19 @@ static struct player_ui_state player_state(const struct app *app)
         .key_picking = app->key_picking,
         .language = i18n_choice(),
         .system_language = app->system_language,
+        .update_installed = app->updater.installed,
+        .update_latest = app->updater.latest,
+        .update_status = app->update_status,
+        .update_can_check = app->updater.usable &&
+                            (app->updater.state == UPDATER_IDLE ||
+                             app->updater.state == UPDATER_FAILED),
+        .update_can_install =
+            app->updater.usable && app->updater.latest[0] &&
+            (app->updater.state == UPDATER_IDLE ||
+             app->updater.state == UPDATER_FAILED) &&
+            (updater_available(&app->updater) ||
+             !app->updater.installed[0]),
+        .update_auto = app->update_auto,
         .bindings = app->bindings,
         .learn_action = app->learn_action,
         .debug_text = app->gaze_debug ? app->debug_text : NULL,
@@ -3383,6 +3400,62 @@ static void read_grips(struct app *app, const struct hand_input hands[2],
     }
 }
 
+/* Status line of the updates tab and the dot on "Settings". */
+static void refresh_update_status(struct app *app)
+{
+    const struct updater *updater = &app->updater;
+    char *text = app->update_status;
+    const size_t size = sizeof(app->update_status);
+    static const char *const phases[] = {
+        [UPDATER_PHASE_DOWNLOAD] = N_("Downloading …"),
+        [UPDATER_PHASE_VERIFY] = N_("Checking the signature …"),
+        [UPDATER_PHASE_UNPACK] = N_("Unpacking …"),
+        [UPDATER_PHASE_INSTALL] = N_("Installing …"),
+    };
+    text[0] = '\0';
+    if (!updater->usable)
+        snprintf(text, size, "%s",
+                 tr("Updates are not set up in this installation."));
+    else if (updater->state == UPDATER_CHECKING)
+        snprintf(text, size, "%s", tr("Looking for a new version …"));
+    else if (updater->state == UPDATER_INSTALLING)
+        snprintf(text, size, "%s", tr(phases[updater->phase]));
+    else if (updater->state == UPDATER_DONE)
+        snprintf(text, size, "%s", tr("Installed. Stereonaut restarts …"));
+    else if (updater->state == UPDATER_FAILED)
+        snprintf(text, size, tr("Failed: %s"), updater_error(updater));
+    else if (updater->checked && updater_available(updater))
+        snprintf(text, size, tr("Version %s is available."),
+                 updater->latest);
+    else if (updater->checked && !updater->installed[0])
+        snprintf(text, size, tr("Release %s can replace this build."),
+                 updater->latest);
+    else if (updater->checked)
+        snprintf(text, size, "%s", tr("Stereonaut is up to date."));
+    bool badge = updater_available(updater);
+    if (badge != app->browser.settings_badge) {
+        app->browser.settings_badge = badge;
+        app->browser.content_dirty = true;
+    }
+    app->browser.dirty = true;
+    app->ui_dirty = true;
+}
+
+/* Follows the update script; once an update is installed the launcher
+ * restarts Stereonaut (not in the middle of a title). */
+static void poll_updater(struct app *app)
+{
+    if (updater_poll(&app->updater))
+        refresh_update_status(app);
+    if (app->updater.state == UPDATER_DONE && !app->playing &&
+        !app->awaiting_command && !app->quit) {
+        printf("update installed; restarting\n");
+        app->awaiting_command = true;
+        send_control(app, PLAYER_UI_RESTART_REQUESTED, NULL, 0);
+        app->quit = true;
+    }
+}
+
 /* Controls of the player popup and of the settings page over the browser:
  * global settings, controller bindings, picture values and the popup tabs.
  * False if `action` is none of them. */
@@ -3472,6 +3545,17 @@ static bool apply_setting(struct app *app, int action)
         printf("language=%s choice=%s\n", i18n_languages[shown]->code,
                choice);
         browser_ui_relocalize(&app->browser);
+        refresh_update_status(app);
+    } else if (action == PLAYER_UI_UPDATE_CHECK) {
+        updater_check(&app->updater);
+        refresh_update_status(app);
+    } else if (action == PLAYER_UI_UPDATE_INSTALL) {
+        updater_install(&app->updater);
+        refresh_update_status(app);
+    } else if (action == PLAYER_UI_UPDATE_AUTO ||
+               action == PLAYER_UI_UPDATE_AUTO + 1) {
+        app->update_auto = action == PLAYER_UI_UPDATE_AUTO + 1;
+        settings_set_bool("update_check", app->update_auto);
     } else {
         return false;
     }
@@ -6407,6 +6491,8 @@ int main(int argc, char **argv)
     printf("language=%s choice=%s system=%s\n",
            i18n_languages[i18n_select(language)]->code, language,
            i18n_languages[app.system_language]->code);
+    updater_init(&app.updater);
+    app.update_auto = settings_get_bool("update_check", true);
     char browser_error[256] = {0};
     if (browser_ui_open(&app.browser, "root:", NULL, browser_error,
                         sizeof(browser_error)) < 0) {
@@ -6416,6 +6502,9 @@ int main(int argc, char **argv)
     app.trickplay = trickplay_create();
     load_preview_settings(&app);
     load_adjust(&app, true);
+    if (app.update_auto)
+        updater_check(&app.updater);
+    refresh_update_status(&app);
     initialize_xr_vulkan(&app);
     XrGraphicsBindingVulkan2KHR binding = {.type = XR_TYPE_GRAPHICS_BINDING_VULKAN2_KHR,
         .instance = app.instance, .physicalDevice = app.physical, .device = app.device, .queueFamilyIndex = app.queue_family, .queueIndex = 0};
@@ -6468,6 +6557,7 @@ int main(int argc, char **argv)
             }
         }
         browser_ui_update(&app.browser);
+        poll_updater(&app);
         poll_events(&app);
         hide_dashboard_at_startup(&app);
         if (app.quit)
@@ -6480,6 +6570,7 @@ int main(int argc, char **argv)
         send_control(&app, PLAYER_UI_EXIT_REQUESTED, NULL, 0);
     if (app.playing)
         end_playback(&app);
+    updater_close(&app.updater);
     browser_ui_close(&app.browser);
     player_ui_close(&app.player_ui);
     trickplay_destroy(app.trickplay);

@@ -11,7 +11,7 @@
  * (levels, brightness, contrast, saturation, gamma), focus (autofocus
  * strength), passthrough (environment, chroma key) and information.
  * The global settings (playback, autofocus details, controller buttons,
- * language)
+ * language, updates)
  * use the same popup as a page of their own, which the host shows over the
  * browser (player_ui_render_settings). The host owns all state and passes
  * it in; nothing here knows about OpenXR or Vulkan. */
@@ -91,6 +91,7 @@ enum player_ui_tab {
     PLAYER_UI_TAB_AUTOFOCUS, /* settings: autofocus details */
     PLAYER_UI_TAB_BUTTONS,  /* settings: controller bindings */
     PLAYER_UI_TAB_LANGUAGE, /* settings: language of the interface */
+    PLAYER_UI_TAB_UPDATES,  /* settings: updates from the release page */
     PLAYER_UI_TAB_COUNT,
 };
 
@@ -140,12 +141,16 @@ enum player_ui_control {
     PLAYER_UI_PASSTHROUGH = 180,      /* + 0 off, + 1 on (global) */
     PLAYER_UI_KEY_COLOR = 185,        /* + PLAYER_ADJUST_KEY_COLOR value */
     PLAYER_UI_KEY_PICK = 189,         /* pick the key colour in the video */
-    PLAYER_UI_TAB = 190,              /* + enum player_ui_tab */
     PLAYER_UI_SETTINGS_CLOSE = 200,   /* leaves the settings page */
     PLAYER_UI_PASSTHROUGH_TOGGLE = 201, /* card button */
     /* + 0 automatic, + 1 + index into i18n_languages. */
     PLAYER_UI_LANGUAGE = 210,
     PLAYER_UI_LANGUAGE_END = 230,
+    PLAYER_UI_UPDATE_CHECK = 231,
+    PLAYER_UI_UPDATE_INSTALL = 232,
+    PLAYER_UI_UPDATE_AUTO = 233,      /* + 0 off, + 1 on */
+    PLAYER_UI_TAB = 240,              /* + enum player_ui_tab */
+    PLAYER_UI_TAB_END = 270,
 };
 
 /* Seconds without input after which the panel hides during playback
@@ -190,6 +195,11 @@ struct player_ui_state {
      * I18N_AUTO) and the one "automatic" finds. */
     int language;
     int system_language;
+    /* Updates tab: installed version ("" = built from the sources), the
+     * newest release ("" = not known), a status line and what the buttons
+     * may do. */
+    const char *update_installed, *update_latest, *update_status;
+    bool update_can_check, update_can_install, update_auto;
     /* Controller bindings (BINDING_ACTION_COUNT, NULL = standard) and the
      * action waiting for buttons, or -1. */
     const struct binding *bindings;
