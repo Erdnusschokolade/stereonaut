@@ -2,6 +2,7 @@
 #include "player-ui.h"
 
 #include "controller-bindings.h"
+#include "i18n.h"
 #include "jellyfin.h"
 #include "nv12-playback-ipc.h"
 #include "ui-draw.h"
@@ -73,53 +74,53 @@ const int player_ui_preview_fovs[PLAYER_UI_PREVIEW_FOV_COUNT] = {
 const int player_ui_autohide[PLAYER_UI_AUTOHIDE_COUNT] = {0, 5, 15};
 
 const struct player_adjust_info player_adjust_info[PLAYER_ADJUST_COUNT] = {
-    [PLAYER_ADJUST_ZOOM] = {"Zoom", "zoom", -0.5f, 0.8f, 0.05f, 0.0f,
+    [PLAYER_ADJUST_ZOOM] = {N_("Zoom"), "zoom", -0.5f, 0.8f, 0.05f, 0.0f,
                             100.0f, "%+.0f cm", false},
-    [PLAYER_ADJUST_HEIGHT] = {"Höhe", "height", -0.5f, 0.5f, 0.05f, 0.0f,
+    [PLAYER_ADJUST_HEIGHT] = {N_("Height"), "height", -0.5f, 0.5f, 0.05f, 0.0f,
                               100.0f, "%+.0f cm", false},
-    [PLAYER_ADJUST_SLIDE] = {"Seitlich", "slide", -0.5f, 0.5f, 0.05f, 0.0f,
+    [PLAYER_ADJUST_SLIDE] = {N_("Sideways"), "slide", -0.5f, 0.5f, 0.05f, 0.0f,
                              100.0f, "%+.0f cm", false},
-    [PLAYER_ADJUST_TILT] = {"Neigung", "tilt", -90.0f, 90.0f, 5.0f, 0.0f,
+    [PLAYER_ADJUST_TILT] = {N_("Tilt"), "tilt", -90.0f, 90.0f, 5.0f, 0.0f,
                             1.0f, "%+.0f°", true},
-    [PLAYER_ADJUST_YAW] = {"Drehung", "yaw", -180.0f, 180.0f, 5.0f, 0.0f,
+    [PLAYER_ADJUST_YAW] = {N_("Turn"), "yaw", -180.0f, 180.0f, 5.0f, 0.0f,
                            1.0f, "%+.0f°", false},
-    [PLAYER_ADJUST_ROLL] = {"Kippen", "roll", -30.0f, 30.0f, 1.0f, 0.0f,
+    [PLAYER_ADJUST_ROLL] = {N_("Roll"), "roll", -30.0f, 30.0f, 1.0f, 0.0f,
                             1.0f, "%+.0f°", false},
-    [PLAYER_ADJUST_STEREO_X] = {"Stereo horiz.", "stereo_x", -3.0f, 3.0f,
+    [PLAYER_ADJUST_STEREO_X] = {N_("Stereo horiz."), "stereo_x", -3.0f, 3.0f,
                                 0.1f, 0.0f, 1.0f, "%+.1f°", false},
-    [PLAYER_ADJUST_STEREO_Y] = {"Stereo vert.", "stereo_y", -2.0f, 2.0f,
+    [PLAYER_ADJUST_STEREO_Y] = {N_("Stereo vert."), "stereo_y", -2.0f, 2.0f,
                                 0.1f, 0.0f, 1.0f, "%+.1f°", false},
-    [PLAYER_ADJUST_HEAD_MOTION] = {"Stärke", "head_motion", 0.0f, 1.5f,
+    [PLAYER_ADJUST_HEAD_MOTION] = {N_("Strength"), "head_motion", 0.0f, 1.5f,
                                    0.1f, 0.0f, 100.0f, "%.0f %%", true},
-    [PLAYER_ADJUST_AUTOFOCUS] = {"Autofokus", "autofocus", 0.0f, 1.0f, 0.1f,
-                                 0.0f, 100.0f, "%.0f %%", true},
-    [PLAYER_ADJUST_FOCUS_DISTANCE] = {"Näher als", "focus_distance", 0.2f,
-                                      1.0f, 0.05f, 0.6f, 100.0f, "%.0f cm",
-                                      true},
-    [PLAYER_ADJUST_FOCUS_HYSTERESIS] = {"Hysterese", "focus_hysteresis",
+    [PLAYER_ADJUST_AUTOFOCUS] = {N_("Autofocus"), "autofocus", 0.0f, 1.0f,
+                                 0.1f, 0.0f, 100.0f, "%.0f %%", true},
+    [PLAYER_ADJUST_FOCUS_DISTANCE] = {N_("Closer than"), "focus_distance",
+                                      0.2f, 1.0f, 0.05f, 0.6f, 100.0f,
+                                      "%.0f cm", true},
+    [PLAYER_ADJUST_FOCUS_HYSTERESIS] = {N_("Hysteresis"), "focus_hysteresis",
                                         0.0f, 0.5f, 0.05f, 0.15f, 100.0f,
                                         "%.0f %%", true},
-    [PLAYER_ADJUST_FOCUS_FADE] = {"Überblenden", "focus_fade", 0.0f, 3.0f,
+    [PLAYER_ADJUST_FOCUS_FADE] = {N_("Transition"), "focus_fade", 0.0f, 3.0f,
                                   0.1f, 1.0f, 1.0f, "%.1f s", true},
-    [PLAYER_ADJUST_BRIGHTNESS] = {"Helligkeit", "brightness", -0.3f, 0.3f,
+    [PLAYER_ADJUST_BRIGHTNESS] = {N_("Brightness"), "brightness", -0.3f, 0.3f,
                                   0.02f, 0.0f, 100.0f, "%+.0f", false},
-    [PLAYER_ADJUST_CONTRAST] = {"Kontrast", "contrast", 0.5f, 1.5f, 0.05f,
+    [PLAYER_ADJUST_CONTRAST] = {N_("Contrast"), "contrast", 0.5f, 1.5f, 0.05f,
                                 1.0f, 100.0f, "%.0f %%", false},
-    [PLAYER_ADJUST_SATURATION] = {"Sättigung", "saturation", 0.0f, 2.0f,
+    [PLAYER_ADJUST_SATURATION] = {N_("Saturation"), "saturation", 0.0f, 2.0f,
                                   0.1f, 1.0f, 100.0f, "%.0f %%", false},
-    [PLAYER_ADJUST_GAMMA] = {"Gamma", "gamma", 0.5f, 2.0f, 0.05f, 1.0f, 1.0f,
-                             "%.2f", false},
-    [PLAYER_ADJUST_ENVIRONMENT_DIM] = {"Abdunkeln", "environment_dim", 0.0f,
+    [PLAYER_ADJUST_GAMMA] = {N_("Gamma"), "gamma", 0.5f, 2.0f, 0.05f, 1.0f,
+                             1.0f, "%.2f", false},
+    [PLAYER_ADJUST_ENVIRONMENT_DIM] = {N_("Dimming"), "environment_dim", 0.0f,
                                        1.0f, 0.1f, 0.0f, 100.0f, "%.0f %%",
                                        true},
-    [PLAYER_ADJUST_KEY_COLOR] = {"Chroma-Key", "key_color", 0.0f, 3.0f,
+    [PLAYER_ADJUST_KEY_COLOR] = {N_("Chroma key"), "key_color", 0.0f, 3.0f,
                                  1.0f, 0.0f, 1.0f, "%.0f", false},
-    [PLAYER_ADJUST_KEY_THRESHOLD] = {"Schwelle", "key_threshold", 0.0f,
+    [PLAYER_ADJUST_KEY_THRESHOLD] = {N_("Threshold"), "key_threshold", 0.0f,
                                      0.4f, 0.002f, 0.12f, 100.0f, "%.1f",
                                      false},
-    [PLAYER_ADJUST_KEY_SOFTNESS] = {"Weichheit", "key_softness", 0.0f, 0.3f,
+    [PLAYER_ADJUST_KEY_SOFTNESS] = {N_("Softness"), "key_softness", 0.0f, 0.3f,
                                     0.005f, 0.06f, 100.0f, "%.1f", false},
-    [PLAYER_ADJUST_KEY_SPILL] = {"Farbsaum", "key_spill", 0.0f, 1.0f, 0.1f,
+    [PLAYER_ADJUST_KEY_SPILL] = {N_("Spill"), "key_spill", 0.0f, 1.0f, 0.1f,
                                  0.6f, 100.0f, "%.0f %%", false},
     [PLAYER_ADJUST_KEY_Y] = {"Key Y", "key_y", 0.0f, 255.0f, 1.0f, 128.0f,
                              1.0f, "%.0f", false},
@@ -187,7 +188,15 @@ static bool in_rect(float x, float y, float rx, float ry, float rw, float rh)
  * The popup is described once as a list of widgets; drawing and hit
  * testing both walk it. */
 
-enum widget_kind { WIDGET_CHIP, WIDGET_TEXT, WIDGET_HINT, WIDGET_VALUE };
+/* A paragraph is a hint wrapped across a column into up to `lines` lines,
+ * so translations need not match the English line breaks. */
+enum widget_kind {
+    WIDGET_CHIP,
+    WIDGET_TEXT,
+    WIDGET_HINT,
+    WIDGET_PARAGRAPH,
+    WIDGET_VALUE,
+};
 
 struct widget {
     enum widget_kind kind;
@@ -195,7 +204,8 @@ struct widget {
     int x, y, width;
     bool selected;
     bool small; /* chips: smaller text */
-    char text[96];
+    int lines;  /* paragraphs */
+    char text[256];
 };
 
 #define MAX_WIDGETS 64
@@ -217,6 +227,12 @@ static struct widget *add_widget(struct popup_layout *layout,
     return widget;
 }
 
+static void add_paragraph(struct popup_layout *layout, int x, int y,
+                          int lines, const char *text)
+{
+    add_widget(layout, WIDGET_PARAGRAPH, x, y, COLUMN_W, text)->lines = lines;
+}
+
 static void add_chip(struct popup_layout *layout, int control, int x, int y,
                      int width, const char *text, bool selected)
 {
@@ -234,7 +250,7 @@ static void add_chip_row(struct popup_layout *layout, int column, int row,
     for (int i = 0; i < count; ++i)
         add_chip(layout, first_control + i,
                  COLUMN_X(column) + i * (width + CHIP_GAP), ROW_CHIP_Y(row),
-                 width, labels[i], i == selected);
+                 width, tr(labels[i]), i == selected);
 }
 
 static void format_adjust(char text[32], enum player_adjust adjust,
@@ -244,11 +260,11 @@ static void format_adjust(char text[32], enum player_adjust adjust,
     if ((adjust == PLAYER_ADJUST_HEAD_MOTION ||
          adjust == PLAYER_ADJUST_AUTOFOCUS ||
          adjust == PLAYER_ADJUST_FOCUS_HYSTERESIS) && value <= 0.0f) {
-        snprintf(text, 32, "Aus");
+        snprintf(text, 32, "%s", tr("Off"));
         return;
     }
     if (adjust == PLAYER_ADJUST_FOCUS_FADE && value <= 0.0f) {
-        snprintf(text, 32, "Sofort");
+        snprintf(text, 32, "%s", tr("Instant"));
         return;
     }
     float shown = value * info->display_scale;
@@ -258,6 +274,7 @@ static void format_adjust(char text[32], enum player_adjust adjust,
 #pragma GCC diagnostic ignored "-Wformat-nonliteral"
     snprintf(text, 32, info->format, shown);
 #pragma GCC diagnostic pop
+    i18n_localize_number(text);
 }
 
 /* Label, [-], value, [+] on one line. */
@@ -267,7 +284,7 @@ static void add_stepper(struct popup_layout *layout,
 {
     int x = COLUMN_X(column);
     add_widget(layout, WIDGET_TEXT, x, y + 10, STEPPER_LABEL_W,
-               label ? label : player_adjust_info[adjust].label);
+               tr(label ? label : player_adjust_info[adjust].label));
     int minus_x = x + STEPPER_LABEL_W + 6;
     int plus_x = x + COLUMN_W - STEPPER_BUTTON_W;
     add_chip(layout, PLAYER_UI_ADJUST + 2 * (int)adjust, minus_x, y,
@@ -291,24 +308,25 @@ static void layout_buttons(const struct player_ui_state *state,
         const char *label;
         int first, second; /* enum binding_action, -1 = none */
     } rows[6] = {
-        {"Spulen (−10 s | +10 s)", BINDING_SEEK_BACK, BINDING_SEEK_FORWARD},
-        {"Lautstärke (− | +)", BINDING_VOLUME_DOWN, BINDING_VOLUME_UP},
-        {"Video (vorheriges | nächstes)", BINDING_PREVIOUS, BINDING_NEXT},
-        {"Neigung (runter | hoch)", BINDING_TILT_DOWN, BINDING_TILT_UP},
-        {"Zoom (weg | näher)", BINDING_ZOOM_OUT, BINDING_ZOOM_IN},
-        {"Wiedergabe / Pause", BINDING_PLAY_PAUSE, -1},
+        {N_("Seek (−10 s | +10 s)"), BINDING_SEEK_BACK,
+         BINDING_SEEK_FORWARD},
+        {N_("Volume (− | +)"), BINDING_VOLUME_DOWN, BINDING_VOLUME_UP},
+        {N_("Video (previous | next)"), BINDING_PREVIOUS, BINDING_NEXT},
+        {N_("Tilt (down | up)"), BINDING_TILT_DOWN, BINDING_TILT_UP},
+        {N_("Zoom (out | in)"), BINDING_ZOOM_OUT, BINDING_ZOOM_IN},
+        {N_("Play / pause"), BINDING_PLAY_PAUSE, -1},
     };
     for (int r = 0; r < 6; ++r) {
         int column = r / 3, row = r % 3;
         add_widget(layout, WIDGET_HINT, COLUMN_X(column), ROW_LABEL_Y(row), 0,
-                   rows[r].label);
+                   tr(rows[r].label));
         int count = rows[r].second >= 0 ? 2 : 1;
         int width = (COLUMN_W - (count - 1) * CHIP_GAP) / count;
         for (int i = 0; i < count; ++i) {
             int action = i ? rows[r].second : rows[r].first;
             char text[64];
             if (state->learn_action == action)
-                snprintf(text, sizeof(text), "drücken …");
+                snprintf(text, sizeof(text), "%s", tr("press …"));
             else
                 binding_describe(state->bindings
                                      ? state->bindings[action]
@@ -325,31 +343,59 @@ static void layout_buttons(const struct player_ui_state *state,
     if (state->learn_action >= 0 &&
         state->learn_action < BINDING_ACTION_COUNT) {
         char label[96];
-        snprintf(label, sizeof(label), "Belegen: %s",
-                 binding_action_info[state->learn_action].label);
+        snprintf(label, sizeof(label), tr("Assign: %s"),
+                 tr(binding_action_info[state->learn_action].label));
         add_widget(layout, WIDGET_TEXT, x, ROW_LABEL_Y(0), 0, label);
-        add_widget(layout, WIDGET_HINT, x, ROW_LABEL_Y(0) + 40, 0,
-                   "Taste drücken oder für eine");
-        add_widget(layout, WIDGET_HINT, x, ROW_LABEL_Y(0) + 70, 0,
-                   "Kombination die erste halten");
-        add_widget(layout, WIDGET_HINT, x, ROW_LABEL_Y(0) + 100, 0,
-                   "und die zweite drücken.");
+        add_paragraph(layout, x, ROW_LABEL_Y(0) + 40, 3,
+                      tr("Press a button, or for a combination hold the "
+                         "first and press the second."));
         add_chip(layout, PLAYER_UI_BINDING_CLEAR, x, ROW_CHIP_Y(2), half,
-                 "Entfernen", false);
+                 tr("Remove"), false);
         add_chip(layout, PLAYER_UI_BINDING_CANCEL, x + half + CHIP_GAP,
-                 ROW_CHIP_Y(2), half, "Abbrechen", false);
+                 ROW_CHIP_Y(2), half, tr("Cancel"), false);
     } else {
-        add_widget(layout, WIDGET_HINT, x, ROW_LABEL_Y(0), 0,
-                   "Feld wählen, dann am Controller");
-        add_widget(layout, WIDGET_HINT, x, ROW_LABEL_Y(0) + 30, 0,
-                   "die Taste oder Kombination");
-        add_widget(layout, WIDGET_HINT, x, ROW_LABEL_Y(0) + 60, 0,
-                   "drücken. Der Griff geht nur in");
-        add_widget(layout, WIDGET_HINT, x, ROW_LABEL_Y(0) + 90, 0,
-                   "Kombinationen. Gilt für alle Titel.");
+        add_paragraph(layout, x, ROW_LABEL_Y(0), 5,
+                      tr("Choose a field, then press the button or "
+                         "combination on the controller. The grip works "
+                         "only in combinations. Applies to all titles."));
         add_chip(layout, PLAYER_UI_BINDING_DEFAULTS, x, ROW_CHIP_Y(2),
-                 COLUMN_W, "Standardbelegung", false);
+                 COLUMN_W, tr("Default buttons"), false);
     }
+}
+
+/* Language tab: "automatic" (with the language it finds) and the
+ * languages, two per row in the first two columns. */
+static void layout_language(const struct player_ui_state *state,
+                            struct popup_layout *layout)
+{
+    add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(0), 0,
+               tr("Language"));
+    char automatic[96];
+    int system = state->system_language >= 0 &&
+                         state->system_language < i18n_language_count
+                     ? state->system_language
+                     : 0;
+    snprintf(automatic, sizeof(automatic), tr("Automatic (%s)"),
+             i18n_languages[system]->name);
+    add_chip(layout, PLAYER_UI_LANGUAGE, COLUMN_X(0), ROW_CHIP_Y(0),
+             COLUMN_W, automatic, state->language == I18N_AUTO);
+    int width = (COLUMN_W - CHIP_GAP) / 2;
+    for (int i = 0; i < i18n_language_count &&
+                    PLAYER_UI_LANGUAGE + 1 + i < PLAYER_UI_LANGUAGE_END;
+         ++i) {
+        int slot = i + 2; /* the automatic chip takes a whole row */
+        int column = slot / 6, row = slot / 2 % 3;
+        if (column > 1)
+            break;
+        add_chip(layout, PLAYER_UI_LANGUAGE + 1 + i,
+                 COLUMN_X(column) + slot % 2 * (width + CHIP_GAP),
+                 ROW_CHIP_Y(row), width, i18n_languages[i]->name,
+                 state->language == i);
+    }
+    add_paragraph(layout, COLUMN_X(2), ROW_LABEL_Y(0), 5,
+                  tr("Automatic follows the language of Steam or of the "
+                     "system and shows English where no translation "
+                     "exists."));
 }
 
 static void layout_popup(const struct player_ui_state *state,
@@ -357,8 +403,10 @@ static void layout_popup(const struct player_ui_state *state,
 {
     layout->count = 0;
     static const char *const tabs[PLAYER_UI_TAB_COUNT] = {
-        "Ansicht", "Position", "Bild", "Fokus", "Passthrough", "Info",
-        "Wiedergabe", "Autofokus", "Tasten",
+        N_("View"),     N_("Position"),  N_("Picture"),
+        N_("Focus"),    N_("Passthrough"), N_("Info"),
+        N_("Playback"), N_("Autofocus"), N_("Buttons"),
+        N_("Language"),
     };
     int first = state->settings_page ? PLAYER_UI_FIRST_SETTINGS_TAB : 0;
     int end = state->settings_page ? PLAYER_UI_TAB_COUNT
@@ -366,37 +414,38 @@ static void layout_popup(const struct player_ui_state *state,
     for (int i = first; i < end; ++i)
         add_chip(layout, PLAYER_UI_TAB + i,
                  COLUMN_X(0) + (i - first) * (TAB_W + CHIP_GAP), TAB_Y,
-                 TAB_W, tabs[i], state->popup_tab == i);
+                 TAB_W, tr(tabs[i]), state->popup_tab == i);
     if (state->settings_page)
         add_chip(layout, PLAYER_UI_SETTINGS_CLOSE,
-                 POPUP_X + POPUP_W - 22 - TAB_W, TAB_Y, TAB_W, "Schließen",
+                 POPUP_X + POPUP_W - 22 - TAB_W, TAB_Y, TAB_W, tr("Close"),
                  false);
 
     if (state->popup_tab == PLAYER_UI_TAB_VIEW) {
-        static const char *const projections[4] = {"Flach", "180°", "360°",
-                                                   "Fisheye"};
+        static const char *const projections[4] = {N_("Flat"), "180°",
+                                                   "360°", N_("Fisheye")};
         static const char *const layouts[3] = {"Mono", "SBS", "TB"};
         add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(0), 0,
-                   "Kopfbewegung (6DoF, alle Titel)");
+                   tr("Head motion (6DoF, all titles)"));
         add_stepper(layout, state, 0, ROW_CHIP_Y(0),
                     PLAYER_ADJUST_HEAD_MOTION, NULL);
         add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(1), 0,
-                   "Ausrichtung");
+                   tr("Orientation"));
         add_chip(layout, PLAYER_UI_RECENTER, COLUMN_X(0), ROW_CHIP_Y(1),
-                 COLUMN_W, "Zentrieren", false);
+                 COLUMN_W, tr("Centre"), false);
 
         static const char *const projection_labels[] = {
-            [NV12_FORMAT_SOURCE_DEFAULT] = "Projektion (Standard)",
-            [NV12_FORMAT_SOURCE_NAME] = "Projektion (aus Dateiname)",
-            [NV12_FORMAT_SOURCE_IMAGE] = "Projektion (im Bild erkannt)",
-            [NV12_FORMAT_SOURCE_USER] = "Projektion",
+            [NV12_FORMAT_SOURCE_DEFAULT] = N_("Projection (default)"),
+            [NV12_FORMAT_SOURCE_NAME] = N_("Projection (from the file name)"),
+            [NV12_FORMAT_SOURCE_IMAGE] =
+                N_("Projection (found in the picture)"),
+            [NV12_FORMAT_SOURCE_USER] = N_("Projection"),
         };
         char projection_label[96];
         snprintf(projection_label, sizeof(projection_label), "%s",
-                 projection_labels[state->format_source <=
-                                           NV12_FORMAT_SOURCE_USER
-                                       ? state->format_source
-                                       : NV12_FORMAT_SOURCE_USER]);
+                 tr(projection_labels[state->format_source <=
+                                              NV12_FORMAT_SOURCE_USER
+                                          ? state->format_source
+                                          : NV12_FORMAT_SOURCE_USER]));
         if (state->projection_mode == NV12_PROJECTION_FISHEYE) {
             size_t used = strlen(projection_label);
             snprintf(projection_label + used,
@@ -411,7 +460,7 @@ static void layout_popup(const struct player_ui_state *state,
         for (int i = 0; i < 4; ++i)
             add_chip(layout, PLAYER_UI_PROJECTION + i,
                      COLUMN_X(1) + i * (short_w + CHIP_GAP), ROW_CHIP_Y(0),
-                     i == 3 ? fisheye_w : short_w, projections[i],
+                     i == 3 ? fisheye_w : short_w, tr(projections[i]),
                      i == (int)state->projection_mode);
         add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(1), 0,
                    "Stereo");
@@ -419,17 +468,15 @@ static void layout_popup(const struct player_ui_state *state,
                      (int)state->stereo_layout);
         add_chip(layout, PLAYER_UI_SWAP_EYES, COLUMN_X(1), ROW_CHIP_Y(2),
                  COLUMN_W,
-                 state->swap_eyes ? "Augen getauscht" : "Augen tauschen",
+                 state->swap_eyes ? tr("Eyes swapped") : tr("Swap eyes"),
                  state->swap_eyes);
 
-        add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(0), 0,
-                   "Projektion, Stereo und Lage");
-        add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(0) + 30, 0,
-                   "gelten für diesen Titel.");
-        add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(1) + 6, 0,
-                   "Spul-Vorschau, Panel, Tasten:");
-        add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(1) + 36, 0,
-                   "Einstellungen auf der Startseite.");
+        add_paragraph(layout, COLUMN_X(2), ROW_LABEL_Y(0), 2,
+                      tr("Projection, stereo and placement apply to this "
+                         "title."));
+        add_paragraph(layout, COLUMN_X(2), ROW_LABEL_Y(1) + 6, 3,
+                      tr("Scrub preview, panel, buttons: Settings on the "
+                         "start page."));
     } else if (state->popup_tab == PLAYER_UI_TAB_POSITION) {
         static const enum player_adjust grid[3][3] = {
             {PLAYER_ADJUST_ZOOM, PLAYER_ADJUST_HEIGHT, PLAYER_ADJUST_SLIDE},
@@ -443,21 +490,23 @@ static void layout_popup(const struct player_ui_state *state,
                     add_stepper(layout, state, column, STEPPER_Y(row),
                                 grid[column][row], NULL);
         add_chip(layout, PLAYER_UI_RESET_POSITION, COLUMN_X(2), STEPPER_Y(2),
-                 COLUMN_W, "Zurücksetzen", false);
+                 COLUMN_W, tr("Reset"), false);
         add_widget(layout, WIDGET_HINT, COLUMN_X(0), STEPPER_Y(3) - 4, 0,
-                   "Neigung gilt für alle Titel, alles andere je Titel.");
+                   tr("Tilt applies to all titles, everything else per "
+                      "title."));
     } else if (state->popup_tab == PLAYER_UI_TAB_PICTURE) {
-        static const char *const levels[3] = {"Norm", "Tief", "Voll"};
+        static const char *const levels[3] = {N_("Normal"), N_("Deep"),
+                                              N_("Full")};
         add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(0), 0,
-                   "Schwarzwert");
+                   tr("Black level"));
         add_chip_row(layout, 0, 0, 3, PLAYER_UI_LEVELS, levels,
                      (int)state->video_levels);
         add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(1) + 6, 0,
-                   "Norm: Schwarz 16, Weiß 235");
+                   tr("Normal: black 16, white 235"));
         add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(1) + 36, 0,
-                   "Tief: Zeichnung unter Schwarz");
+                   tr("Deep: detail below black"));
         add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(1) + 66, 0,
-                   "Voll: Full Range 0–255");
+                   tr("Full: full range 0–255"));
         add_stepper(layout, state, 1, STEPPER_Y(0),
                     PLAYER_ADJUST_BRIGHTNESS, NULL);
         add_stepper(layout, state, 1, STEPPER_Y(1), PLAYER_ADJUST_CONTRAST,
@@ -467,26 +516,23 @@ static void layout_popup(const struct player_ui_state *state,
         add_stepper(layout, state, 2, STEPPER_Y(0), PLAYER_ADJUST_GAMMA,
                     NULL);
         add_chip(layout, PLAYER_UI_RESET_PICTURE, COLUMN_X(2), STEPPER_Y(2),
-                 COLUMN_W, "Zurücksetzen", false);
+                 COLUMN_W, tr("Reset"), false);
     } else if (state->popup_tab == PLAYER_UI_TAB_FOCUS) {
         add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(0), 0,
-                   "Autofokus (nur 180°/360° mit SBS/TB)");
+                   tr("Autofocus (180°/360° with SBS/TB only)"));
         add_stepper(layout, state, 0, ROW_CHIP_Y(0),
-                    PLAYER_ADJUST_AUTOFOCUS, "Stärke");
+                    PLAYER_ADJUST_AUTOFOCUS, N_("Strength"));
         add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(1), 0,
-                   "Messung prüfen");
+                   tr("Check the measurement"));
         add_chip(layout, PLAYER_UI_GAZE_DEBUG, COLUMN_X(0), ROW_CHIP_Y(1),
-                 COLUMN_W, "Blick anzeigen", state->gaze_debug);
-        add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(0), 0,
-                   "Nahe Motive werden auf etwa");
-        add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(0) + 30, 0,
-                   "1 m zurückgeschoben. Gilt für");
-        add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(0) + 60, 0,
-                   "alle Titel; Schwelle, Hysterese");
-        add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(0) + 90, 0,
-                   "und Überblenden unter Einstellungen.");
+                 COLUMN_W, tr("Show gaze"), state->gaze_debug);
+        add_paragraph(layout, COLUMN_X(1), ROW_LABEL_Y(0), 5,
+                      tr("Near subjects are pushed back to about 1 m. "
+                         "Applies to all titles; threshold, hysteresis and "
+                         "transition under Settings."));
     } else if (state->popup_tab == PLAYER_UI_TAB_PLAYBACK) {
-        static const char *const modes[2] = {"Original", "Perspektive"};
+        static const char *const modes[2] = {N_("Original"),
+                                             N_("Perspective")};
         const char *fovs[PLAYER_UI_PREVIEW_FOV_COUNT];
         char fov_text[PLAYER_UI_PREVIEW_FOV_COUNT][16];
         int fov_selected = -1;
@@ -498,98 +544,89 @@ static void layout_popup(const struct player_ui_state *state,
                 fov_selected = i;
         }
         add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(0), 0,
-                   "Vorschau beim Spulen");
+                   tr("Scrub preview"));
         add_chip_row(layout, 0, 0, 2, PLAYER_UI_PREVIEW_MODE, modes,
                      state->preview_perspective ? 1 : 0);
         add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(1), 0,
-                   "Sichtfeld (Perspektive)");
+                   tr("Field of view (perspective)"));
         add_chip_row(layout, 0, 1, PLAYER_UI_PREVIEW_FOV_COUNT,
                      PLAYER_UI_PREVIEW_FOV, fovs, fov_selected);
         static const char *const autohide[PLAYER_UI_AUTOHIDE_COUNT] = {
-            "Nie", "nach 5 s", "nach 15 s",
+            N_("Never"), N_("after 5 s"), N_("after 15 s"),
         };
         int autohide_selected = 0;
         for (int i = 0; i < PLAYER_UI_AUTOHIDE_COUNT; ++i)
             if (player_ui_autohide[i] == state->autohide)
                 autohide_selected = i;
         add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(2), 0,
-                   "Panel ausblenden (Wiedergabe)");
+                   tr("Hide the panel (playback)"));
         add_chip_row(layout, 0, 2, PLAYER_UI_AUTOHIDE_COUNT,
                      PLAYER_UI_AUTOHIDE, autohide, autohide_selected);
 
-        static const char *const off_on[2] = {"Aus", "An"};
+        static const char *const off_on[2] = {N_("Off"), N_("On")};
         add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(0), 0,
-                   "AV1 bis 4K per CPU");
+                   tr("AV1 up to 4K on the CPU"));
         add_chip_row(layout, 1, 0, 2, PLAYER_UI_AV1_SOFTWARE, off_on,
                      state->av1_software ? 1 : 0);
-        add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(1) + 6, 0,
-                   "Iris kann kein AV1; dav1d");
-        add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(1) + 36, 0,
-                   "spielt 8 Bit bis 4096×2160.");
-        add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(1) + 66, 0,
-                   "Gilt ab dem nächsten Titel.");
+        add_paragraph(layout, COLUMN_X(1), ROW_LABEL_Y(1) + 6, 3,
+                      tr("Iris has no AV1; dav1d plays 8 bit up to "
+                         "4096×2160. Applies from the next title."));
 
         add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(0), 0,
-                   "Passthrough: Raum statt Schwarz");
+                   tr("Passthrough: the room instead of black"));
         add_chip_row(layout, 2, 0, 2, PLAYER_UI_PASSTHROUGH, off_on,
                      state->passthrough ? 1 : 0);
         add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(1), 0,
-                   "Raum abdunkeln");
+                   tr("Dim the room"));
         add_stepper(layout, state, 2, ROW_CHIP_Y(1),
-                    PLAYER_ADJUST_ENVIRONMENT_DIM, "Stärke");
-        if (!state->passthrough_supported) {
-            add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(2) + 6,
-                       0, "SteamVR bietet hier keinen");
-            add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(2) + 36,
-                       0, "Passthrough an.");
-        }
+                    PLAYER_ADJUST_ENVIRONMENT_DIM, N_("Strength"));
+        if (!state->passthrough_supported)
+            add_paragraph(layout, COLUMN_X(2), ROW_LABEL_Y(2) + 6, 2,
+                          tr("SteamVR offers no passthrough here."));
     } else if (state->popup_tab == PLAYER_UI_TAB_AUTOFOCUS) {
         add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(0), 0,
-                   "Dauer eines Fokuswechsels");
+                   tr("Duration of a focus change"));
         add_stepper(layout, state, 0, ROW_CHIP_Y(0),
                     PLAYER_ADJUST_FOCUS_FADE, NULL);
         add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(1), 0,
-                   "Neu fokussieren ab Abstandsänderung");
+                   tr("Refocus from a distance change of"));
         add_stepper(layout, state, 0, ROW_CHIP_Y(1),
                     PLAYER_ADJUST_FOCUS_HYSTERESIS, NULL);
 
-        static const char *const thresholds[2] = {"Immer", "Nur nah"};
+        static const char *const thresholds[2] = {N_("Always"),
+                                                  N_("Near only")};
         add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(0), 0,
-                   "Auslösen");
+                   tr("Activation"));
         add_chip_row(layout, 1, 0, 2, PLAYER_UI_FOCUS_THRESHOLD, thresholds,
                      state->focus_threshold ? 1 : 0);
         add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(1), 0,
                    state->focus_threshold
-                       ? "Weiter weg: Video unverändert"
-                       : "Grenze (nur bei „Nur nah“)");
+                       ? tr("Farther away: video unchanged")
+                       : tr("Limit (with “Near only”)"));
         add_stepper(layout, state, 1, ROW_CHIP_Y(1),
                     PLAYER_ADJUST_FOCUS_DISTANCE, NULL);
 
-        add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(0), 0,
-                   "Die Stärke des Autofokus steht");
-        add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(0) + 30, 0,
-                   "im Player unter „Fokus“.");
+        add_paragraph(layout, COLUMN_X(2), ROW_LABEL_Y(0), 3,
+                      tr("The strength of the autofocus is in the player "
+                         "under “Focus”."));
     } else if (state->popup_tab == PLAYER_UI_TAB_PASSTHROUGH) {
-        static const char *const off_on[2] = {"Aus", "An"};
+        static const char *const off_on[2] = {N_("Off"), N_("On")};
         add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(0), 0,
-                   "Raum statt Schwarz (alle Titel)");
+                   tr("The room instead of black (all titles)"));
         add_chip_row(layout, 0, 0, 2, PLAYER_UI_PASSTHROUGH, off_on,
                      state->passthrough ? 1 : 0);
         add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(1), 0,
-                   "Raum abdunkeln");
+                   tr("Dim the room"));
         add_stepper(layout, state, 0, ROW_CHIP_Y(1),
-                    PLAYER_ADJUST_ENVIRONMENT_DIM, "Stärke");
+                    PLAYER_ADJUST_ENVIRONMENT_DIM, N_("Strength"));
         if (!state->passthrough_supported)
-            add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(2) + 6,
-                       0, "SteamVR bietet hier keinen");
-        if (!state->passthrough_supported)
-            add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(2) + 36,
-                       0, "Passthrough an.");
+            add_paragraph(layout, COLUMN_X(0), ROW_LABEL_Y(2) + 6, 2,
+                          tr("SteamVR offers no passthrough here."));
 
-        static const char *const keys[4] = {"Aus", "Grün", "Blau",
-                                            "Eigene"};
+        static const char *const keys[4] = {N_("Off"), N_("Green"),
+                                            N_("Blue"), N_("Picked")};
         add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(0), 0,
-                   "Chroma-Key (je Titel)");
+                   tr("Chroma key (per title)"));
         int key = state->adjust
                       ? (int)(state->adjust[PLAYER_ADJUST_KEY_COLOR] + 0.5f)
                       : 0;
@@ -599,29 +636,22 @@ static void layout_popup(const struct player_ui_state *state,
         add_stepper(layout, state, 1, STEPPER_Y(2) + 12,
                     PLAYER_ADJUST_KEY_SOFTNESS, NULL);
 
-        if (state->key_picking) {
-            add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(0), 0,
-                       "Mit dem Controller auf den");
-            add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(0) + 30,
-                       0, "Hintergrund im Video zielen und");
-            add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(0) + 60,
-                       0, "den Trigger ziehen.");
-        } else {
-            add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(0), 0,
-                       "Die Key-Farbe wird durchsichtig,");
-            add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(0) + 30,
-                       0, "mit Passthrough sieht man dort");
-            add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(0) + 60,
-                       0, "den Raum.");
-        }
+        add_paragraph(layout, COLUMN_X(2), ROW_LABEL_Y(0), 3,
+                      state->key_picking
+                          ? tr("Aim the controller at the background in "
+                               "the video and pull the trigger.")
+                          : tr("The key colour turns transparent; with "
+                               "passthrough the room shows there."));
         add_chip(layout, PLAYER_UI_KEY_PICK, COLUMN_X(2),
                  STEPPER_Y(1) + 12, COLUMN_W,
-                 state->key_picking ? "Abbrechen" : "Farbe aufnehmen",
+                 state->key_picking ? tr("Cancel") : tr("Pick the colour"),
                  state->key_picking);
         add_stepper(layout, state, 2, STEPPER_Y(2) + 12,
                     PLAYER_ADJUST_KEY_SPILL, NULL);
     } else if (state->popup_tab == PLAYER_UI_TAB_BUTTONS) {
         layout_buttons(state, layout);
+    } else if (state->popup_tab == PLAYER_UI_TAB_LANGUAGE) {
+        layout_language(state, layout);
     }
 }
 
@@ -674,17 +704,17 @@ static void draw_info(struct player_ui *ui, struct ui_canvas *canvas,
     if (!details) {
         ui_draw_text_wrapped(canvas, ui->font, 24, left, top, text_w, 32, 3,
                              UI_ALIGN_LEFT, color_dim,
-                             "Keine Informationen – nur Jellyfin-Titel haben "
-                             "eine Beschreibung.");
+                             tr("No information – only Jellyfin titles have "
+                                "a description."));
         return;
     }
     ui_draw_text(canvas, ui->font, 22, left, top, 0, UI_ALIGN_LEFT,
-                 color_dim, "Beschreibung");
+                 color_dim, tr("Description"));
     ui_draw_text_wrapped(canvas, ui->font, 23, left, top + 34, text_w, 31, 6,
                          UI_ALIGN_LEFT,
                          details->overview[0] ? color_text : color_dim,
                          details->overview[0] ? details->overview
-                                              : "Keine Beschreibung vorhanden.");
+                                              : tr("No description."));
     char year[16] = "", rating[16] = "";
     if (details->year > 0)
         snprintf(year, sizeof(year), "%d", details->year);
@@ -693,9 +723,12 @@ static void draw_info(struct player_ui *ui, struct ui_canvas *canvas,
     const struct {
         const char *label, *value;
     } rows[] = {
-        {"Jahr", year},          {"Bewertung", rating},
-        {"Studio", details->studios}, {"Mitwirkende", details->people},
-        {"Genres", details->genres},  {"Tags", details->tags},
+        {tr("Year"), year},
+        {tr("Rating"), rating},
+        {tr("Studio"), details->studios},
+        {tr("People"), details->people},
+        {tr("Genres"), details->genres},
+        {tr("Tags"), details->tags},
     };
     const int x = COLUMN_X(2), label_w = 150, bottom = POPUP_Y + POPUP_H - 20;
     int y = top;
@@ -750,6 +783,11 @@ static void draw_popup(struct player_ui *ui, struct ui_canvas *canvas,
         case WIDGET_HINT:
             ui_draw_text(canvas, ui->font, 22, widget->x, widget->y, 0,
                          UI_ALIGN_LEFT, color_dim, widget->text);
+            break;
+        case WIDGET_PARAGRAPH:
+            ui_draw_text_wrapped(canvas, ui->font, 22, widget->x, widget->y,
+                                 widget->width, 30, widget->lines,
+                                 UI_ALIGN_LEFT, color_dim, widget->text);
             break;
         case WIDGET_VALUE:
             ui_draw_text(canvas, ui->bold, 24, widget->x + widget->width / 2,
@@ -848,7 +886,7 @@ void player_ui_render(struct player_ui *ui, const struct player_ui_state *state,
     format_time(duration, state->duration_us);
     if (state->loading && !state->scrubbing)
         ui_draw_text(&canvas, ui->bold, 26, CARD_X + 40, BAR_Y - 16, 0,
-                     UI_ALIGN_LEFT, color_accent, "Lädt …");
+                     UI_ALIGN_LEFT, color_accent, tr("Loading …"));
     else
         ui_draw_text(&canvas, ui->font, 26, CARD_X + 40, BAR_Y - 16, 0,
                      UI_ALIGN_LEFT, color_text, position);
@@ -896,7 +934,7 @@ void player_ui_render(struct player_ui *ui, const struct player_ui_state *state,
                             : UI_RGBA(20, 22, 28, 255));
 
     static const char *const end_labels[PLAYER_END_COUNT] = {
-        "Am Ende: Stopp", "Am Ende: Wiederholen", "Am Ende: Nächster",
+        N_("At end: stop"), N_("At end: repeat"), N_("At end: next"),
     };
     int end_action = state->end_action >= 0 &&
                              state->end_action < PLAYER_END_COUNT
@@ -910,7 +948,7 @@ void player_ui_render(struct player_ui *ui, const struct player_ui_state *state,
                  22, END_X + END_W / 2, ROW_Y - 15, END_W - 24,
                  UI_ALIGN_CENTER,
                  end_action == PLAYER_END_STOP ? color_dim : color_accent,
-                 end_labels[end_action]);
+                 tr(end_labels[end_action]));
 
     round_button(&canvas, VOLUME_DOWN_X, VOLUME_R,
                  hover == PLAYER_UI_VOLUME_DOWN, false);
@@ -924,11 +962,11 @@ void player_ui_render(struct player_ui *ui, const struct player_ui_state *state,
     snprintf(volume, sizeof(volume), "%d %%",
              (int)(state->volume * 100.0f + 0.5f));
     ui_draw_text(&canvas, ui->font, 20, (VOLUME_DOWN_X + VOLUME_UP_X) / 2,
-                 ROW_Y - 34, 0, UI_ALIGN_CENTER, color_dim, "Lautstärke");
+                 ROW_Y - 34, 0, UI_ALIGN_CENTER, color_dim, tr("Volume"));
     ui_draw_text(&canvas, ui->bold, 26, (VOLUME_DOWN_X + VOLUME_UP_X) / 2,
                  ROW_Y - 8, 0, UI_ALIGN_CENTER,
                  state->volume <= 0.0f ? color_dim : color_text,
-                 state->volume <= 0.0f ? "Stumm" : volume);
+                 state->volume <= 0.0f ? tr("Muted") : volume);
 
     round_button(&canvas, VIEW_X, SMALL_R, hover == PLAYER_UI_VIEW_POPUP,
                  state->popup_open);

@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "browser-ui.h"
 
+#include "i18n.h"
 #include "jellyfin.h"
 #include "settings.h"
 #include "thumbnails.h"
@@ -87,12 +88,29 @@
 #define KEY_ROWS 4
 #define KEY_COLUMNS 11
 
-static const char *const keyboard_keys[KEY_ROWS][KEY_COLUMNS] = {
-    {"1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "ß"},
-    {"q", "w", "e", "r", "t", "z", "u", "i", "o", "p", "ü"},
-    {"a", "s", "d", "f", "g", "h", "j", "k", "l", "ö", "ä"},
-    {"y", "x", "c", "v", "b", "n", "m", "-", ".", "'", "&"},
-};
+/* Keys row by row; a language can bring its own layout. */
+static const char english_keyboard[] =
+    "1 2 3 4 5 6 7 8 9 0 - "
+    "q w e r t y u i o p ' "
+    "a s d f g h j k l & : "
+    "z x c v b n m , . ! ?";
+
+/* Key `index` of the language's keyboard ("" past its end). */
+static const char *keyboard_key(int index, char key[8])
+{
+    const char *layout = i18n_languages[i18n_current()]->keyboard;
+    const char *cursor = layout ? layout : english_keyboard;
+    for (int i = 0; i < index && *cursor; ++i) {
+        cursor += strcspn(cursor, " ");
+        cursor += strspn(cursor, " ");
+    }
+    size_t length = strcspn(cursor, " ");
+    if (length >= 8)
+        length = 0;
+    memcpy(key, cursor, length);
+    key[length] = '\0';
+    return key;
+}
 
 /* "Resume or restart" prompt over the grid. */
 #define PROMPT_W 680
@@ -160,9 +178,10 @@ static bool key_rect(int id, int *x, int *y, int *width)
 }
 
 static const char *const sort_labels[JF_SORT_COUNT] = {
-    "Name", "Zufällig", "Community-Bewertung", "Kritikerbewertung",
-    "Hinzugefügt am", "Abgespielt am", "Altersfreigabe", "Wiedergabezähler",
-    "Veröffentlichungsdatum", "Laufzeit",
+    N_("Name"),          N_("Random"),        N_("Community rating"),
+    N_("Critic rating"), N_("Date added"),    N_("Date played"),
+    N_("Parental rating"), N_("Play count"),  N_("Release date"),
+    N_("Runtime"),
 };
 
 /* Dates, ratings and counts are most useful newest/highest first. */
@@ -173,7 +192,7 @@ static bool default_descending(int sort)
 }
 
 static const char *const local_sort_labels[FILE_BROWSER_SORT_COUNT] = {
-    "Name", "Änderungsdatum", "Dateigröße",
+    N_("Name"), N_("Date modified"), N_("File size"),
 };
 
 static bool local_location(const struct browser_ui *ui)
@@ -202,7 +221,7 @@ static bool filtered(const struct browser_ui *ui)
 }
 
 static const char *const filter_labels[4] = {
-    "Genres", "Studios", "Darsteller", "Filter aufheben",
+    N_("Genres"), N_("Studios"), N_("Cast"), N_("Clear the filter"),
 };
 static const char *const filter_keys[3] = {"genre", "studio", "person"};
 
@@ -218,7 +237,8 @@ static int sort_count(const struct browser_ui *ui)
 
 static const char *sort_label(const struct browser_ui *ui, int sort)
 {
-    return local_location(ui) ? local_sort_labels[sort] : sort_labels[sort];
+    return tr(local_location(ui) ? local_sort_labels[sort]
+                                 : sort_labels[sort]);
 }
 
 static int active_sort(const struct browser_ui *ui)
@@ -382,21 +402,21 @@ static void draw_rail(struct browser_ui *ui, struct ui_canvas *canvas,
         enum ui_icon icon;
         const char *label;
     } items[RAIL_COUNT] = {
-        {UI_ICON_HOME, "Start"},
+        {UI_ICON_HOME, N_("Home")},
         {UI_ICON_SERVER, "Jellyfin"},
-        {UI_ICON_DISK, "Lokale Dateien"},
-        {UI_ICON_SEARCH, "Suchen"},
-        {UI_ICON_SETTINGS, "Einstellungen"},
+        {UI_ICON_DISK, N_("Local files")},
+        {UI_ICON_SEARCH, N_("Search")},
+        {UI_ICON_SETTINGS, N_("Settings")},
     };
     int active = rail_active(ui);
     for (int i = 0; i < RAIL_COUNT; ++i)
         if (hover < 0 || hover == ID_RAIL + i)
             draw_rail_item(ui, canvas,
                            RAIL_FIRST_Y + i * (RAIL_ITEM_H + 12),
-                           items[i].icon, items[i].label, i == active,
+                           items[i].icon, tr(items[i].label), i == active,
                            hover == ID_RAIL + i);
     if (hover < 0 || hover == ID_EXIT)
-        draw_rail_item(ui, canvas, RAIL_EXIT_Y, UI_ICON_POWER, "Beenden",
+        draw_rail_item(ui, canvas, RAIL_EXIT_Y, UI_ICON_POWER, tr("Quit"),
                        false, hover == ID_EXIT);
 }
 
@@ -442,11 +462,12 @@ static void draw_tile(struct browser_ui *ui, struct ui_canvas *canvas,
                      0, UI_ALIGN_RIGHT, color_text, duration);
     }
     if (entry->played) {
-        int width = ui_text_width(ui->bold, 18, "Gesehen") + 18;
+        const char *watched = tr("Watched");
+        int width = ui_text_width(ui->bold, 18, watched) + 18;
         ui_fill_round_rect(canvas, x + TILE_W - 10 - width, y + 10, width, 28,
                            8, UI_RGBA(0, 0, 0, 170));
         ui_draw_text(canvas, ui->bold, 18, x + TILE_W - 19, y + 13, 0,
-                     UI_ALIGN_RIGHT, color_accent, "Gesehen");
+                     UI_ALIGN_RIGHT, color_accent, watched);
     }
     if (entry->resume_us > 0 && entry->duration_us > 0) {
         float share = (float)entry->resume_us / (float)entry->duration_us;
@@ -503,7 +524,7 @@ static const char *current_title(const struct browser_ui *ui)
 {
     const char *path = ui->listing.path;
     if (!path || !path[0])
-        return "Lade …";
+        return tr("Loading …");
     const char *last = path;
     for (const char *s = strstr(path, " / "); s; s = strstr(s + 3, " / "))
         last = s + 3;
@@ -559,7 +580,7 @@ static void draw_filter_chip(struct browser_ui *ui, struct ui_canvas *canvas,
     ui_draw_text(canvas, active ? ui->bold : ui->font, 24, FILTER_X + 24,
                  FILTER_Y + 8, FILTER_W - 72, UI_ALIGN_LEFT,
                  active ? color_accent : color_text,
-                 active ? "Gefiltert" : "Filter");
+                 active ? tr("Filtered") : tr("Filter"));
     ui_draw_icon(canvas, UI_ICON_CHEVRON_DOWN, FILTER_X + FILTER_W - 30,
                  FILTER_Y + FILTER_H / 2.0f, 26, color_dim);
 }
@@ -583,7 +604,8 @@ static void draw_filter_menu(struct browser_ui *ui, struct ui_canvas *canvas,
                                color_tile_hover);
         ui_draw_text(canvas, ui->font, 25, FILTER_MENU_X + 28, y + 11,
                      FILTER_MENU_W - 56, UI_ALIGN_LEFT,
-                     i == 3 ? color_accent : color_text, filter_labels[i]);
+                     i == 3 ? color_accent : color_text,
+                     tr(filter_labels[i]));
     }
 }
 
@@ -632,7 +654,7 @@ static void draw_pager(struct browser_ui *ui, struct ui_canvas *canvas,
                      enabled ? color_text : color_dim);
         ui_draw_text(canvas, ui->font, 26, CENTER_X + 58, PAGER_Y + 13, 0,
                      UI_ALIGN_LEFT, enabled ? color_text : color_dim,
-                     "Vorherige");
+                     tr("Previous"));
     }
     if (hover < 0 || hover == ID_NEXT) {
         bool enabled = ui->page + 1 < page_count(ui);
@@ -642,7 +664,7 @@ static void draw_pager(struct browser_ui *ui, struct ui_canvas *canvas,
                                                        : color_card);
         ui_draw_text(canvas, ui->font, 26, x + 136, PAGER_Y + 13, 0,
                      UI_ALIGN_RIGHT, enabled ? color_text : color_dim,
-                     "Nächste");
+                     tr("Next"));
         ui_draw_icon(canvas, UI_ICON_CHEVRON_RIGHT, x + 158,
                      PAGER_Y + PAGER_H / 2.0f, 30,
                      enabled ? color_text : color_dim);
@@ -680,7 +702,7 @@ static void draw_base(struct browser_ui *ui, struct ui_canvas *canvas)
     ui_draw_text(canvas, ui->bold, 42, 60, 52, 0, UI_ALIGN_LEFT, color_text,
                  "Stereonaut");
     ui_draw_text(canvas, ui->font, 24, 62, 108, 0, UI_ALIGN_LEFT, color_dim,
-                 "VR-Videoplayer");
+                 tr("VR video player"));
     draw_rail(ui, canvas, -1);
 
     draw_back_button(ui, canvas, false);
@@ -694,10 +716,11 @@ static void draw_base(struct browser_ui *ui, struct ui_canvas *canvas)
         draw_tile(ui, canvas, slot, false);
     if (!ui->grid_count && ui->listing.path)
         ui_draw_text(canvas, ui->font, 30, CENTER_X + CENTER_W / 2, 480, 0,
-                     UI_ALIGN_CENTER, color_dim, "Keine Einträge");
+                     UI_ALIGN_CENTER, color_dim, tr("No entries"));
 
+    /* The launcher's messages arrive in English. */
     const char *message = ui->listing.error[0] ? ui->listing.error
-                                               : ui->status_message;
+                                               : tr(ui->status_message);
     if (message[0]) {
         ui_fill_round_rect(canvas, GRID_X, 856, CENTER_W - 64, 52, 16,
                            color_accent_soft);
@@ -724,13 +747,13 @@ static void draw_detail(struct browser_ui *ui, struct ui_canvas *canvas)
 {
     const int x = DETAIL_X + 24, width = SIDE_W - 48;
     ui_draw_text(canvas, ui->font, 24, x, 48, 0, UI_ALIGN_LEFT, color_dim,
-                 "Details");
+                 tr("Details"));
     int index = ui->detail;
     if (index < 0 || (size_t)index >= ui->listing.entry_count) {
         ui_draw_text_wrapped(canvas, ui->font, 26, x, 110, width, 36, 4,
                              UI_ALIGN_LEFT, color_dim,
-                             "Zeige mit dem Controller auf einen Titel, um "
-                             "Details zu sehen.");
+                             tr("Point the controller at a title to see "
+                                "its details."));
         return;
     }
     const struct file_browser_entry *entry = &ui->listing.entries[index];
@@ -762,15 +785,13 @@ static void draw_detail(struct browser_ui *ui, struct ui_canvas *canvas)
                      megabytes / 1024.0);
         else
             snprintf(file_size, sizeof(file_size), "%.0f MB", megabytes);
-        char *point = strchr(file_size, '.');
-        if (point)
-            *point = ','; /* German decimal comma */
+        i18n_localize_number(file_size);
     }
     if (entry->modified > 0) {
         time_t when = (time_t)entry->modified;
         struct tm local;
         if (localtime_r(&when, &local))
-            strftime(modified, sizeof(modified), "%d.%m.%Y", &local);
+            strftime(modified, sizeof(modified), tr("%Y-%m-%d"), &local);
     }
     if (entry->year > 0)
         snprintf(year, sizeof(year), "%d", entry->year);
@@ -780,17 +801,18 @@ static void draw_detail(struct browser_ui *ui, struct ui_canvas *canvas)
     struct {
         const char *label, *value;
     } rows[] = {
-        {"Typ", entry->kind == FILE_BROWSER_MEDIA ? "Video" : "Ordner"},
-        {"Dauer", format_duration(entry->duration_us, duration)},
-        {"Gestoppt", format_duration(entry->resume_us, resume)},
-        {"Gesehen", entry->played ? "Ja" : ""},
-        {"Jahr", year},
-        {"Quelle", jellyfin ? "Jellyfin" : "Lokal"},
-        {"Format", extension_badge(entry, badge)},
+        {tr("Type"),
+         entry->kind == FILE_BROWSER_MEDIA ? "Video" : tr("Folder")},
+        {tr("Duration"), format_duration(entry->duration_us, duration)},
+        {tr("Stopped"), format_duration(entry->resume_us, resume)},
+        {tr("Watched"), entry->played ? tr("Yes") : ""},
+        {tr("Year"), year},
+        {tr("Source"), jellyfin ? "Jellyfin" : tr("Local")},
+        {tr("Format"), extension_badge(entry, badge)},
         {"Codec", entry->codec},
-        {"Größe", size},
-        {"Datei", file_size},
-        {"Geändert", modified},
+        {tr("Size"), size},
+        {tr("File"), file_size},
+        {tr("Modified"), modified},
     };
     for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); ++i) {
         if (!rows[i].value[0])
@@ -804,7 +826,7 @@ static void draw_detail(struct browser_ui *ui, struct ui_canvas *canvas)
     if (entry->kind == FILE_BROWSER_MEDIA)
         ui_draw_text_wrapped(canvas, ui->font, 24, x, CARD_Y + CARD_H - 80,
                              width, 32, 2, UI_ALIGN_LEFT, color_dim,
-                             "Trigger drücken zum Abspielen");
+                             tr("Pull the trigger to play"));
 }
 
 static void draw_keyboard(struct browser_ui *ui, struct ui_canvas *canvas,
@@ -827,7 +849,7 @@ static void draw_keyboard(struct browser_ui *ui, struct ui_canvas *canvas,
     snprintf(shown, sizeof(shown), "%s|", ui->query);
     ui_draw_text(canvas, ui->font, 32, KB_X + 100, KB_Y + 40, KB_W - 160,
                  UI_ALIGN_LEFT, ui->query[0] ? color_text : color_dim,
-                 ui->query[0] ? shown : "Titel in Jellyfin suchen …");
+                 ui->query[0] ? shown : tr("Search Jellyfin for a title …"));
     for (int id = ID_KEY; id <= ID_KEY_SEARCH; ++id) {
         int x, y, width;
         if (!key_rect(id, &x, &y, &width))
@@ -839,14 +861,12 @@ static void draw_keyboard(struct browser_ui *ui, struct ui_canvas *canvas,
                                               : color_accent)
                            : focused ? color_tile_hover
                                      : color_chip);
-        const char *label =
-            id < ID_KEY_SPACE
-                ? keyboard_keys[(id - ID_KEY) / KEY_COLUMNS]
-                               [(id - ID_KEY) % KEY_COLUMNS]
-            : id == ID_KEY_SPACE     ? "Leerzeichen"
-            : id == ID_KEY_BACKSPACE ? "Löschen"
-            : id == ID_KEY_CANCEL    ? "Abbrechen"
-                                     : "Suchen";
+        char key[8];
+        const char *label = id < ID_KEY_SPACE ? keyboard_key(id - ID_KEY, key)
+                            : id == ID_KEY_SPACE     ? tr("Space")
+                            : id == ID_KEY_BACKSPACE ? tr("Delete")
+                            : id == ID_KEY_CANCEL    ? tr("Cancel")
+                                                     : tr("Search");
         ui_draw_text(canvas, id < ID_KEY_SPACE ? ui->bold : ui->font, 28,
                      x + width / 2, y + 14, width - 12, UI_ALIGN_CENTER,
                      color_text, label);
@@ -873,15 +893,15 @@ static void draw_resume_prompt(struct browser_ui *ui,
     format_duration(entry->resume_us, position);
     ui_draw_text(canvas, ui->font, 26, PROMPT_X + PROMPT_W / 2,
                  PROMPT_Y + 96, PROMPT_W - 64, UI_ALIGN_CENTER, color_dim,
-                 "Zuletzt gestoppt – wo weiterschauen?");
-    snprintf(text, sizeof(text), "Ab %s", position);
+                 tr("Stopped last time – where to continue?"));
+    snprintf(text, sizeof(text), tr("From %s"), position);
     const struct {
         int id, x;
         const char *label;
         bool primary;
     } buttons[] = {
         {ID_RESUME, PROMPT_RESUME_X, text, true},
-        {ID_RESTART, PROMPT_RESTART_X, "Von vorn", false},
+        {ID_RESTART, PROMPT_RESTART_X, tr("From the start"), false},
     };
     for (size_t i = 0; i < 2; ++i) {
         bool focused = hover == buttons[i].id;
@@ -1291,8 +1311,8 @@ static void type_key(struct browser_ui *ui, int hover)
     size_t length = strlen(ui->query);
     ui->dirty = true;
     if (hover >= ID_KEY && hover < ID_KEY + KEY_ROWS * KEY_COLUMNS) {
-        const char *key = keyboard_keys[(hover - ID_KEY) / KEY_COLUMNS]
-                                       [(hover - ID_KEY) % KEY_COLUMNS];
+        char key[8];
+        keyboard_key(hover - ID_KEY, key);
         if (length + strlen(key) < sizeof(ui->query))
             memcpy(ui->query + length, key, strlen(key) + 1);
     } else if (hover == ID_KEY_SPACE) {
@@ -1318,7 +1338,7 @@ static void type_key(struct browser_ui *ui, int hover)
         ui->restore_page = 0;
         request(ui, location);
     } else if (hover != ID_KEYBOARD_AREA) {
-        ui->keyboard_open = false; /* "Abbrechen" or a click outside */
+        ui->keyboard_open = false; /* "Cancel" or a click outside */
         ui->hover = -1;
     }
 }
@@ -1635,6 +1655,14 @@ void browser_ui_navigate(struct browser_ui *ui, const char *location,
     ui->content_dirty = true;
     ui->dirty = true;
     request(ui, location);
+}
+
+void browser_ui_relocalize(struct browser_ui *ui)
+{
+    ui->restore_page = ui->page;
+    ui->content_dirty = true;
+    ui->dirty = true;
+    request(ui, ui->location);
 }
 
 void browser_ui_close(struct browser_ui *ui)

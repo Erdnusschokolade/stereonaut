@@ -29,6 +29,7 @@
 #include "browser-ui.h"
 #include "controller-bindings.h"
 #include "gltf-model.h"
+#include "i18n.h"
 #include "render-models.h"
 #include "jellyfin.h"
 #include "player-ui.h"
@@ -444,6 +445,7 @@ struct app {
     int settings_tab;
     int settings_hover;
     uint32_t *settings_cpu;
+    int system_language; /* what "automatic" finds, see i18n_detect */
     float adjust[PLAYER_ADJUST_COUNT];   /* see player_adjust_info */
     char title_key[TITLE_KEY_SIZE];      /* titles.json entry, "" if none */
     /* The dome (and the flat screen) is centred on this head position and
@@ -994,7 +996,7 @@ static void change_adjust(struct app *app, int control)
            app->adjust[index]);
 }
 
-/* "Zurücksetzen" of the position or the picture tab. */
+/* "Reset" of the position or the picture tab. */
 static void reset_adjust(struct app *app, bool picture)
 {
     for (int i = 0; i < PLAYER_ADJUST_COUNT; ++i) {
@@ -2330,6 +2332,8 @@ static struct player_ui_state player_state(const struct app *app)
         .passthrough = app->passthrough,
         .passthrough_supported = app->alpha_blend_supported,
         .key_picking = app->key_picking,
+        .language = i18n_choice(),
+        .system_language = app->system_language,
         .bindings = app->bindings,
         .learn_action = app->learn_action,
         .debug_text = app->gaze_debug ? app->debug_text : NULL,
@@ -3437,6 +3441,19 @@ static bool apply_setting(struct app *app, int action)
                 action < PLAYER_UI_PREVIEW_FOV +
                              PLAYER_UI_PREVIEW_FOV_COUNT)) {
         change_preview(app, action);
+    } else if (action >= PLAYER_UI_LANGUAGE &&
+               action < PLAYER_UI_LANGUAGE_END) {
+        int language = action - PLAYER_UI_LANGUAGE - 1;
+        if (language >= i18n_language_count)
+            return false;
+        const char *choice =
+            language < 0 ? "auto" : i18n_languages[language]->code;
+        settings_set_string("language", choice);
+        app->system_language = i18n_detect();
+        int shown = i18n_select(choice);
+        printf("language=%s choice=%s\n", i18n_languages[shown]->code,
+               choice);
+        browser_ui_relocalize(&app->browser);
     } else {
         return false;
     }
@@ -4814,24 +4831,26 @@ static void update_debug_text(struct app *app)
         return;
     app->debug_text_time = now;
     char text[sizeof(app->debug_text)];
-    const char *source = app->autofocus_gaze ? "Auge"
-                         : app->has_eye_gaze ? "Kopf (kein Blick)"
-                                             : "Kopf (kein Eye Tracking)";
-    char focus[24] = "aus";
+    const char *source = app->autofocus_gaze ? tr("eye")
+                         : app->has_eye_gaze ? tr("head (no gaze)")
+                                             : tr("head (no eye tracking)");
+    char focus[24];
+    snprintf(focus, sizeof(focus), "%s", tr("off"));
     if (app->autofocus_focused)
         snprintf(focus, sizeof(focus), "%.2f m", app->autofocus_distance);
     if (app->projection_mode == NV12_PROJECTION_FLAT ||
         app->projection_mode == NV12_PROJECTION_FISHEYE ||
         app->stereo_layout == NV12_STEREO_MONO)
-        snprintf(text, sizeof(text), "Blick: %s · Messung nur bei 180/360 "
-                 "mit SBS/TB", source);
+        snprintf(text, sizeof(text),
+                 tr("Gaze: %s · measured only for 180/360 with SBS/TB"),
+                 source);
     else
         snprintf(text, sizeof(text),
-                 "Blick: %s · Disparität %+.2f° · Score %.2f · Struktur %.4f"
-                 " · %s · Fokus %s · Versatz %.2f°",
+                 tr("Gaze: %s · disparity %+.2f° · score %.2f · structure "
+                    "%.4f · %s · focus %s · offset %.2f°"),
                  source, app->autofocus_disparity, app->autofocus_score,
                  app->autofocus_variance,
-                 app->autofocus_valid ? "gültig" : "verworfen", focus,
+                 app->autofocus_valid ? tr("valid") : tr("rejected"), focus,
                  app->autofocus_offset);
     if (strcmp(text, app->debug_text) != 0) {
         snprintf(app->debug_text, sizeof(app->debug_text), "%s", text);
@@ -6305,6 +6324,12 @@ int main(int argc, char **argv)
     app.learn_action = -1;
     app.settings_tab = PLAYER_UI_TAB_PLAYBACK;
     app.awaiting_frame = true;
+    char language[16];
+    settings_get_string("language", language, sizeof(language), "auto");
+    app.system_language = i18n_detect();
+    printf("language=%s choice=%s system=%s\n",
+           i18n_languages[i18n_select(language)]->code, language,
+           i18n_languages[app.system_language]->code);
     char browser_error[256] = {0};
     if (browser_ui_open(&app.browser, "root:", NULL, browser_error,
                         sizeof(browser_error)) < 0) {

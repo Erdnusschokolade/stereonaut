@@ -2,6 +2,7 @@
 #define STEREONAUT_SETTINGS_H
 
 #include <stdbool.h>
+#include <stddef.h>
 
 /* Global preferences in $XDG_CONFIG_HOME/stereonaut/settings.json (browser
  * sort order, scrub preview). Reads fall back when the file or key is
@@ -10,8 +11,12 @@
 int settings_get_int(const char *key, int fallback);
 bool settings_get_bool(const char *key, bool fallback);
 double settings_get_double(const char *key, double fallback);
+/* Copies the string `key` (or `fallback`) into text. */
+void settings_get_string(const char *key, char *text, size_t size,
+                         const char *fallback);
 void settings_set_int(const char *key, int value);
 void settings_set_bool(const char *key, bool value);
 void settings_set_double(const char *key, double value);
+void settings_set_string(const char *key, const char *value);
 
 #endif

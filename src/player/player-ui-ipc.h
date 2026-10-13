@@ -24,7 +24,8 @@ struct player_ui_result {
 
 /* Commands from the launcher to the XR host. */
 enum player_ui_command_type {
-    /* Show the browser at `path` with an optional status `message`. */
+    /* Show the browser at `path` with an optional status `message` (in
+     * English, the host translates it). */
     PLAYER_UI_BROWSE = 1,
     /* Attach a playback session: the NV12 socket travels as SCM_RIGHTS,
      * `path` names the title (as in FILE_SELECTED). */

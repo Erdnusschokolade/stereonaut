@@ -10,7 +10,8 @@
  * motion), position (zoom, height, rotation, stereo offsets), picture
  * (levels, brightness, contrast, saturation, gamma), focus (autofocus
  * strength), passthrough (environment, chroma key) and information.
- * The global settings (playback, autofocus details, controller buttons)
+ * The global settings (playback, autofocus details, controller buttons,
+ * language)
  * use the same popup as a page of their own, which the host shows over the
  * browser (player_ui_render_settings). The host owns all state and passes
  * it in; nothing here knows about OpenXR or Vulkan. */
@@ -89,6 +90,7 @@ enum player_ui_tab {
     PLAYER_UI_TAB_PLAYBACK, /* settings: preview, panel, AV1, passthrough */
     PLAYER_UI_TAB_AUTOFOCUS, /* settings: autofocus details */
     PLAYER_UI_TAB_BUTTONS,  /* settings: controller bindings */
+    PLAYER_UI_TAB_LANGUAGE, /* settings: language of the interface */
     PLAYER_UI_TAB_COUNT,
 };
 
@@ -141,6 +143,9 @@ enum player_ui_control {
     PLAYER_UI_TAB = 190,              /* + enum player_ui_tab */
     PLAYER_UI_SETTINGS_CLOSE = 200,   /* leaves the settings page */
     PLAYER_UI_PASSTHROUGH_TOGGLE = 201, /* card button */
+    /* + 0 automatic, + 1 + index into i18n_languages. */
+    PLAYER_UI_LANGUAGE = 210,
+    PLAYER_UI_LANGUAGE_END = 230,
 };
 
 /* Seconds without input after which the panel hides during playback
@@ -181,6 +186,10 @@ struct player_ui_state {
     bool passthrough;     /* show the room where nothing is drawn */
     bool passthrough_supported; /* the runtime offers it */
     bool key_picking;     /* waiting for the trigger aimed at the video */
+    /* Language chosen in the settings (index into i18n_languages or
+     * I18N_AUTO) and the one "automatic" finds. */
+    int language;
+    int system_language;
     /* Controller bindings (BINDING_ACTION_COUNT, NULL = standard) and the
      * action waiting for buttons, or -1. */
     const struct binding *bindings;

@@ -4,9 +4,11 @@
  *   ui-preview OUTPUT.ppm [HOVER_ID]
  *
  * Optional sample thumbnails: STEREONAUT_PREVIEW_THUMBS=dir with 1.ppm ...
- * (binary P6). Without them synthetic gradients are used. */
+ * (binary P6). Without them synthetic gradients are used. The language
+ * follows the system; STEREONAUT_LANGUAGE=de (or en) picks one. */
 #define _POSIX_C_SOURCE 200809L
 #include "browser-ui.h"
+#include "i18n.h"
 #include "jellyfin.h"
 #include "player-ui.h"
 #include "ui-draw.h"
@@ -215,8 +217,10 @@ static int preview_player(const char *path, int hover, bool popup, int tab)
         .learn_action = getenv("STEREONAUT_PREVIEW_LEARN")
                             ? atoi(getenv("STEREONAUT_PREVIEW_LEARN"))
                             : -1,
-        .debug_text = "Blick: Auge · Disparität +11.40° · Score 0.98 · "
-                      "Struktur 0.0020 · gültig · Versatz 7.80°",
+        .language = i18n_choice(),
+        .system_language = i18n_detect(),
+        .debug_text = "Gaze: eye · disparity +11.40° · score 0.98 · "
+                      "structure 0.0020 · valid · offset 7.80°",
     };
     /* Hovering the seek bar shows the scrub preview (a stand-in picture of
      * one SBS eye). */
@@ -249,6 +253,7 @@ static int preview_player(const char *path, int hover, bool popup, int tab)
 
 int main(int argc, char **argv)
 {
+    i18n_select("auto");
     if (argc >= 3 && strcmp(argv[1], "--player") == 0)
         return preview_player(argv[2], argc > 3 ? atoi(argv[3]) : 0,
                               argc > 4 && atoi(argv[4]) != 0,

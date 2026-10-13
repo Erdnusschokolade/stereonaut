@@ -69,6 +69,17 @@ double settings_get_double(const char *key, double fallback)
     return result;
 }
 
+void settings_get_string(const char *key, char *text, size_t size,
+                         const char *fallback)
+{
+    json_object *root = NULL;
+    json_object *value = lookup(key, json_type_string, &root);
+    snprintf(text, size, "%s", value ? json_object_get_string(value)
+                                     : fallback);
+    if (root)
+        json_object_put(root);
+}
+
 /* Takes ownership of `value`. */
 static void store(const char *key, json_object *value)
 {
@@ -124,4 +135,9 @@ void settings_set_bool(const char *key, bool value)
 void settings_set_double(const char *key, double value)
 {
     store(key, json_object_new_double(value));
+}
+
+void settings_set_string(const char *key, const char *value)
+{
+    store(key, json_object_new_string(value));
 }

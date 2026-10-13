@@ -1,5 +1,6 @@
 #define _XOPEN_SOURCE 700
 #include "file-browser.h"
+#include "i18n.h"
 #include "jellyfin.h"
 
 #include <dirent.h>
@@ -36,6 +37,9 @@ struct file_browser {
     int local_sort;
     bool local_descending;
 };
+
+static void set_error(char *error, size_t size, const char *format, ...)
+    __attribute__((format(printf, 3, 4)));
 
 static void set_error(char *error, size_t size, const char *format, ...)
 {
@@ -152,16 +156,16 @@ static struct file_browser_listing read_directory(const char *requested,
     char *resolved = realpath(requested, NULL);
     if (!resolved) {
         snprintf(listing.error, sizeof(listing.error),
-                 "Verzeichnis kann nicht geöffnet werden: %s", strerror(errno));
+                 tr("Cannot open the folder: %s"), strerror(errno));
         listing.path = strdup(requested);
         return listing;
     }
-    /* Display title "Lokale Dateien / home / user / Videos". */
-    size_t title_size = strlen(resolved) * 2U + 32U;
+    /* Display title "Local files / home / user / Videos". */
+    size_t title_size = strlen(resolved) * 2U + 128U;
     listing.path = malloc(title_size);
     if (listing.path) {
-        size_t used = (size_t)snprintf(listing.path, title_size,
-                                       "Lokale Dateien");
+        size_t used = (size_t)snprintf(listing.path, title_size, "%s",
+                                       tr("Local files"));
         for (const char *c = resolved; *c && used + 4U < title_size; ++c) {
             if (*c == '/') {
                 if (c[1]) {
@@ -177,7 +181,7 @@ static struct file_browser_listing read_directory(const char *requested,
     DIR *directory = opendir(resolved);
     if (!directory) {
         snprintf(listing.error, sizeof(listing.error),
-                 "Verzeichnis kann nicht geöffnet werden: %s", strerror(errno));
+                 tr("Cannot open the folder: %s"), strerror(errno));
         free(resolved);
         return listing;
     }
@@ -194,7 +198,7 @@ static struct file_browser_listing read_directory(const char *requested,
         if (!item) {
             if (errno)
                 snprintf(listing.error, sizeof(listing.error),
-                         "Verzeichnis konnte nicht vollständig gelesen werden: %s",
+                         tr("Could not read the whole folder: %s"),
                          strerror(errno));
             break;
         }
@@ -247,7 +251,7 @@ allocation_failure:
     listing.generation = generation;
     listing.path = strdup(requested);
     snprintf(listing.error, sizeof(listing.error),
-             "Nicht genug Speicher für Verzeichnisliste");
+             tr("Not enough memory for the folder listing"));
     return listing;
 }
 
@@ -308,14 +312,15 @@ static int add_jellyfin_items(struct file_browser_listing *listing,
 static struct file_browser_listing read_root(uint64_t generation)
 {
     struct file_browser_listing listing = {.generation = generation};
-    listing.path = strdup("Start");
+    listing.path = strdup(tr("Home"));
     const char *home = getenv("HOME");
-    if (add_entry(&listing, FILE_BROWSER_DIRECTORY, "Lokale Dateien",
+    if (add_entry(&listing, FILE_BROWSER_DIRECTORY, tr("Local files"),
                   home && home[0] ? home : "/") < 0 ||
         add_entry(&listing, FILE_BROWSER_DIRECTORY, "Jellyfin", "jf:") < 0) {
         file_browser_listing_clear(&listing);
         listing.generation = generation;
-        snprintf(listing.error, sizeof(listing.error), "Nicht genug Speicher");
+        snprintf(listing.error, sizeof(listing.error), "%s",
+                 tr("Not enough memory"));
         return listing;
     }
     struct jf_config config;
@@ -352,24 +357,26 @@ static struct file_browser_listing jellyfin_login(
             return (struct file_browser_listing){.generation = generation};
         }
         if (!error[0])
-            note = "Noch nicht bestätigt";
+            note = tr("Not confirmed yet");
         else
             login_secret[0] = '\0'; /* expired or rejected: request a new code */
     }
     if (!login_secret[0] &&
         jf_quickconnect_start(config, login_code, login_secret, error,
                               sizeof(error)) < 0)
-        return jellyfin_message(generation, "Jellyfin anmelden",
-                                error[0] ? error : "Anmeldung nicht möglich");
+        return jellyfin_message(generation, tr("Sign in to Jellyfin"),
+                                error[0] ? error
+                                         : tr("Signing in is not possible"));
     struct file_browser_listing listing = {.generation = generation};
-    listing.path = strdup("Jellyfin anmelden");
+    listing.path = strdup(tr("Sign in to Jellyfin"));
     snprintf(listing.error, sizeof(listing.error), "%s",
-             note ? note : "Code in Jellyfin unter Quick Connect bestätigen");
+             note ? note
+                  : tr("Confirm the code in Jellyfin under Quick Connect"));
     char label[64];
     add_entry(&listing, FILE_BROWSER_PARENT, "..", "root:");
     snprintf(label, sizeof(label), "Code %s", login_code);
     add_entry(&listing, FILE_BROWSER_DIRECTORY, label, "jf:login");
-    add_entry(&listing, FILE_BROWSER_DIRECTORY, "Weiter nach Bestätigung",
+    add_entry(&listing, FILE_BROWSER_DIRECTORY, tr("Continue once confirmed"),
               "jf:login");
     return listing;
 }
@@ -378,10 +385,10 @@ static const char *const filter_keys[JF_FILTER_COUNT] = {
     "", "genre", "studio", "person",
 };
 static const char *const filter_names[JF_FILTER_COUNT] = {
-    "", "Genre", "Studio", "Darsteller",
+    "", N_("Genre"), N_("Studio"), N_("Cast"),
 };
 static const char *const filter_titles[JF_FILTER_COUNT] = {
-    "", "Genres", "Studios", "Darsteller",
+    "", N_("Genres"), N_("Studios"), N_("Cast"),
 };
 
 /* "genre=ID" (id copied when `id` is given) or "genre" alone. */
@@ -461,7 +468,7 @@ static int list_views_cached(const struct jf_config *config,
     *items = malloc((views_cache_count ? views_cache_count : 1U) *
                     sizeof(**items));
     if (!*items) {
-        set_error(error, error_size, "Nicht genug Speicher");
+        set_error(error, error_size, tr("Not enough memory"));
         return -1;
     }
     memcpy(*items, views_cache, views_cache_count * sizeof(**items));
@@ -521,7 +528,7 @@ static struct file_browser_listing read_jellyfin(const char *request,
                             : NULL;
     int result;
     if (query) {
-        snprintf(title, sizeof(title), "Suche / %s", query);
+        snprintf(title, sizeof(title), "%s / %s", tr("Search"), query);
         result = jf_search(&config, query, &items, &count, error,
                            sizeof(error));
     } else if (!folder_id) {
@@ -563,13 +570,13 @@ static struct file_browser_listing read_jellyfin(const char *request,
             size_t used = strlen(title);
             if (filter_values) {
                 snprintf(title + used, sizeof(title) - used, " / %s",
-                         filter_titles[filter]);
+                         tr(filter_titles[filter]));
             } else {
                 char name[256] = {0};
                 jf_item_info(&config, filter_id, name, sizeof(name), NULL, 0,
                              NULL, 0);
                 snprintf(title + used, sizeof(title) - used, " / %s: %s",
-                         filter_names[filter], name[0] ? name : "?");
+                         tr(filter_names[filter]), name[0] ? name : "?");
             }
         }
         if (filter_values)
@@ -585,11 +592,11 @@ static struct file_browser_listing read_jellyfin(const char *request,
         config.token[0] = '\0';
         login_secret[0] = '\0';
         return jellyfin_login(generation, &config, false,
-                              "Anmeldung abgelaufen: neuen Code bestätigen");
+                              tr("Sign-in expired: confirm a new code"));
     }
     if (result < 0)
         return jellyfin_message(generation, "Jellyfin",
-                                error[0] ? error : "Jellyfin-Fehler");
+                                error[0] ? error : tr("Jellyfin error"));
     listing.path = strdup(title);
     if (add_entry(&listing, FILE_BROWSER_PARENT, "..", parent_path_text) < 0)
         goto allocation_failure;
@@ -613,7 +620,7 @@ static struct file_browser_listing read_jellyfin(const char *request,
             goto allocation_failure;
         if (query && count == 0)
             snprintf(listing.error, sizeof(listing.error),
-                     "Keine Treffer für „%.120s“", query);
+                     tr("No results for “%.120s”"), query);
     }
     free(items);
     return listing;
@@ -623,7 +630,7 @@ allocation_failure:
     file_browser_listing_clear(&listing);
     listing.generation = generation;
     listing.path = strdup("Jellyfin");
-    snprintf(listing.error, sizeof(listing.error), "Nicht genug Speicher");
+    snprintf(listing.error, sizeof(listing.error), tr("Not enough memory"));
     return listing;
 }
 
@@ -824,12 +831,12 @@ int file_browser_request(struct file_browser *browser, const char *path,
                          char *error, size_t error_size)
 {
     if (!browser || !path || !path[0]) {
-        set_error(error, error_size, "ungültiger Verzeichnispfad");
+        set_error(error, error_size, tr("Invalid folder path"));
         return -1;
     }
     char *copy = strdup(path);
     if (!copy) {
-        set_error(error, error_size, "Verzeichnispfad konnte nicht kopiert werden");
+        set_error(error, error_size, tr("Not enough memory"));
         return -1;
     }
     pthread_mutex_lock(&browser->mutex);
@@ -845,28 +852,28 @@ int file_browser_open(struct file_browser **result, const char *initial_path,
                       char *error, size_t error_size)
 {
     if (!result) {
-        set_error(error, error_size, "ungültiger Browser-Zeiger");
+        set_error(error, error_size, "invalid browser pointer");
         return -1;
     }
     *result = NULL;
     struct file_browser *browser = calloc(1, sizeof(*browser));
     if (!browser) {
-        set_error(error, error_size, "Browser konnte nicht angelegt werden");
+        set_error(error, error_size, "cannot allocate the browser");
         return -1;
     }
     if (pthread_mutex_init(&browser->mutex, NULL) != 0) {
-        set_error(error, error_size, "Browser-Synchronisierung fehlgeschlagen");
+        set_error(error, error_size, "cannot set up browser locking");
         free(browser);
         return -1;
     }
     if (pthread_cond_init(&browser->changed, NULL) != 0) {
-        set_error(error, error_size, "Browser-Synchronisierung fehlgeschlagen");
+        set_error(error, error_size, "cannot set up browser locking");
         pthread_mutex_destroy(&browser->mutex);
         free(browser);
         return -1;
     }
     if (pthread_create(&browser->worker, NULL, browser_worker, browser) != 0) {
-        set_error(error, error_size, "Browser-Thread konnte nicht starten");
+        set_error(error, error_size, "cannot start the browser thread");
         pthread_cond_destroy(&browser->changed);
         pthread_mutex_destroy(&browser->mutex);
         free(browser);

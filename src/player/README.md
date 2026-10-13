@@ -180,13 +180,32 @@ decoding times, and a backward search for one of them landed a keyframe
 early. The position the seek starts from travels through the pipeline and,
 for a re-exec, `--seek-from-us`.
 
+The interface speaks English and German (`i18n.c`). As with gettext the
+English text in the code is the key: `tr("Settings")` returns the text of
+the language in effect, strings in static tables are marked with `N_()`.
+The language is `language` in `settings.json`: `auto` (the default) or a
+code chosen on the settings page. `auto` takes the first of
+`STEREONAUT_LANGUAGE`, `LANGUAGE`, `LC_ALL`, `LC_MESSAGES`, the Steam
+client language (`~/.steam/registry.vdf`; on SteamOS `LANG` stays `en_US`
+whatever the user picked) and `LANG` that names a language, and falls back
+to English where no translation exists. Changing it redraws both panels and
+reads the current listing again. A translation is one `i18n-CODE.c` with a
+`struct i18n_language` (pairs of English and translated text, decimal
+point, optional keyboard layout for the search) added to `i18n_languages`
+in `i18n.c`; the build scripts pick up every `i18n*.c`. Missing entries
+show in English. `python3 tools/i18n/check-translations.py` lists missing
+and unused entries and translations whose printf conversions differ;
+`--list CODE` prints the missing ones as entries to fill in. The launcher
+sends its messages in English and the host translates them.
+
 Jellyfin titles are addressed as `jf:item:<id>:<folder>`; `jellyfin.c` talks to
 the server (Quick Connect, listings, `PlaybackInfo`) and the session plays the
 resulting Direct Play or HLS URL.
 
 Experimental AV1 on the Frame (`decoded-video.c`, `DECODED_VIDEO_DAV1D`):
 if `av1_software` is set in
-`settings.json` (toggle "AV1 bis 4K per CPU" in the view tab), the session
+`settings.json` (toggle "AV1 up to 4K on the CPU" on the settings page),
+the session
 exports `STEREONAUT_AV1`, the demuxer accepts 8-bit AV1 up to 4096×2160 and
 the Jellyfin device profile offers it for Direct Play. Such titles skip Iris:
 a worker thread decodes with dav1d (`max_frame_delay=8`) and converts each

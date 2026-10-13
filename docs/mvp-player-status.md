@@ -87,6 +87,11 @@ geprüft:
   nächsten Titel); Jellyfin spielt solche Titel dann direkt statt zu
   transkodieren. Ohne Headset bis 60 fps ohne Verluste, siehe
   `docs/hardware-investigation.md`.
+- Oberfläche auf Englisch und Deutsch: Die Sprache folgt automatisch der
+  Steam- bzw. Systemsprache (am Frame steht `LANG` fest auf `en_US`, daher
+  zählt die Steam-Sprache aus `~/.steam/registry.vdf`), ohne Übersetzung
+  Englisch; wählbar unter Einstellungen → Sprache. Per `ui-preview` und
+  Erkennungstest geprüft.
 
 ## Bekannte Grenzen
 

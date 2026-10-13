@@ -1,5 +1,7 @@
 #include "controller-bindings.h"
 
+#include "i18n.h"
+
 #include <stdio.h>
 
 #define BIND(input) {(input), -1}
@@ -10,23 +12,23 @@ const struct binding_action_info binding_action_info[BINDING_ACTION_COUNT] = {
                            BIND(BINDING_ANY_STICK_LEFT)},
     [BINDING_SEEK_FORWARD] = {"+10 s", "seek_forward", false,
                               BIND(BINDING_ANY_STICK_RIGHT)},
-    [BINDING_VOLUME_DOWN] = {"Leiser", "volume_down", true,
+    [BINDING_VOLUME_DOWN] = {N_("Volume down"), "volume_down", true,
                              BIND(BINDING_ANY_STICK_DOWN)},
-    [BINDING_VOLUME_UP] = {"Lauter", "volume_up", true,
+    [BINDING_VOLUME_UP] = {N_("Volume up"), "volume_up", true,
                            BIND(BINDING_ANY_STICK_UP)},
-    [BINDING_PREVIOUS] = {"Vorheriges Video", "previous", false,
+    [BINDING_PREVIOUS] = {N_("Previous video"), "previous", false,
                           COMBO(BINDING_RIGHT_GRIP, BINDING_RIGHT_STICK_LEFT)},
-    [BINDING_NEXT] = {"Nächstes Video", "next", false,
+    [BINDING_NEXT] = {N_("Next video"), "next", false,
                       COMBO(BINDING_RIGHT_GRIP, BINDING_RIGHT_STICK_RIGHT)},
-    [BINDING_TILT_DOWN] = {"Neigung runter", "tilt_down", true,
+    [BINDING_TILT_DOWN] = {N_("Tilt down"), "tilt_down", true,
                            BIND(BINDING_DPAD_DOWN)},
-    [BINDING_TILT_UP] = {"Neigung hoch", "tilt_up", true,
+    [BINDING_TILT_UP] = {N_("Tilt up"), "tilt_up", true,
                          BIND(BINDING_DPAD_UP)},
-    [BINDING_ZOOM_OUT] = {"Zoom weg", "zoom_out", true,
+    [BINDING_ZOOM_OUT] = {N_("Zoom out"), "zoom_out", true,
                           BIND(BINDING_DPAD_LEFT)},
-    [BINDING_ZOOM_IN] = {"Zoom näher", "zoom_in", true,
+    [BINDING_ZOOM_IN] = {N_("Zoom in"), "zoom_in", true,
                          BIND(BINDING_DPAD_RIGHT)},
-    [BINDING_PLAY_PAUSE] = {"Wiedergabe/Pause", "play_pause", false,
+    [BINDING_PLAY_PAUSE] = {N_("Play/pause"), "play_pause", false,
                             BIND(BINDING_A)},
 };
 
@@ -44,22 +46,22 @@ static const char *const input_names[BINDING_INPUT_COUNT] = {
     [BINDING_ANY_STICK_RIGHT] = "Stick →",
     [BINDING_ANY_STICK_UP] = "Stick ↑",
     [BINDING_ANY_STICK_DOWN] = "Stick ↓",
-    [BINDING_LEFT_STICK_CLICK] = "Stick-Klick",
-    [BINDING_RIGHT_STICK_CLICK] = "Stick-Klick",
-    [BINDING_LEFT_GRIP] = "Griff",
-    [BINDING_RIGHT_GRIP] = "Griff",
+    [BINDING_LEFT_STICK_CLICK] = N_("Stick click"),
+    [BINDING_RIGHT_STICK_CLICK] = N_("Stick click"),
+    [BINDING_LEFT_GRIP] = N_("Grip"),
+    [BINDING_RIGHT_GRIP] = N_("Grip"),
     [BINDING_LEFT_BUMPER] = "Bumper",
     [BINDING_RIGHT_BUMPER] = "Bumper",
-    [BINDING_DPAD_UP] = "Kreuz ↑",
-    [BINDING_DPAD_DOWN] = "Kreuz ↓",
-    [BINDING_DPAD_LEFT] = "Kreuz ←",
-    [BINDING_DPAD_RIGHT] = "Kreuz →",
+    [BINDING_DPAD_UP] = N_("D-pad ↑"),
+    [BINDING_DPAD_DOWN] = N_("D-pad ↓"),
+    [BINDING_DPAD_LEFT] = N_("D-pad ←"),
+    [BINDING_DPAD_RIGHT] = N_("D-pad →"),
     [BINDING_VIEW] = "View",
     [BINDING_A] = "A",
     [BINDING_B] = "B",
     [BINDING_X] = "X",
     [BINDING_Y] = "Y",
-    [BINDING_MENU] = "Menü",
+    [BINDING_MENU] = N_("Menu"),
 };
 
 /* 'L', 'R', or 0 for inputs that exist once or on either hand. */
@@ -115,9 +117,10 @@ static void append_name(char *text, size_t size, int input, bool hand)
         ++used;
     char side = hand ? hand_of(input) : 0;
     if (side)
-        snprintf(text + used, size - used, "%c %s", side, input_names[input]);
+        snprintf(text + used, size - used, "%c %s", side,
+                 tr(input_names[input]));
     else
-        snprintf(text + used, size - used, "%s", input_names[input]);
+        snprintf(text + used, size - used, "%s", tr(input_names[input]));
 }
 
 void binding_describe(struct binding binding, char *text, size_t size)
@@ -126,7 +129,7 @@ void binding_describe(struct binding binding, char *text, size_t size)
         return;
     text[0] = '\0';
     if (!valid_input(binding.input)) {
-        snprintf(text, size, "nicht belegt");
+        snprintf(text, size, "%s", tr("not assigned"));
         return;
     }
     if (binding_is_button(binding.modifier)) {

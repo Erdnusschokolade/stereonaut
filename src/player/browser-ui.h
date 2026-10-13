@@ -93,6 +93,9 @@ void browser_ui_close_menus(struct browser_ui *ui);
  * started title; false if there is none. */
 bool browser_ui_following_title(struct browser_ui *ui, const char *path,
                                 int direction, char *next, size_t next_size);
+/* Redraws in the language now in effect; the listing is read again, as
+ * its titles and messages come translated. */
+void browser_ui_relocalize(struct browser_ui *ui);
 /* Previous (< 0) or next (> 0) page, e.g. from the thumbstick. */
 void browser_ui_flip(struct browser_ui *ui, int direction);
 

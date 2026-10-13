@@ -2,6 +2,7 @@
  * process) and one playback session per selected title. Keeping a single XR
  * session alive avoids the SteamVR dashboard popping up between screens. */
 #define _POSIX_C_SOURCE 200809L
+#include "i18n.h"
 #include "player-ui-ipc.h"
 
 #include <errno.h>
@@ -328,14 +329,15 @@ int main(int argc, char **argv)
         if (played < 0) {
             fprintf(stderr, "playback failed; returning to browser\n");
             if (exit_code == EXIT_BROKEN_SOURCE)
-                snprintf(browser_message, sizeof(browser_message),
-                         "Videodatei auf dem Server defekt");
+                snprintf(browser_message, sizeof(browser_message), "%s",
+                         N_("The video file on the server is broken"));
             else if (exit_code == EXIT_SOURCE_FAILED)
-                snprintf(browser_message, sizeof(browser_message),
-                         "Jellyfin oder Netzwerk nicht erreichbar");
+                snprintf(browser_message, sizeof(browser_message), "%s",
+                         N_("Cannot reach Jellyfin or the network"));
             else
-                snprintf(browser_message, sizeof(browser_message),
-                         "Video- oder Audioformat wird derzeit nicht unterstützt");
+                snprintf(browser_message, sizeof(browser_message), "%s",
+                         N_("This video or audio format is not supported "
+                            "yet"));
         }
         if (send_command(PLAYER_UI_BROWSE, directory, browser_message,
                          -1) < 0) {
