@@ -53,6 +53,14 @@ Einschalten decodiert dav1d AV1 bis 4K auf der CPU (siehe unten).
   Hysterese und Überblenden ist neu, siehe unten).
 - Tastenbelegung: Einzeltasten (Stick, A/B/X, Steuerkreuz) lösen ihre
   Aktionen aus und lassen sich neu belegen.
+- Oberfläche auf Englisch und Deutsch: Die Sprache folgt automatisch der
+  Steam- bzw. Systemsprache (am Frame steht `LANG` fest auf `en_US`, daher
+  zählt die Steam-Sprache aus `~/.steam/registry.vdf`), ohne Übersetzung
+  Englisch; Wechsel unter Einstellungen → Sprache wirkt sofort.
+- Ausrichtung: Stereonaut richtet Browser, Player-Panel und Video beim Start
+  nach der Kopfhaltung aus (auch wenn das Headset beim Aufwachen zur Decke
+  zeigte) und behält das über Titel hinweg; „Zentrieren“ im Player und
+  SteamVRs Neuzentrieren setzen es neu.
 
 ## Auf dem Frame gebaut, Headset-Test offen
 
@@ -87,11 +95,6 @@ geprüft:
   nächsten Titel); Jellyfin spielt solche Titel dann direkt statt zu
   transkodieren. Ohne Headset bis 60 fps ohne Verluste, siehe
   `docs/hardware-investigation.md`.
-- Oberfläche auf Englisch und Deutsch: Die Sprache folgt automatisch der
-  Steam- bzw. Systemsprache (am Frame steht `LANG` fest auf `en_US`, daher
-  zählt die Steam-Sprache aus `~/.steam/registry.vdf`), ohne Übersetzung
-  Englisch; wählbar unter Einstellungen → Sprache. Per `ui-preview` und
-  Erkennungstest geprüft.
 
 ## Bekannte Grenzen
 
