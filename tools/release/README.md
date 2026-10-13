@@ -5,7 +5,10 @@ A release carries the package for the Steam Frame,
 SteamOS build): binaries built on the Frame, the sources for rebuilds and
 `install.sh`. SteamOS is an atomic image, so on the same build the binaries
 install as they are; elsewhere `install.sh` checks the libraries with `ldd`
-and rebuilds if one is missing.
+and rebuilds if one is missing. Linux PCs get the source package
+`stereonaut-linux-source.tar.gz` (the sources of the tag and `install.sh`,
+which builds and installs into `~/.local`); the updater on a PC fetches and
+builds it the same way.
 
 Each package has a `.sha256` and a `.sig` (`ssh-keygen -Y sign`, namespace
 `stereonaut-release`). Updates in the headset install only packages signed
@@ -19,10 +22,12 @@ version.
    `src/player/make-release.sh vX.Y.Z --turnip LIBRARY OUTPUT_DIR`
    (`--turnip` adds the TP10 Turnip for HEVC Main10).
 3. Copy `OUTPUT_DIR` to the machine with the signing key and run
-   `tools/release/publish-release.sh OUTPUT_DIR KEY`. It signs the
-   packages, checks each signature against the `release-signers` inside the
-   package and creates the GitHub release with `gh` (`--draft` for a draft,
-   which the updater does not see).
+   `tools/release/publish-release.sh OUTPUT_DIR KEY`. It adds the source
+   package from the tag (`tools/release/make-source-release.sh`) unless it
+   is in `OUTPUT_DIR` already, signs the packages, checks each signature
+   against the `release-signers` inside the package and creates the GitHub
+   release with `gh` (`--draft` for a draft, which the updater does not
+   see).
 
 `STEREONAUT_REPOSITORY=OWNER/NAME` publishes to a fork. For tests,
 `STEREONAUT_RELEASES` (a base URL) and `STEREONAUT_RELEASE_SIGNERS` point the

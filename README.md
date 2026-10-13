@@ -70,6 +70,26 @@ sha256sum -c stereonaut-steamos-aarch64.tar.gz.sha256 &&
 Stereonaut then appears in the SteamVR library. Later versions install from
 the headset under Settings → Updates.
 
+## Installing on a Linux PC (PCVR)
+
+Binaries do not carry over between distributions, so a PC builds the
+release's source package. It needs gcc, pkg-config, glslc and the
+development files of FFmpeg, ALSA, libcurl, json-c, libjpeg, FreeType,
+libpng, Vulkan and OpenXR; the installer names what is missing with the
+command for Arch, Debian/Ubuntu or Fedora.
+
+```sh
+cd "$(mktemp -d)"
+curl -LO https://github.com/Erdnusschokolade/stereonaut/releases/latest/download/stereonaut-linux-source.tar.gz
+curl -LO https://github.com/Erdnusschokolade/stereonaut/releases/latest/download/stereonaut-linux-source.tar.gz.sha256
+sha256sum -c stereonaut-linux-source.tar.gz.sha256 &&
+  tar -xzf stereonaut-linux-source.tar.gz && ./stereonaut-*/install.sh
+```
+
+It installs into `~/.local` and adds Stereonaut to the SteamVR library;
+updates in the headset fetch and build the next source package the same
+way.
+
 ## Building
 
 The code is built on the Steam Frame itself or on Linux with a PCVR OpenXR
