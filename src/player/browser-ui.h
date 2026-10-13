@@ -19,6 +19,7 @@ enum browser_ui_action {
     BROWSER_UI_NONE,
     BROWSER_UI_FILE_SELECTED,
     BROWSER_UI_EXIT_REQUESTED,
+    BROWSER_UI_SETTINGS_REQUESTED, /* the host shows its settings page */
 };
 
 struct ui_font;

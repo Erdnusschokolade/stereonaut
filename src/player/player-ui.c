@@ -31,11 +31,12 @@
 #define PLAY_X 800
 #define SKIP_FORWARD_X 950
 #define VIEW_X 1484
+#define PASSTHROUGH_X 532
 #define VOLUME_DOWN_X 1160
 #define VOLUME_UP_X 1350
 #define VOLUME_R 30
 #define END_X 196
-#define END_W 300
+#define END_W 260
 #define END_H 48
 #define SMALL_R 38
 #define SKIP_R 42
@@ -49,10 +50,10 @@
 
 /* Settings popup above the card: a tab row and three columns of controls
  * in up to three rows. */
-#define POPUP_X 180
-#define POPUP_Y 10
-#define POPUP_W 1380
-#define POPUP_H 334
+#define POPUP_X PLAYER_UI_POPUP_X
+#define POPUP_Y PLAYER_UI_POPUP_Y
+#define POPUP_W PLAYER_UI_POPUP_W
+#define POPUP_H PLAYER_UI_POPUP_H
 #define COLUMN_W 416
 #define COLUMN_X(column) (POPUP_X + 22 + (column) * 460)
 #define TAB_Y (POPUP_Y + 18)
@@ -108,7 +109,31 @@ const struct player_adjust_info player_adjust_info[PLAYER_ADJUST_COUNT] = {
                                   0.1f, 1.0f, 100.0f, "%.0f %%", false},
     [PLAYER_ADJUST_GAMMA] = {"Gamma", "gamma", 0.5f, 2.0f, 0.05f, 1.0f, 1.0f,
                              "%.2f", false},
+    [PLAYER_ADJUST_ENVIRONMENT_DIM] = {"Abdunkeln", "environment_dim", 0.0f,
+                                       1.0f, 0.1f, 0.0f, 100.0f, "%.0f %%",
+                                       true},
+    [PLAYER_ADJUST_KEY_COLOR] = {"Chroma-Key", "key_color", 0.0f, 3.0f,
+                                 1.0f, 0.0f, 1.0f, "%.0f", false},
+    [PLAYER_ADJUST_KEY_THRESHOLD] = {"Schwelle", "key_threshold", 0.0f,
+                                     0.4f, 0.002f, 0.12f, 100.0f, "%.1f",
+                                     false},
+    [PLAYER_ADJUST_KEY_SOFTNESS] = {"Weichheit", "key_softness", 0.0f, 0.3f,
+                                    0.005f, 0.06f, 100.0f, "%.1f", false},
+    [PLAYER_ADJUST_KEY_SPILL] = {"Farbsaum", "key_spill", 0.0f, 1.0f, 0.1f,
+                                 0.6f, 100.0f, "%.0f %%", false},
+    [PLAYER_ADJUST_KEY_Y] = {"Key Y", "key_y", 0.0f, 255.0f, 1.0f, 128.0f,
+                             1.0f, "%.0f", false},
+    [PLAYER_ADJUST_KEY_CB] = {"Key Cb", "key_cb", 0.0f, 255.0f, 1.0f,
+                              128.0f, 1.0f, "%.0f", false},
+    [PLAYER_ADJUST_KEY_CR] = {"Key Cr", "key_cr", 0.0f, 255.0f, 1.0f,
+                              128.0f, 1.0f, "%.0f", false},
 };
+
+_Static_assert(PLAYER_UI_ADJUST_END <= PLAYER_UI_BINDING,
+               "adjust controls overlap the binding controls");
+_Static_assert(PLAYER_UI_BINDING + BINDING_ACTION_COUNT <=
+                   PLAYER_UI_BINDING_CLEAR,
+               "binding controls overlap");
 
 static const struct ui_color color_card = UI_RGBA(17, 18, 22, 225);
 static const struct ui_color color_border = UI_RGBA(255, 255, 255, 18);
@@ -332,61 +357,33 @@ static void layout_popup(const struct player_ui_state *state,
 {
     layout->count = 0;
     static const char *const tabs[PLAYER_UI_TAB_COUNT] = {
-        "Ansicht", "Position", "Bild", "Fokus", "Tasten", "Info",
+        "Ansicht", "Position", "Bild", "Fokus", "Passthrough", "Info",
+        "Wiedergabe", "Autofokus", "Tasten",
     };
-    for (int i = 0; i < PLAYER_UI_TAB_COUNT; ++i)
+    int first = state->settings_page ? PLAYER_UI_FIRST_SETTINGS_TAB : 0;
+    int end = state->settings_page ? PLAYER_UI_TAB_COUNT
+                                   : PLAYER_UI_FIRST_SETTINGS_TAB;
+    for (int i = first; i < end; ++i)
         add_chip(layout, PLAYER_UI_TAB + i,
-                 COLUMN_X(0) + i * (TAB_W + CHIP_GAP), TAB_Y, TAB_W, tabs[i],
-                 state->popup_tab == i);
+                 COLUMN_X(0) + (i - first) * (TAB_W + CHIP_GAP), TAB_Y,
+                 TAB_W, tabs[i], state->popup_tab == i);
+    if (state->settings_page)
+        add_chip(layout, PLAYER_UI_SETTINGS_CLOSE,
+                 POPUP_X + POPUP_W - 22 - TAB_W, TAB_Y, TAB_W, "Schließen",
+                 false);
 
     if (state->popup_tab == PLAYER_UI_TAB_VIEW) {
-        static const char *const modes[2] = {"Original", "Perspektive"};
         static const char *const projections[4] = {"Flach", "180°", "360°",
                                                    "Fisheye"};
         static const char *const layouts[3] = {"Mono", "SBS", "TB"};
-        const char *fovs[PLAYER_UI_PREVIEW_FOV_COUNT];
-        char fov_text[PLAYER_UI_PREVIEW_FOV_COUNT][16];
-        int fov_selected = -1;
-        for (int i = 0; i < PLAYER_UI_PREVIEW_FOV_COUNT; ++i) {
-            snprintf(fov_text[i], sizeof(fov_text[i]), "%d°",
-                     player_ui_preview_fovs[i]);
-            fovs[i] = fov_text[i];
-            if (state->preview_fov == player_ui_preview_fovs[i])
-                fov_selected = i;
-        }
         add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(0), 0,
-                   "Vorschau beim Spulen");
-        add_chip_row(layout, 0, 0, 2, PLAYER_UI_PREVIEW_MODE, modes,
-                     state->preview_perspective ? 1 : 0);
-        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(1), 0,
-                   "Sichtfeld (Perspektive)");
-        add_chip_row(layout, 0, 1, PLAYER_UI_PREVIEW_FOV_COUNT,
-                     PLAYER_UI_PREVIEW_FOV, fovs, fov_selected);
-        static const char *const autohide[PLAYER_UI_AUTOHIDE_COUNT] = {
-            "Nie", "nach 5 s", "nach 15 s",
-        };
-        int autohide_selected = 0;
-        for (int i = 0; i < PLAYER_UI_AUTOHIDE_COUNT; ++i)
-            if (player_ui_autohide[i] == state->autohide)
-                autohide_selected = i;
-        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(2), 0,
-                   "Panel ausblenden (Wiedergabe)");
-        add_chip_row(layout, 0, 2, PLAYER_UI_AUTOHIDE_COUNT,
-                     PLAYER_UI_AUTOHIDE, autohide, autohide_selected);
-
-        add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(0), 0,
-                   "Kopfbewegung (6DoF)");
-        add_stepper(layout, state, 1, ROW_CHIP_Y(0),
+                   "Kopfbewegung (6DoF, alle Titel)");
+        add_stepper(layout, state, 0, ROW_CHIP_Y(0),
                     PLAYER_ADJUST_HEAD_MOTION, NULL);
-        add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(1), 0,
+        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(1), 0,
                    "Ausrichtung");
-        add_chip(layout, PLAYER_UI_RECENTER, COLUMN_X(1), ROW_CHIP_Y(1),
+        add_chip(layout, PLAYER_UI_RECENTER, COLUMN_X(0), ROW_CHIP_Y(1),
                  COLUMN_W, "Zentrieren", false);
-        static const char *const off_on[2] = {"Aus", "An"};
-        add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(2), 0,
-                   "AV1 bis 4K per CPU (Test)");
-        add_chip_row(layout, 1, 2, 2, PLAYER_UI_AV1_SOFTWARE, off_on,
-                     state->av1_software ? 1 : 0);
 
         static const char *const projection_labels[] = {
             [NV12_FORMAT_SOURCE_DEFAULT] = "Projektion (Standard)",
@@ -406,24 +403,33 @@ static void layout_popup(const struct player_ui_state *state,
                      sizeof(projection_label) - used, " · %u°",
                      state->fisheye_fov);
         }
-        add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(0), 0,
+        add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(0), 0,
                    projection_label);
         /* "Fisheye" needs more room than the angles. */
         const int fisheye_w = 128;
         const int short_w = (COLUMN_W - fisheye_w - 3 * CHIP_GAP) / 3;
         for (int i = 0; i < 4; ++i)
             add_chip(layout, PLAYER_UI_PROJECTION + i,
-                     COLUMN_X(2) + i * (short_w + CHIP_GAP), ROW_CHIP_Y(0),
+                     COLUMN_X(1) + i * (short_w + CHIP_GAP), ROW_CHIP_Y(0),
                      i == 3 ? fisheye_w : short_w, projections[i],
                      i == (int)state->projection_mode);
-        add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(1), 0,
+        add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(1), 0,
                    "Stereo");
-        add_chip_row(layout, 2, 1, 3, PLAYER_UI_STEREO, layouts,
+        add_chip_row(layout, 1, 1, 3, PLAYER_UI_STEREO, layouts,
                      (int)state->stereo_layout);
-        add_chip(layout, PLAYER_UI_SWAP_EYES, COLUMN_X(2), ROW_CHIP_Y(2),
+        add_chip(layout, PLAYER_UI_SWAP_EYES, COLUMN_X(1), ROW_CHIP_Y(2),
                  COLUMN_W,
                  state->swap_eyes ? "Augen getauscht" : "Augen tauschen",
                  state->swap_eyes);
+
+        add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(0), 0,
+                   "Projektion, Stereo und Lage");
+        add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(0) + 30, 0,
+                   "gelten für diesen Titel.");
+        add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(1) + 6, 0,
+                   "Spul-Vorschau, Panel, Tasten:");
+        add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(1) + 36, 0,
+                   "Einstellungen auf der Startseite.");
     } else if (state->popup_tab == PLAYER_UI_TAB_POSITION) {
         static const enum player_adjust grid[3][3] = {
             {PLAYER_ADJUST_ZOOM, PLAYER_ADJUST_HEIGHT, PLAYER_ADJUST_SLIDE},
@@ -468,12 +474,83 @@ static void layout_popup(const struct player_ui_state *state,
         add_stepper(layout, state, 0, ROW_CHIP_Y(0),
                     PLAYER_ADJUST_AUTOFOCUS, "Stärke");
         add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(1), 0,
-                   "Dauer eines Fokuswechsels");
-        add_stepper(layout, state, 0, ROW_CHIP_Y(1),
-                    PLAYER_ADJUST_FOCUS_FADE, NULL);
+                   "Messung prüfen");
+        add_chip(layout, PLAYER_UI_GAZE_DEBUG, COLUMN_X(0), ROW_CHIP_Y(1),
+                 COLUMN_W, "Blick anzeigen", state->gaze_debug);
+        add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(0), 0,
+                   "Nahe Motive werden auf etwa");
+        add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(0) + 30, 0,
+                   "1 m zurückgeschoben. Gilt für");
+        add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(0) + 60, 0,
+                   "alle Titel; Schwelle, Hysterese");
+        add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(0) + 90, 0,
+                   "und Überblenden unter Einstellungen.");
+    } else if (state->popup_tab == PLAYER_UI_TAB_PLAYBACK) {
+        static const char *const modes[2] = {"Original", "Perspektive"};
+        const char *fovs[PLAYER_UI_PREVIEW_FOV_COUNT];
+        char fov_text[PLAYER_UI_PREVIEW_FOV_COUNT][16];
+        int fov_selected = -1;
+        for (int i = 0; i < PLAYER_UI_PREVIEW_FOV_COUNT; ++i) {
+            snprintf(fov_text[i], sizeof(fov_text[i]), "%d°",
+                     player_ui_preview_fovs[i]);
+            fovs[i] = fov_text[i];
+            if (state->preview_fov == player_ui_preview_fovs[i])
+                fov_selected = i;
+        }
+        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(0), 0,
+                   "Vorschau beim Spulen");
+        add_chip_row(layout, 0, 0, 2, PLAYER_UI_PREVIEW_MODE, modes,
+                     state->preview_perspective ? 1 : 0);
+        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(1), 0,
+                   "Sichtfeld (Perspektive)");
+        add_chip_row(layout, 0, 1, PLAYER_UI_PREVIEW_FOV_COUNT,
+                     PLAYER_UI_PREVIEW_FOV, fovs, fov_selected);
+        static const char *const autohide[PLAYER_UI_AUTOHIDE_COUNT] = {
+            "Nie", "nach 5 s", "nach 15 s",
+        };
+        int autohide_selected = 0;
+        for (int i = 0; i < PLAYER_UI_AUTOHIDE_COUNT; ++i)
+            if (player_ui_autohide[i] == state->autohide)
+                autohide_selected = i;
         add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(2), 0,
+                   "Panel ausblenden (Wiedergabe)");
+        add_chip_row(layout, 0, 2, PLAYER_UI_AUTOHIDE_COUNT,
+                     PLAYER_UI_AUTOHIDE, autohide, autohide_selected);
+
+        static const char *const off_on[2] = {"Aus", "An"};
+        add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(0), 0,
+                   "AV1 bis 4K per CPU");
+        add_chip_row(layout, 1, 0, 2, PLAYER_UI_AV1_SOFTWARE, off_on,
+                     state->av1_software ? 1 : 0);
+        add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(1) + 6, 0,
+                   "Iris kann kein AV1; dav1d");
+        add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(1) + 36, 0,
+                   "spielt 8 Bit bis 4096×2160.");
+        add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(1) + 66, 0,
+                   "Gilt ab dem nächsten Titel.");
+
+        add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(0), 0,
+                   "Passthrough: Raum statt Schwarz");
+        add_chip_row(layout, 2, 0, 2, PLAYER_UI_PASSTHROUGH, off_on,
+                     state->passthrough ? 1 : 0);
+        add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(1), 0,
+                   "Raum abdunkeln");
+        add_stepper(layout, state, 2, ROW_CHIP_Y(1),
+                    PLAYER_ADJUST_ENVIRONMENT_DIM, "Stärke");
+        if (!state->passthrough_supported) {
+            add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(2) + 6,
+                       0, "SteamVR bietet hier keinen");
+            add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(2) + 36,
+                       0, "Passthrough an.");
+        }
+    } else if (state->popup_tab == PLAYER_UI_TAB_AUTOFOCUS) {
+        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(0), 0,
+                   "Dauer eines Fokuswechsels");
+        add_stepper(layout, state, 0, ROW_CHIP_Y(0),
+                    PLAYER_ADJUST_FOCUS_FADE, NULL);
+        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(1), 0,
                    "Neu fokussieren ab Abstandsänderung");
-        add_stepper(layout, state, 0, ROW_CHIP_Y(2),
+        add_stepper(layout, state, 0, ROW_CHIP_Y(1),
                     PLAYER_ADJUST_FOCUS_HYSTERESIS, NULL);
 
         static const char *const thresholds[2] = {"Immer", "Nur nah"};
@@ -489,15 +566,60 @@ static void layout_popup(const struct player_ui_state *state,
                     PLAYER_ADJUST_FOCUS_DISTANCE, NULL);
 
         add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(0), 0,
-                   "Messung prüfen");
-        add_chip(layout, PLAYER_UI_GAZE_DEBUG, COLUMN_X(2), ROW_CHIP_Y(0),
-                 COLUMN_W, "Blick anzeigen", state->gaze_debug);
-        add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(1) + 6, 0,
-                   "Nahe Motive werden auf etwa");
-        add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(1) + 36, 0,
-                   "1 m zurückgeschoben.");
-        add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(1) + 66, 0,
-                   "Gilt für alle Titel.");
+                   "Die Stärke des Autofokus steht");
+        add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(0) + 30, 0,
+                   "im Player unter „Fokus“.");
+    } else if (state->popup_tab == PLAYER_UI_TAB_PASSTHROUGH) {
+        static const char *const off_on[2] = {"Aus", "An"};
+        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(0), 0,
+                   "Raum statt Schwarz (alle Titel)");
+        add_chip_row(layout, 0, 0, 2, PLAYER_UI_PASSTHROUGH, off_on,
+                     state->passthrough ? 1 : 0);
+        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(1), 0,
+                   "Raum abdunkeln");
+        add_stepper(layout, state, 0, ROW_CHIP_Y(1),
+                    PLAYER_ADJUST_ENVIRONMENT_DIM, "Stärke");
+        if (!state->passthrough_supported)
+            add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(2) + 6,
+                       0, "SteamVR bietet hier keinen");
+        if (!state->passthrough_supported)
+            add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(2) + 36,
+                       0, "Passthrough an.");
+
+        static const char *const keys[4] = {"Aus", "Grün", "Blau",
+                                            "Eigene"};
+        add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(0), 0,
+                   "Chroma-Key (je Titel)");
+        int key = state->adjust
+                      ? (int)(state->adjust[PLAYER_ADJUST_KEY_COLOR] + 0.5f)
+                      : 0;
+        add_chip_row(layout, 1, 0, 4, PLAYER_UI_KEY_COLOR, keys, key);
+        add_stepper(layout, state, 1, STEPPER_Y(1) + 12,
+                    PLAYER_ADJUST_KEY_THRESHOLD, NULL);
+        add_stepper(layout, state, 1, STEPPER_Y(2) + 12,
+                    PLAYER_ADJUST_KEY_SOFTNESS, NULL);
+
+        if (state->key_picking) {
+            add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(0), 0,
+                       "Mit dem Controller auf den");
+            add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(0) + 30,
+                       0, "Hintergrund im Video zielen und");
+            add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(0) + 60,
+                       0, "den Trigger ziehen.");
+        } else {
+            add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(0), 0,
+                       "Die Key-Farbe wird durchsichtig,");
+            add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(0) + 30,
+                       0, "mit Passthrough sieht man dort");
+            add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(0) + 60,
+                       0, "den Raum.");
+        }
+        add_chip(layout, PLAYER_UI_KEY_PICK, COLUMN_X(2),
+                 STEPPER_Y(1) + 12, COLUMN_W,
+                 state->key_picking ? "Abbrechen" : "Farbe aufnehmen",
+                 state->key_picking);
+        add_stepper(layout, state, 2, STEPPER_Y(2) + 12,
+                    PLAYER_ADJUST_KEY_SPILL, NULL);
     } else if (state->popup_tab == PLAYER_UI_TAB_BUTTONS) {
         layout_buttons(state, layout);
     }
@@ -811,6 +933,13 @@ void player_ui_render(struct player_ui *ui, const struct player_ui_state *state,
     round_button(&canvas, VIEW_X, SMALL_R, hover == PLAYER_UI_VIEW_POPUP,
                  state->popup_open);
     ui_draw_icon(&canvas, UI_ICON_CUBE, VIEW_X, ROW_Y, 38, color_text);
+    if (state->passthrough_supported) {
+        round_button(&canvas, PASSTHROUGH_X, SMALL_R,
+                     hover == PLAYER_UI_PASSTHROUGH_TOGGLE,
+                     state->passthrough);
+        ui_draw_icon(&canvas, UI_ICON_EYE, PASSTHROUGH_X, ROW_Y, 54,
+                     color_text);
+    }
 
     if (state->debug_text && state->debug_text[0])
         ui_draw_text(&canvas, ui->font, 20, CARD_X + 40, CARD_Y + CARD_H - 34,
@@ -818,6 +947,20 @@ void player_ui_render(struct player_ui *ui, const struct player_ui_state *state,
 
     if (state->preview_visible && state->duration_us > 0)
         draw_preview(ui, &canvas, state);
+}
+
+void player_ui_render_settings(struct player_ui *ui,
+                               const struct player_ui_state *state,
+                               uint32_t *pixels, bool bgra)
+{
+    if (!ui->font)
+        ui->font = ui_font_load(false);
+    if (!ui->bold)
+        ui->bold = ui_font_load(true);
+    struct ui_canvas canvas = {(uint8_t *)pixels, PLAYER_UI_WIDTH,
+                               PLAYER_UI_HEIGHT, bgra};
+    ui_clear(&canvas, UI_RGBA(0, 0, 0, 0));
+    draw_popup(ui, &canvas, state);
 }
 
 void player_ui_close(struct player_ui *ui)
@@ -857,6 +1000,9 @@ int player_ui_hit_test(const struct player_ui_state *state, float u, float v)
         return PLAYER_UI_SEEK_FORWARD;
     if (in_circle(x, y, VIEW_X, ROW_Y, SMALL_R + 6))
         return PLAYER_UI_VIEW_POPUP;
+    if (state->passthrough_supported &&
+        in_circle(x, y, PASSTHROUGH_X, ROW_Y, SMALL_R + 6))
+        return PLAYER_UI_PASSTHROUGH_TOGGLE;
     if (in_rect(x, y, END_X, ROW_Y - END_H / 2.0f, END_W, END_H))
         return PLAYER_UI_END_ACTION;
     if (in_circle(x, y, VOLUME_DOWN_X, ROW_Y, VOLUME_R + 6))

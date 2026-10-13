@@ -9,8 +9,8 @@
  * like Iris CAPTURE buffers (memfd-backed udmabuf DMA-BUFs), with a worker
  * thread that feeds the decoder from the media pipeline:
  *
- * - DECODED_VIDEO_DAV1D, experimental AV1 on the Frame (Iris on the shipped
- *   kernel has no AV1): dav1d decodes on the CPU into NV12. Opt-in
+ * - DECODED_VIDEO_DAV1D, AV1 on the Frame (Iris on the shipped kernel has
+ *   no AV1): dav1d decodes on the CPU into NV12. On unless switched off
  *   ("av1_software" in settings.json, passed on to the media layer and the
  *   Jellyfin profile as AV1_SOFTWARE_ENV) and limited to 4K 8-bit: dav1d
  *   reached 1.3 to 2.3 times real time for 3840x1920 at 60 fps on the Frame,

@@ -18,6 +18,9 @@ layout(set = 0, binding = 0, std140) uniform ViewUniform {
                           w: half the fisheye lens angle (rad) */
     vec4 stereo_offset; /* longitude, latitude (rad); flat u, v */
     vec4 picture;      /* brightness, contrast, saturation, gamma */
+    vec4 background;   /* premultiplied colour where there is no video */
+    vec4 chroma_key;   /* key chroma (Cb, Cr), threshold, softness */
+    vec4 chroma_spill; /* spill removal, key mode, key luma, luma weight */
 } view;
 
 layout(location = 0) in vec2 flat_uv;
@@ -154,6 +157,43 @@ vec3 sample_filtered(vec2 uv, vec2 dx, vec2 dy, vec2 low, vec2 high)
     return sum / float(taps * taps);
 }
 
+/* Chroma key, mode chroma_spill.y:
+ * 1 (green, blue): colours lying in the key's direction of the Cb/Cr plane
+ *   (chroma_key.xy, unit length) turn transparent. How far a colour reaches
+ *   towards the key minus how far it strays sideways decides; above
+ *   threshold + softness it is fully transparent.
+ * 2 (picked colour, chroma_key.xy its chroma, chroma_spill.z its luma):
+ *   colours near the key turn transparent; luma counts with the weight
+ *   chroma_spill.w so that shading of the background stays transparent.
+ *   Grey-blue studio walls have too little hue for mode 1.
+ * What stays loses as much of the key's tint (spill). */
+float chroma_key(inout vec3 ycbcr)
+{
+    float mode = view.chroma_spill.y;
+    if (mode <= 0.0)
+        return 1.0;
+    vec2 chroma = (ycbcr.yz - 128.0) / view.levels.z;
+    vec2 key = view.chroma_key.xy;
+    float threshold = view.chroma_key.z, softness = view.chroma_key.w;
+    float alpha;
+    if (mode < 1.5) {
+        float along = dot(chroma, key);
+        float keyness = along - length(chroma - along * key);
+        alpha = 1.0 - smoothstep(threshold, threshold + softness, keyness);
+        chroma -= view.chroma_spill.x * max(keyness, 0.0) * key;
+    } else {
+        float luma = (ycbcr.x - view.levels.x) /
+                     (view.levels.y - view.levels.x);
+        float distance = length(vec3(chroma - key,
+                                     (luma - view.chroma_spill.z) *
+                                         view.chroma_spill.w));
+        alpha = smoothstep(threshold, threshold + softness, distance);
+        chroma -= view.chroma_spill.x * (1.0 - alpha) * key;
+    }
+    ycbcr.yz = chroma * view.levels.z + 128.0;
+    return alpha;
+}
+
 void main()
 {
     bool valid = true;
@@ -167,15 +207,15 @@ void main()
     /* Derivatives before any pixel leaves (uniform control flow). */
     vec2 dx = dFdx(source_uv);
     vec2 dy = dFdy(source_uv);
-    /* Flat screen: fade the outermost pixel into the background (the
-     * clear colour in render_frame) so its edges do not step. */
+    /* Flat screen: fade the outermost pixel into the background so its
+     * edges do not step. */
     float coverage = 1.0;
     if (view.modes.x == PROJECTION_FLAT) {
         vec2 to_edge = min(flat_uv, 1.0 - flat_uv) / fwidth(flat_uv);
         coverage = clamp(min(to_edge.x, to_edge.y), 0.0, 1.0);
     }
     if (!valid) {
-        output_color = vec4(0.0, 0.0, 0.0, 1.0);
+        output_color = view.background;
         return;
     }
 
@@ -183,7 +223,8 @@ void main()
     vec3 ycbcr = sample_filtered(source_uv, dx, dy,
                                  region_min + half_texel,
                                  region_max - half_texel);
+    float alpha = chroma_key(ycbcr) * coverage;
     vec3 rgb = adjust_picture(ycbcr_to_rgb(ycbcr.x, ycbcr.yz));
-    output_color = vec4(mix(vec3(0.005, 0.005, 0.008), rgb, coverage),
-                        1.0);
+    /* Premultiplied over the background (with passthrough: the room). */
+    output_color = vec4(rgb * alpha, alpha) + view.background * (1.0 - alpha);
 }

@@ -39,7 +39,7 @@
 #define ARRAY_COUNT(a) (sizeof(a) / sizeof((a)[0]))
 #define MAX_IMAGES 8U
 #define VIDEO_BUFFER_COUNT 12U
-#define UBO_STRIDE 256U
+#define UBO_STRIDE 512U
 #define PI_F 3.14159265358979f
 #define DRM_FORMAT_MOD_LINEAR UINT64_C(0)
 #define DRM_FORMAT_MOD_QCOM_COMPRESSED UINT64_C(0x0500000000000001)
@@ -121,6 +121,9 @@ struct view_uniform {
      * the same as texture offset for the flat screen. */
     float stereo_offset[4];
     float picture[4];     /* brightness, contrast, saturation, gamma */
+    float background[4];  /* premultiplied colour where there is no video */
+    float chroma_key[4];  /* key direction (Cb, Cr), threshold, softness */
+    float chroma_spill[4]; /* spill removal, key on (> 0) */
 };
 
 /* Autofocus measurement (stereo-disparity.comp). */
@@ -134,6 +137,7 @@ struct disparity_push {
     float left[4];   /* window centre (texture uv), sample step */
     float right[4];  /* window centre, shift per candidate, zero index */
     float bounds[4]; /* right eye u range, TP10 plane scale */
+    float sample_mode[4]; /* x > 0: measure the key colour at left.xy */
 };
 
 struct disparity_result {
@@ -220,6 +224,13 @@ struct app {
     float autofocus_distance, autofocus_focus_disparity;
     bool focus_threshold;   /* only subjects nearer than FOCUS_DISTANCE */
     bool av1_software;      /* settings.json, read by the next session */
+    /* Passthrough: chosen (settings.json) and offered by the runtime
+     * (XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND). */
+    bool passthrough, alpha_blend_supported;
+    /* Chroma key colour picker: waiting for the trigger, the aim it was
+     * pulled with (measured in the next frame), result being read back. */
+    bool key_picking, key_pick_request, key_sample_pending;
+    XrPosef key_pick_aim;
     bool autofocus_gaze;    /* last window followed the eye tracking */
     /* Last measurement, for the debug display. */
     bool autofocus_valid;
@@ -378,6 +389,12 @@ struct app {
     struct player_ui player_ui;
     bool popup_open;
     int popup_tab;                       /* enum player_ui_tab */
+    /* Settings page over the browser: the popup's settings tabs, drawn
+     * into settings_cpu and copied onto the browser panel. */
+    bool settings_open;
+    int settings_tab;
+    int settings_hover;
+    uint32_t *settings_cpu;
     float adjust[PLAYER_ADJUST_COUNT];   /* see player_adjust_info */
     char title_key[TITLE_KEY_SIZE];      /* titles.json entry, "" if none */
     /* The dome (and the flat screen) is centred on this head position and
@@ -931,9 +948,10 @@ static void change_adjust(struct app *app, int control)
 static void reset_adjust(struct app *app, bool picture)
 {
     for (int i = 0; i < PLAYER_ADJUST_COUNT; ++i) {
-        bool is_picture = i >= PLAYER_ADJUST_BRIGHTNESS;
-        if (is_picture != picture || i == PLAYER_ADJUST_HEAD_MOTION ||
-            (i >= PLAYER_ADJUST_AUTOFOCUS && i <= PLAYER_ADJUST_FOCUS_FADE))
+        bool is_picture = i >= PLAYER_ADJUST_BRIGHTNESS &&
+                          i <= PLAYER_ADJUST_GAMMA;
+        bool is_position = i <= PLAYER_ADJUST_STEREO_Y;
+        if (picture ? !is_picture : !is_position)
             continue;
         app->adjust[i] = player_adjust_info[i].standard;
         save_adjust(app, i);
@@ -986,7 +1004,8 @@ static void load_preview_settings(struct app *app)
     double volume = settings_get_double("volume", 1.0);
     app->volume = volume < 0.0 ? 0.0f : volume > 1.5 ? 1.5f : (float)volume;
     app->focus_threshold = settings_get_bool("focus_threshold", false);
-    app->av1_software = settings_get_bool("av1_software", false);
+    app->av1_software = settings_get_bool("av1_software", true);
+    app->passthrough = settings_get_bool("passthrough", false);
     for (int i = 0; i < BINDING_ACTION_COUNT; ++i) {
         char key[64];
         snprintf(key, sizeof(key), "binding_%s", binding_action_info[i].key);
@@ -1417,6 +1436,16 @@ static void initialize_xr_vulkan(struct app *app)
     }
     printf("eye_gaze extension=%d supported=%d\n",
            app->has_eye_gaze_extension, app->has_eye_gaze);
+    XrEnvironmentBlendMode blend_modes[8];
+    uint32_t blend_mode_count = 0;
+    if (XR_SUCCEEDED(xrEnumerateEnvironmentBlendModes(
+            app->xr, app->system, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
+            8, &blend_mode_count, blend_modes)))
+        for (uint32_t i = 0; i < blend_mode_count; ++i)
+            if (blend_modes[i] == XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND)
+                app->alpha_blend_supported = true;
+    printf("environment_blend_modes count=%u alpha_blend=%d\n",
+           blend_mode_count, app->alpha_blend_supported);
 
     PFN_xrCreateVulkanInstanceKHR create_instance = NULL;
     PFN_xrGetVulkanGraphicsDevice2KHR get_device = NULL;
@@ -2118,7 +2147,9 @@ static void create_pipeline(struct app *app)
          .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT |
                        VK_SHADER_STAGE_COMPUTE_BIT},
         {.binding = 3, .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-         .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT},
+         .descriptorCount = 1,
+         .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT |
+                       VK_SHADER_STAGE_COMPUTE_BIT},
         {.binding = 4, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
          .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT},
     };
@@ -2172,6 +2203,56 @@ static void create_pipeline(struct app *app)
     }
 }
 
+static struct player_ui_state player_state(const struct app *app);
+
+/* The settings page sits centred on the browser panel. */
+#define SETTINGS_X ((int)(BROWSER_UI_WIDTH - PLAYER_UI_POPUP_W) / 2)
+#define SETTINGS_Y ((int)(BROWSER_UI_HEIGHT - PLAYER_UI_POPUP_H) / 2)
+
+static struct player_ui_state settings_state(const struct app *app)
+{
+    struct player_ui_state state = player_state(app);
+    state.settings_page = true;
+    state.popup_open = true;
+    state.popup_tab = app->settings_tab;
+    state.hover = app->settings_hover;
+    return state;
+}
+
+/* Draws the settings page over the browser picture, which it dims. */
+static void compose_settings(struct app *app)
+{
+    if (!app->settings_cpu) {
+        app->settings_cpu = malloc((size_t)PLAYER_UI_WIDTH *
+                                   PLAYER_UI_HEIGHT * 4U);
+        need(app->settings_cpu != NULL, "allocate settings pixels");
+    }
+    struct player_ui_state state = settings_state(app);
+    player_ui_render_settings(&app->player_ui, &state, app->settings_cpu,
+                              app->ui_bgra);
+    uint8_t *browser = (uint8_t *)app->browser_cpu;
+    for (size_t i = 0; i < (size_t)BROWSER_UI_WIDTH * BROWSER_UI_HEIGHT;
+         ++i)
+        for (int c = 0; c < 4; ++c)
+            browser[i * 4 + (size_t)c] =
+                (uint8_t)(browser[i * 4 + (size_t)c] * 2U / 5U +
+                          (c == 3 ? 153U : 0U));
+    const uint8_t *page = (const uint8_t *)app->settings_cpu;
+    for (int y = 0; y < PLAYER_UI_POPUP_H; ++y)
+        for (int x = 0; x < PLAYER_UI_POPUP_W; ++x) {
+            const uint8_t *source =
+                page + ((size_t)(PLAYER_UI_POPUP_Y + y) * PLAYER_UI_WIDTH +
+                        (size_t)(PLAYER_UI_POPUP_X + x)) * 4U;
+            uint8_t *target =
+                browser + ((size_t)(SETTINGS_Y + y) * BROWSER_UI_WIDTH +
+                           (size_t)(SETTINGS_X + x)) * 4U;
+            unsigned keep = 255U - source[3];
+            for (int c = 0; c < 4; ++c)
+                target[c] = (uint8_t)(source[c] +
+                                      (target[c] * keep + 127U) / 255U);
+        }
+}
+
 static struct player_ui_state player_state(const struct app *app)
 {
     return (struct player_ui_state){
@@ -2189,6 +2270,9 @@ static struct player_ui_state player_state(const struct app *app)
         .gaze_debug = app->gaze_debug,
         .focus_threshold = app->focus_threshold,
         .av1_software = app->av1_software,
+        .passthrough = app->passthrough,
+        .passthrough_supported = app->alpha_blend_supported,
+        .key_picking = app->key_picking,
         .bindings = app->bindings,
         .learn_action = app->learn_action,
         .debug_text = app->gaze_debug ? app->debug_text : NULL,
@@ -3198,6 +3282,113 @@ static void process_bindings(struct app *app, const bool grip[2])
     memcpy(app->input_held, down, sizeof(down));
 }
 
+/* Grip per hand for the bindings: the squeeze button or the analog grip
+ * past its threshold (with hysteresis). */
+static void read_grips(struct app *app, const struct hand_input hands[2],
+                       bool grips[2])
+{
+    for (unsigned hand = 0; hand < 2; ++hand) {
+        XrActionStateGetInfo info = {
+            .type = XR_TYPE_ACTION_STATE_GET_INFO,
+            .action = app->grip_value_action,
+            .subactionPath = app->hands[hand],
+        };
+        XrActionStateFloat state = {.type = XR_TYPE_ACTION_STATE_FLOAT};
+        need_xr("xrGetActionStateFloat(grip)",
+                xrGetActionStateFloat(app->session, &info, &state));
+        float value = state.isActive ? state.currentState : 0.0f;
+        app->grip_value[hand] = value;
+        app->grip_value_down[hand] =
+            value >= (app->grip_value_down[hand] ? GRIP_RELEASE_THRESHOLD
+                                                 : GRIP_PRESS_THRESHOLD);
+        grips[hand] = held(&hands[hand].squeeze) || app->grip_value_down[hand];
+    }
+}
+
+/* Controls of the player popup and of the settings page over the browser:
+ * global settings, controller bindings, picture values and the popup tabs.
+ * False if `action` is none of them. */
+static bool apply_setting(struct app *app, int action)
+{
+    if (action >= PLAYER_UI_BINDING &&
+        action < PLAYER_UI_BINDING + BINDING_ACTION_COUNT) {
+        int chosen = action - PLAYER_UI_BINDING;
+        app->learn_action = app->learn_action == chosen ? -1 : chosen;
+    } else if (action == PLAYER_UI_BINDING_CLEAR) {
+        if (app->learn_action >= 0) {
+            app->bindings[app->learn_action] = (struct binding){-1, -1};
+            save_binding(app, app->learn_action);
+        }
+        app->learn_action = -1;
+    } else if (action == PLAYER_UI_BINDING_CANCEL) {
+        app->learn_action = -1;
+    } else if (action == PLAYER_UI_BINDING_DEFAULTS) {
+        for (int i = 0; i < BINDING_ACTION_COUNT; ++i) {
+            app->bindings[i] = binding_action_info[i].standard;
+            save_binding(app, i);
+        }
+        app->learn_action = -1;
+    } else if (action >= PLAYER_UI_ADJUST &&
+               action < PLAYER_UI_ADJUST_END) {
+        change_adjust(app, action);
+    } else if (action >= PLAYER_UI_TAB &&
+               action < PLAYER_UI_TAB + PLAYER_UI_TAB_COUNT) {
+        int tab = action - PLAYER_UI_TAB;
+        if (tab >= PLAYER_UI_FIRST_SETTINGS_TAB)
+            app->settings_tab = tab;
+        else
+            app->popup_tab = tab;
+        app->learn_action = -1;
+    } else if (action >= PLAYER_UI_AUTOHIDE &&
+               action < PLAYER_UI_AUTOHIDE + PLAYER_UI_AUTOHIDE_COUNT) {
+        app->autohide = player_ui_autohide[action - PLAYER_UI_AUTOHIDE];
+        settings_set_int("panel_autohide", app->autohide);
+    } else if (action == PLAYER_UI_FOCUS_THRESHOLD ||
+               action == PLAYER_UI_FOCUS_THRESHOLD + 1) {
+        app->focus_threshold = action == PLAYER_UI_FOCUS_THRESHOLD + 1;
+        settings_set_bool("focus_threshold", app->focus_threshold);
+        printf("focus_threshold=%d\n", app->focus_threshold);
+    } else if (action == PLAYER_UI_AV1_SOFTWARE ||
+               action == PLAYER_UI_AV1_SOFTWARE + 1) {
+        app->av1_software = action == PLAYER_UI_AV1_SOFTWARE + 1;
+        settings_set_bool("av1_software", app->av1_software);
+        printf("av1_software=%d\n", app->av1_software);
+    } else if (action == PLAYER_UI_PASSTHROUGH ||
+               action == PLAYER_UI_PASSTHROUGH + 1) {
+        app->passthrough = action == PLAYER_UI_PASSTHROUGH + 1;
+        settings_set_bool("passthrough", app->passthrough);
+        printf("passthrough=%d supported=%d\n", app->passthrough,
+               app->alpha_blend_supported);
+    } else if (action == PLAYER_UI_KEY_PICK) {
+        app->key_picking = !app->key_picking;
+        app->key_pick_request = false;
+        printf("key_picking=%d\n", app->key_picking);
+    } else if (action >= PLAYER_UI_KEY_COLOR &&
+               action <= PLAYER_UI_KEY_COLOR + 3) {
+        app->adjust[PLAYER_ADJUST_KEY_COLOR] =
+            (float)(action - PLAYER_UI_KEY_COLOR);
+        save_adjust(app, PLAYER_ADJUST_KEY_COLOR);
+        printf("player_adjust key_color=%d\n",
+               action - PLAYER_UI_KEY_COLOR);
+    } else if (action == PLAYER_UI_PASSTHROUGH_TOGGLE) {
+        app->passthrough = !app->passthrough;
+        settings_set_bool("passthrough", app->passthrough);
+        printf("passthrough=%d supported=%d\n", app->passthrough,
+               app->alpha_blend_supported);
+    } else if ((action >= PLAYER_UI_PREVIEW_MODE &&
+                action <= PLAYER_UI_PREVIEW_MODE + 1) ||
+               (action >= PLAYER_UI_PREVIEW_FOV &&
+                action < PLAYER_UI_PREVIEW_FOV +
+                             PLAYER_UI_PREVIEW_FOV_COUNT)) {
+        change_preview(app, action);
+    } else {
+        return false;
+    }
+    app->ui_dirty = true;
+    app->browser.dirty = true;
+    return true;
+}
+
 static void sync_player_input(struct app *app, XrTime time)
 {
     XrActiveActionSet active = {.actionSet = app->action_set};
@@ -3241,22 +3432,7 @@ static void sync_player_input(struct app *app, XrTime time)
                      &hands[hand].squeeze);
     }
     bool grips[2];
-    for (unsigned hand = 0; hand < 2; ++hand) {
-        XrActionStateGetInfo info = {
-            .type = XR_TYPE_ACTION_STATE_GET_INFO,
-            .action = app->grip_value_action,
-            .subactionPath = app->hands[hand],
-        };
-        XrActionStateFloat state = {.type = XR_TYPE_ACTION_STATE_FLOAT};
-        need_xr("xrGetActionStateFloat(grip)",
-                xrGetActionStateFloat(app->session, &info, &state));
-        float value = state.isActive ? state.currentState : 0.0f;
-        app->grip_value[hand] = value;
-        app->grip_value_down[hand] =
-            value >= (app->grip_value_down[hand] ? GRIP_RELEASE_THRESHOLD
-                                                 : GRIP_PRESS_THRESHOLD);
-        grips[hand] = held(&hands[hand].squeeze) || app->grip_value_down[hand];
-    }
+    read_grips(app, hands, grips);
     process_bindings(app, grips);
 
     /* Auto-hide: any trigger, grip or stick, or pointing at the panel,
@@ -3358,6 +3534,17 @@ static void sync_player_input(struct app *app, XrTime time)
             send_seek_to(app, app->scrub_us);
         }
     }
+    /* Key colour picker: the trigger aimed at the video, not the panel;
+     * render_frame measures the colour there. */
+    for (unsigned hand = 0; app->key_picking && hand < 2; ++hand) {
+        if (consumed_select || !hands[hand].select_edge ||
+            !hands[hand].aim_valid ||
+            (app->ui_visible && on_player_panel(app, &hands[hand].hit)))
+            continue;
+        app->key_pick_aim = hands[hand].aim;
+        app->key_pick_request = true;
+        consumed_select = true;
+    }
     for (unsigned hand = 0; hand < 2; ++hand) {
         if (!app->ui_visible || consumed_select || app->grab_hand >= 0 ||
             app->scrub_hand >= 0 || app->seek_pending ||
@@ -3375,41 +3562,8 @@ static void sync_player_input(struct app *app, XrTime time)
             app->popup_open = !app->popup_open;
             app->learn_action = -1;
             app->ui_dirty = true;
-        } else if (action >= PLAYER_UI_BINDING &&
-                   action < PLAYER_UI_BINDING + BINDING_ACTION_COUNT) {
-            int chosen = action - PLAYER_UI_BINDING;
-            app->learn_action = app->learn_action == chosen ? -1 : chosen;
-            app->ui_dirty = true;
-        } else if (action == PLAYER_UI_BINDING_CLEAR) {
-            if (app->learn_action >= 0) {
-                app->bindings[app->learn_action] = (struct binding){-1, -1};
-                save_binding(app, app->learn_action);
-            }
-            app->learn_action = -1;
-            app->ui_dirty = true;
-        } else if (action == PLAYER_UI_BINDING_CANCEL) {
-            app->learn_action = -1;
-            app->ui_dirty = true;
-        } else if (action == PLAYER_UI_BINDING_DEFAULTS) {
-            for (int i = 0; i < BINDING_ACTION_COUNT; ++i) {
-                app->bindings[i] = binding_action_info[i].standard;
-                save_binding(app, i);
-            }
-            app->learn_action = -1;
-            app->ui_dirty = true;
-        } else if (action >= PLAYER_UI_ADJUST &&
-                   action < PLAYER_UI_ADJUST_END) {
-            change_adjust(app, action);
-        } else if (action >= PLAYER_UI_TAB &&
-                   action < PLAYER_UI_TAB + PLAYER_UI_TAB_COUNT) {
-            app->popup_tab = action - PLAYER_UI_TAB;
-            app->learn_action = -1;
-            app->ui_dirty = true;
-        } else if (action >= PLAYER_UI_AUTOHIDE &&
-                   action < PLAYER_UI_AUTOHIDE + PLAYER_UI_AUTOHIDE_COUNT) {
-            app->autohide = player_ui_autohide[action - PLAYER_UI_AUTOHIDE];
-            settings_set_int("panel_autohide", app->autohide);
-            app->ui_dirty = true;
+        } else if (apply_setting(app, action)) {
+            /* global setting or popup tab */
         } else if (action == PLAYER_UI_END_ACTION) {
             app->end_action = (app->end_action + 1) % PLAYER_END_COUNT;
             settings_set_int("end_action", app->end_action);
@@ -3417,18 +3571,6 @@ static void sync_player_input(struct app *app, XrTime time)
         } else if (action == PLAYER_UI_VOLUME_DOWN ||
                    action == PLAYER_UI_VOLUME_UP) {
             change_volume(app, action == PLAYER_UI_VOLUME_UP ? 1 : -1);
-        } else if (action == PLAYER_UI_FOCUS_THRESHOLD ||
-                   action == PLAYER_UI_FOCUS_THRESHOLD + 1) {
-            app->focus_threshold = action == PLAYER_UI_FOCUS_THRESHOLD + 1;
-            settings_set_bool("focus_threshold", app->focus_threshold);
-            app->ui_dirty = true;
-            printf("focus_threshold=%d\n", app->focus_threshold);
-        } else if (action == PLAYER_UI_AV1_SOFTWARE ||
-                   action == PLAYER_UI_AV1_SOFTWARE + 1) {
-            app->av1_software = action == PLAYER_UI_AV1_SOFTWARE + 1;
-            settings_set_bool("av1_software", app->av1_software);
-            app->ui_dirty = true;
-            printf("av1_software=%d\n", app->av1_software);
         } else if (action == PLAYER_UI_GAZE_DEBUG) {
             app->gaze_debug = !app->gaze_debug;
             app->debug_text[0] = '\0';
@@ -3924,6 +4066,8 @@ static void upload_browser(struct app *app)
     /* Draw in cached memory: blending reads pixels back, which is very slow
      * on the uncached staging mapping. */
     browser_ui_render(&app->browser, app->browser_cpu, app->ui_bgra);
+    if (app->settings_open)
+        compose_settings(app);
     XrSwapchainImageAcquireInfo acquire = {
         .type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO,
     };
@@ -4109,6 +4253,9 @@ static void begin_playback(struct app *app, int fd, const char *location)
     app->autofocus_focused = false;
     app->autofocus_focus_disparity = app->autofocus_distance = 0.0f;
     app->ipc_fd = fd;
+    app->settings_open = false;
+    app->key_picking = app->key_pick_request = false;
+    app->key_sample_pending = false;
     app->playing = true;
     app->awaiting_command = false;
     app->eos_received = false;
@@ -4205,7 +4352,8 @@ static void sync_browser_input(struct app *app, XrTime time)
         XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
     bool pointer_visible = false, pressed = false;
     app->pointer_layer_visible = false;
-    int pointer_x = 0, pointer_y = 0, hover = -1;
+    int pointer_x = 0, pointer_y = 0, hover = -1, settings_hover = -1;
+    struct hand_input hands[2] = {0};
     for (unsigned hand = 0; hand < 2; ++hand) {
         XrActionStateGetInfo pose_info = {
             .type = XR_TYPE_ACTION_STATE_GET_INFO,
@@ -4215,12 +4363,13 @@ static void sync_browser_input(struct app *app, XrTime time)
         XrActionStatePose pose = {.type = XR_TYPE_ACTION_STATE_POSE};
         need_xr("xrGetActionStatePose(browser)",
                 xrGetActionStatePose(app->session, &pose_info, &pose));
-        struct hand_input input = {0};
-        read_select(app, hand, &input);
-        if (input.select_edge)
+        read_select(app, hand, &hands[hand]);
+        read_boolean(app, app->squeeze_action, app->hands[hand],
+                     &hands[hand].squeeze);
+        if (hands[hand].select_edge)
             pressed = true;
         int flick = read_stick(app, hand);
-        if (flick)
+        if (flick && !app->settings_open)
             browser_ui_flip(&app->browser, flick);
         if (!pose.isActive)
             continue;
@@ -4239,10 +4388,48 @@ static void sync_browser_input(struct app *app, XrTime time)
             pointer_x = (int)(hit.u * BROWSER_UI_WIDTH);
             pointer_y = (int)(hit.v * BROWSER_UI_HEIGHT);
             hover = browser_ui_hit_test(hit.u, hit.v);
+            int page_x = pointer_x - SETTINGS_X, page_y = pointer_y - SETTINGS_Y;
+            if (app->settings_open && page_x >= 0 &&
+                page_x < PLAYER_UI_POPUP_W && page_y >= 0 &&
+                page_y < PLAYER_UI_POPUP_H) {
+                struct player_ui_state state = settings_state(app);
+                settings_hover = player_ui_hit_test(
+                    &state,
+                    (float)(page_x + PLAYER_UI_POPUP_X) / PLAYER_UI_WIDTH,
+                    (float)(page_y + PLAYER_UI_POPUP_Y) / PLAYER_UI_HEIGHT);
+            }
             place_pointer(app, (XrVector3f){0, 0, BROWSER_PANEL_Z}, 0.0f,
                           BROWSER_UI_PANEL_WIDTH_METERS,
                           BROWSER_UI_PANEL_HEIGHT_METERS, hit, 0.04f);
         }
+    }
+    if (app->settings_open) {
+        /* The page is modal: a click beside it closes it. */
+        browser_ui_set_pointer(&app->browser, pointer_visible, pointer_x,
+                               pointer_y, -1);
+        if (settings_hover != app->settings_hover) {
+            app->settings_hover = settings_hover;
+            app->browser.dirty = true;
+        }
+        if (app->learn_action >= 0) {
+            bool grips[2];
+            read_grips(app, hands, grips);
+            process_bindings(app, grips);
+            if (app->learn_action < 0)
+                app->browser.dirty = true;
+        }
+        if (!pressed)
+            return;
+        if (settings_hover == PLAYER_UI_SETTINGS_CLOSE ||
+            (settings_hover < 0 && app->learn_action < 0)) {
+            app->settings_open = false;
+            app->learn_action = -1;
+            app->browser.dirty = true;
+            printf("settings_page=closed\n");
+        } else if (settings_hover > 0) {
+            apply_setting(app, settings_hover);
+        }
+        return;
     }
     browser_ui_set_pointer(&app->browser, pointer_visible, pointer_x,
                            pointer_y, hover);
@@ -4261,6 +4448,15 @@ static void sync_browser_input(struct app *app, XrTime time)
         app->awaiting_command = true;
         send_control(app, PLAYER_UI_EXIT_REQUESTED, NULL, 0);
         app->quit = true;
+        break;
+    case BROWSER_UI_SETTINGS_REQUESTED:
+        app->settings_open = true;
+        app->settings_hover = -1;
+        app->learn_action = -1;
+        memset(app->input_held, 0, sizeof(app->input_held));
+        browser_ui_close_menus(&app->browser);
+        app->browser.dirty = true;
+        printf("settings_page=open\n");
         break;
     case BROWSER_UI_NONE:
         break;
@@ -4565,6 +4761,186 @@ static void update_debug_text(struct app *app)
     }
 }
 
+/* Passthrough shows the room where nothing is drawn, if the viewer chose
+ * it and the runtime blends with the room (the Frame since SteamVR's
+ * update of 2026-10-10; not the PC streaming to it). */
+static bool passthrough_active(const struct app *app)
+{
+    return app->passthrough && app->alpha_blend_supported;
+}
+
+/* Premultiplied colour where there is no video (clear colour, outside the
+ * 180 degree image, around the flat screen, keyed out): the usual near
+ * black, or with passthrough black at the dimming's opacity over the
+ * room. */
+static void background_color(const struct app *app, float color[4])
+{
+    if (passthrough_active(app)) {
+        color[0] = color[1] = color[2] = 0.0f;
+        color[3] = app->adjust[PLAYER_ADJUST_ENVIRONMENT_DIM];
+    } else {
+        color[0] = 0.005f;
+        color[1] = 0.005f;
+        color[2] = 0.008f;
+        color[3] = 1.0f;
+    }
+}
+
+/* Weight of the luma difference against the chroma difference when
+ * keying a picked colour (shading of the background stays transparent). */
+#define KEY_LUMA_WEIGHT 0.4f
+
+/* Chroma key of the title for the video shaders (chroma_key in
+ * nv12-projection.frag): green and blue as directions in the Cb/Cr plane
+ * (BT.709, normalized chroma), a picked colour as chroma and luma;
+ * threshold, softness and spill removal. */
+static void chroma_key_uniform(const struct app *app, float key[4],
+                               float spill[4])
+{
+    static const float directions[3][2] = {
+        {0.0f, 0.0f},
+        {-0.3854f, -0.4542f}, /* green (0, 1, 0) */
+        {0.5f, -0.0458f},     /* blue (0, 0, 1) */
+    };
+    int color = (int)(app->adjust[PLAYER_ADJUST_KEY_COLOR] + 0.5f);
+    if (color < 0 || color > 3)
+        color = 0;
+    key[2] = app->adjust[PLAYER_ADJUST_KEY_THRESHOLD];
+    key[3] = app->adjust[PLAYER_ADJUST_KEY_SOFTNESS];
+    spill[0] = app->adjust[PLAYER_ADJUST_KEY_SPILL];
+    spill[2] = spill[3] = 0.0f;
+    if (color == 3) {
+        float levels[4];
+        video_levels_uniform(app->video_levels, levels);
+        key[0] = (app->adjust[PLAYER_ADJUST_KEY_CB] - 128.0f) / levels[2];
+        key[1] = (app->adjust[PLAYER_ADJUST_KEY_CR] - 128.0f) / levels[2];
+        spill[1] = 2.0f;
+        spill[2] = (app->adjust[PLAYER_ADJUST_KEY_Y] - levels[0]) /
+                   (levels[1] - levels[0]);
+        spill[3] = KEY_LUMA_WEIGHT;
+        return;
+    }
+    float length = sqrtf(directions[color][0] * directions[color][0] +
+                         directions[color][1] * directions[color][1]);
+    key[0] = length > 0.0f ? directions[color][0] / length : 0.0f;
+    key[1] = length > 0.0f ? directions[color][1] / length : 0.0f;
+    spill[1] = color ? 1.0f : 0.0f;
+}
+
+/* Where a ray (LOCAL space) hits the video as render_frame shows it:
+ * texture uv in the picture the left eye sees, false if it misses. The
+ * dome is the unit sphere around the eye position in dome axes, the flat
+ * screen the quad of screen_model; mirrors nv12-projection.frag without
+ * the stereo offsets. */
+static bool video_uv_at_ray(const struct app *app, XrVector3f origin,
+                            XrVector3f direction, XrVector3f head,
+                            struct mat4 world_to_dome,
+                            XrVector3f eye_position, struct mat4 screen_model,
+                            float uv[2])
+{
+    float u, v;
+    if (app->projection_mode == NV12_PROJECTION_FLAT) {
+        XrVector3f axis_x = {screen_model.v[0], screen_model.v[1],
+                             screen_model.v[2]};
+        XrVector3f axis_y = {screen_model.v[4], screen_model.v[5],
+                             screen_model.v[6]};
+        XrVector3f normal = {screen_model.v[8], screen_model.v[9],
+                             screen_model.v[10]};
+        XrVector3f centre = {screen_model.v[12], screen_model.v[13],
+                             screen_model.v[14]};
+        float facing = vector_dot(direction, normal);
+        if (fabsf(facing) < 1e-6f)
+            return false;
+        XrVector3f to_centre = {centre.x - origin.x, centre.y - origin.y,
+                                centre.z - origin.z};
+        float t = vector_dot(to_centre, normal) / facing;
+        if (t <= 0.0f)
+            return false;
+        XrVector3f offset = {origin.x + t * direction.x - centre.x,
+                             origin.y + t * direction.y - centre.y,
+                             origin.z + t * direction.z - centre.z};
+        u = vector_dot(offset, axis_x) / vector_dot(axis_x, axis_x) + 0.5f;
+        v = 0.5f - vector_dot(offset, axis_y) / vector_dot(axis_y, axis_y);
+        if (u < 0.0f || u > 1.0f || v < 0.0f || v > 1.0f)
+            return false;
+    } else {
+        XrVector3f from_head = {origin.x - head.x, origin.y - head.y,
+                                origin.z - head.z};
+        XrVector3f c = transform_direction(world_to_dome, from_head);
+        c.x += eye_position.x;
+        c.y += eye_position.y;
+        c.z += eye_position.z;
+        XrVector3f d = transform_direction(world_to_dome, direction);
+        float length = sqrtf(vector_dot(d, d));
+        if (length <= 0.0f || vector_dot(c, c) >= 1.0f)
+            return false;
+        d.x /= length;
+        d.y /= length;
+        d.z /= length;
+        float b = vector_dot(c, d);
+        float t = -b + sqrtf(b * b - vector_dot(c, c) + 1.0f);
+        XrVector3f q = {c.x + t * d.x, c.y + t * d.y, c.z + t * d.z};
+        float longitude = atan2f(q.x, -q.z);
+        float latitude = asinf(fmaxf(-1.0f, fminf(1.0f, q.y)));
+        if (app->projection_mode == NV12_PROJECTION_FISHEYE) {
+            float half_angle = 0.5f * (float)app->fisheye_fov * PI_F / 180.0f;
+            float radius = acosf(fmaxf(-1.0f, fminf(1.0f, -q.z))) /
+                           half_angle;
+            if (radius > 1.0f)
+                return false;
+            float planar = sqrtf(q.x * q.x + q.y * q.y);
+            float ax = planar > 1e-6f ? q.x / planar : 0.0f;
+            float ay = planar > 1e-6f ? q.y / planar : 0.0f;
+            u = 0.5f + 0.5f * radius * ax;
+            v = 0.5f - 0.5f * radius * ay;
+        } else if (app->projection_mode == NV12_PROJECTION_EQUIRECT_180) {
+            if (fabsf(longitude) > 0.5f * PI_F)
+                return false;
+            u = longitude / PI_F + 0.5f;
+            v = 0.5f - latitude / PI_F;
+        } else {
+            u = longitude / (2.0f * PI_F) + 0.5f;
+            u -= floorf(u);
+            v = 0.5f - latitude / PI_F;
+        }
+    }
+    float eye = app->swap_eyes ? 1.0f : 0.0f;
+    if (app->stereo_layout == NV12_STEREO_SBS)
+        u = 0.5f * eye + 0.5f * u;
+    else if (app->stereo_layout == NV12_STEREO_TB)
+        v = 0.5f * eye + 0.5f * v;
+    uv[0] = u;
+    uv[1] = v;
+    return true;
+}
+
+/* The measured key colour (stereo-disparity.comp, sample mode) becomes the
+ * title's picked key, with a threshold that suits colour distances. */
+static void finish_key_pick(struct app *app)
+{
+    const struct disparity_result *result = app->disparity_mapping;
+    app->adjust[PLAYER_ADJUST_KEY_Y] = result->score[0];
+    app->adjust[PLAYER_ADJUST_KEY_CB] = result->score[1];
+    app->adjust[PLAYER_ADJUST_KEY_CR] = result->score[2];
+    bool was_picked = app->adjust[PLAYER_ADJUST_KEY_COLOR] > 2.5f;
+    app->adjust[PLAYER_ADJUST_KEY_COLOR] = 3.0f;
+    if (!was_picked) {
+        app->adjust[PLAYER_ADJUST_KEY_THRESHOLD] = 0.08f;
+        app->adjust[PLAYER_ADJUST_KEY_SOFTNESS] = 0.04f;
+    }
+    save_adjust(app, PLAYER_ADJUST_KEY_COLOR);
+    app->key_picking = false;
+    app->ui_dirty = true;
+    printf("key_picked y=%.1f cb=%.1f cr=%.1f\n", result->score[0],
+           result->score[1], result->score[2]);
+}
+
+static XrEnvironmentBlendMode environment_blend_mode(const struct app *app)
+{
+    return passthrough_active(app) ? XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND
+                                   : XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+}
+
 static void render_frame(struct app *app)
 {
     XrFrameState frame_state = {.type = XR_TYPE_FRAME_STATE};
@@ -4585,7 +4961,7 @@ static void render_frame(struct app *app)
     }
     if (!frame_state.shouldRender) {
         XrFrameEndInfo end = {.type = XR_TYPE_FRAME_END_INFO, .displayTime = frame_state.predictedDisplayTime,
-            .environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE};
+            .environmentBlendMode = environment_blend_mode(app)};
         need_xr("xrEndFrame(empty)", xrEndFrame(app->session, &end));
         return;
     }
@@ -4730,6 +5106,38 @@ static void render_frame(struct app *app)
                          app->adjust[PLAYER_ADJUST_STEREO_X] +
                              app->autofocus_offset,
                          &disparity_push);
+    /* A key colour pick takes the measurement's turn. */
+    bool key_sample = false;
+    if (app->key_pick_request && video) {
+        app->key_pick_request = false;
+        float uv[2];
+        XrVector3f aim = rotate_vector(app->key_pick_aim.orientation,
+                                       (XrVector3f){0, 0, -1});
+        if (video_uv_at_ray(app, app->key_pick_aim.position, aim,
+                            center.pose.position, world_to_dome,
+                            eye_position, screen_model, uv)) {
+            float step_u = app->video_width ? 1.5f / (float)app->video_width
+                                            : 0.0f;
+            float step_v = app->video_height
+                               ? 1.5f / (float)app->video_height
+                               : 0.0f;
+            disparity_push = (struct disparity_push){
+                .left = {uv[0], uv[1], step_u, step_v},
+                .bounds = {0.0f, 1.0f,
+                           app->coded_width ? (float)app->video_width /
+                                                  (float)app->coded_width
+                                            : 1.0f,
+                           app->coded_height ? (float)app->video_height /
+                                                   (float)app->coded_height
+                                             : 1.0f},
+                .sample_mode = {1.0f, 0.0f, 0.0f, 0.0f},
+            };
+            key_sample = measure = true;
+            printf("key_pick u=%.4f v=%.4f\n", uv[0], uv[1]);
+        } else {
+            printf("key_pick missed the picture\n");
+        }
+    }
     for (uint32_t eye = 0; eye < 2; ++eye) {
         struct mat4 projection = projection_from_fov(views[eye].fov);
         struct mat4 view = view_from_pose(views[eye].pose);
@@ -4779,12 +5187,17 @@ static void render_frame(struct app *app)
             },
         };
         video_levels_uniform(app->video_levels, uniform.levels);
+        background_color(app, uniform.background);
+        chroma_key_uniform(app, uniform.chroma_key, uniform.chroma_spill);
         memcpy((uint8_t *)app->uniform_mapping + eye * UBO_STRIDE,
                &uniform, sizeof(uniform));
     }
     need_vk("vkWaitForFences(render)", vkWaitForFences(app->device, 1, &app->fence, VK_TRUE, UINT64_C(5000000000)));
     need_vk("vkResetFences(render)", vkResetFences(app->device, 1, &app->fence));
-    if (app->disparity_pending) {
+    if (app->key_sample_pending) {
+        app->key_sample_pending = false;
+        finish_key_pick(app);
+    } else if (app->disparity_pending) {
         app->disparity_pending = false;
         update_autofocus(app);
     }
@@ -4839,6 +5252,7 @@ static void render_frame(struct app *app)
                            VK_SHADER_STAGE_COMPUTE_BIT, 0,
                            sizeof(disparity_push), &disparity_push);
         vkCmdDispatch(app->command, 1, 1, 1);
+        app->key_sample_pending = key_sample;
         VkMemoryBarrier to_host = {
             .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
             .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
@@ -4848,7 +5262,7 @@ static void render_frame(struct app *app)
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                              VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &to_host, 0,
                              NULL, 0, NULL);
-        app->disparity_pending = true;
+        app->disparity_pending = !key_sample;
     }
     XrCompositionLayerQuad ui_layer = app->playing
                                           ? make_ui_layer(app)
@@ -4859,7 +5273,8 @@ static void render_frame(struct app *app)
         panel = app->playing ? &app->ui_texture : &app->browser_texture;
     struct mat4 panel_matrix = panel_model(&ui_layer);
     for (uint32_t eye = 0; eye < 2; ++eye) {
-        VkClearValue clear = {.color = {{0.005f, 0.005f, 0.008f, 1.0f}}};
+        VkClearValue clear;
+        background_color(app, clear.color.float32);
         VkRenderPassBeginInfo pass = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
             .renderPass = app->render_pass, .framebuffer = app->framebuffers[image_index][eye],
             .renderArea = {.extent = {app->width, app->height}}, .clearValueCount = 1, .pClearValues = &clear};
@@ -4944,7 +5359,11 @@ static void render_frame(struct app *app)
         projection_views[eye].pose = views[eye].pose; projection_views[eye].fov = views[eye].fov;
         projection_views[eye].subImage = (XrSwapchainSubImage){.swapchain = app->swapchain, .imageRect = {.extent = {(int32_t)app->width, (int32_t)app->height}}, .imageArrayIndex = eye};
     }
-    XrCompositionLayerProjection layer = {.type = XR_TYPE_COMPOSITION_LAYER_PROJECTION, .space = app->space, .viewCount = 2, .views = projection_views};
+    XrCompositionLayerProjection layer = {.type = XR_TYPE_COMPOSITION_LAYER_PROJECTION,
+        .layerFlags = passthrough_active(app)
+                          ? XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT
+                          : 0,
+        .space = app->space, .viewCount = 2, .views = projection_views};
     XrCompositionLayerQuad pointer_layer = make_pointer_layer(app);
     XrCompositionLayerQuad gaze_layer = make_gaze_marker_layer(app);
     const XrCompositionLayerBaseHeader *layers[4] = {
@@ -4962,7 +5381,7 @@ static void render_frame(struct app *app)
                 (const XrCompositionLayerBaseHeader *)&pointer_layer;
     }
     XrFrameEndInfo end = {.type = XR_TYPE_FRAME_END_INFO, .displayTime = frame_state.predictedDisplayTime,
-        .environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE,
+        .environmentBlendMode = environment_blend_mode(app),
         .layerCount = layer_count,
         .layers = layers};
     need_xr("xrEndFrame", xrEndFrame(app->session, &end));
@@ -5000,6 +5419,7 @@ int main(int argc, char **argv)
     app.grab_hand = -1;
     app.scrub_hand = -1;
     app.learn_action = -1;
+    app.settings_tab = PLAYER_UI_TAB_PLAYBACK;
     app.awaiting_frame = true;
     char browser_error[256] = {0};
     if (browser_ui_open(&app.browser, "root:", NULL, browser_error,

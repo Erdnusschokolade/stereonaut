@@ -5,11 +5,15 @@
  * the left-eye position is compared with the right eye image shifted by
  * one candidate disparity per invocation; the score is the normalized
  * cross-correlation of the luma. Built twice: NV12 (YCbCr sampler with
- * RGB_IDENTITY, luma in .g) and, with -DTP10, the TP10 luma plane. */
+ * RGB_IDENTITY, luma in .g) and, with -DTP10, the TP10 luma plane.
+ * With sample.x > 0 it measures the chroma key colour instead: the mean
+ * Y, Cb and Cr (8-bit code values) of the window around push.left go to
+ * score[0..2]. */
 layout(local_size_x = 128) in;
 
 #ifdef TP10
 layout(set = 0, binding = 2) uniform sampler2D luma_plane;
+layout(set = 0, binding = 3) uniform sampler2D chroma_plane;
 #else
 layout(set = 0, binding = 1) uniform sampler2D video_frame;
 #endif
@@ -24,6 +28,7 @@ layout(push_constant) uniform Push {
     vec4 right;  /* window centre in the right image, shift per candidate,
                     candidates below zero disparity */
     vec4 bounds; /* u range of the right eye region, TP10 plane scale */
+    vec4 sample_mode; /* x > 0: measure the key colour (see above) */
 } push;
 
 const int GRID_X = 24;
@@ -38,9 +43,38 @@ float luma(vec2 uv)
 #endif
 }
 
+/* Y, Cb, Cr on the 8-bit code scale. */
+vec3 ycbcr(vec2 uv)
+{
+#ifdef TP10
+    vec2 plane_uv = uv * push.bounds.zw;
+    return vec3(textureLod(luma_plane, plane_uv, 0.0).r,
+                textureLod(chroma_plane, plane_uv, 0.0).rg) * 1023.0 / 4.0;
+#else
+    vec3 crycb = textureLod(video_frame, uv, 0.0).rgb * 255.0;
+    return vec3(crycb.g, crycb.b, crycb.r);
+#endif
+}
+
 void main()
 {
     uint candidate = gl_LocalInvocationID.x;
+    if (push.sample_mode.x > 0.0) {
+        if (candidate != 0u)
+            return;
+        vec3 sum = vec3(0.0);
+        for (int y = 0; y < GRID_Y; ++y)
+            for (int x = 0; x < GRID_X; ++x)
+                sum += ycbcr(push.left.xy +
+                             vec2(float(x) - 0.5 * float(GRID_X - 1),
+                                  float(y) - 0.5 * float(GRID_Y - 1)) *
+                                 push.left.zw);
+        sum /= float(GRID_X * GRID_Y);
+        result.score[0] = sum.x;
+        result.score[1] = sum.y;
+        result.score[2] = sum.z;
+        return;
+    }
     float shift = (float(candidate) - push.right.w) * push.right.z;
     float sum_l = 0.0, sum_r = 0.0, sum_ll = 0.0, sum_rr = 0.0, sum_lr = 0.0;
     for (int y = 0; y < GRID_Y; ++y) {

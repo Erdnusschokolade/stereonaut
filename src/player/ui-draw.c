@@ -629,6 +629,25 @@ void ui_draw_icon(struct ui_canvas *canvas, enum ui_icon icon, float cx,
         icon_line(canvas, cx, cy, size, 0.62f, 0.62f, 0.86f, 0.86f,
                   stroke * 1.3f, color);
         break;
+    case UI_ICON_SETTINGS:
+        icon_arc(canvas, cx, cy, size, 0.5f, 0.5f, 0.22f, 0.0f, 2.0f * pi,
+                 stroke * 1.3f, color);
+        for (int tooth = 0; tooth < 8; ++tooth) {
+            float angle = (float)tooth * pi / 4.0f;
+            float c = cosf(angle), s = sinf(angle);
+            icon_line(canvas, cx, cy, size, 0.5f + 0.3f * c, 0.5f + 0.3f * s,
+                      0.5f + 0.42f * c, 0.5f + 0.42f * s, stroke * 1.4f,
+                      color);
+        }
+        break;
+    case UI_ICON_EYE:
+        /* Upper and lower lid as arcs of circles below and above. */
+        icon_arc(canvas, cx, cy, size, 0.5f, 0.78f, 0.42f, pi + 0.73f,
+                 2.0f * pi - 0.73f, stroke, color);
+        icon_arc(canvas, cx, cy, size, 0.5f, 0.22f, 0.42f, 0.73f,
+                 pi - 0.73f, stroke, color);
+        ui_fill_circle(canvas, cx, cy, size * 0.1f, color);
+        break;
     }
 }
 

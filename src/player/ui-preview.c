@@ -204,6 +204,10 @@ static int preview_player(const char *path, int hover, bool popup, int tab)
         .preview_fov = 100,
         .video_levels = 1,
         .popup_tab = tab,
+        /* Tabs of the settings page show that page alone. */
+        .settings_page = tab >= PLAYER_UI_FIRST_SETTINGS_TAB,
+        .passthrough_supported =
+            getenv("STEREONAUT_PREVIEW_PASSTHROUGH") != NULL,
         .adjust = adjust,
         .gaze_debug = true,
         /* STEREONAUT_PREVIEW_LEARN=ACTION shows the buttons tab while
@@ -231,7 +235,10 @@ static int preview_player(const char *path, int hover, bool popup, int tab)
         state.preview = picture;
     }
     uint32_t *pixels = malloc((size_t)PLAYER_UI_WIDTH * PLAYER_UI_HEIGHT * 4);
-    player_ui_render(&ui, &state, pixels, false);
+    if (state.settings_page)
+        player_ui_render_settings(&ui, &state, pixels, false);
+    else
+        player_ui_render(&ui, &state, pixels, false);
     ui_image_free(picture);
     int result = write_ppm(path, (const uint8_t *)pixels, PLAYER_UI_WIDTH,
                            PLAYER_UI_HEIGHT, true);

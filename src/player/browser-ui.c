@@ -238,7 +238,14 @@ static bool has_direction(const struct browser_ui *ui, int sort)
     return local_location(ui) || sort != JF_SORT_RANDOM;
 }
 
-enum { RAIL_START, RAIL_JELLYFIN, RAIL_LOCAL, RAIL_SEARCH, RAIL_COUNT };
+enum {
+    RAIL_START,
+    RAIL_JELLYFIN,
+    RAIL_LOCAL,
+    RAIL_SEARCH,
+    RAIL_SETTINGS,
+    RAIL_COUNT,
+};
 _Static_assert(ID_RAIL + RAIL_COUNT <= ID_EXIT, "rail ids overlap");
 
 static const struct ui_color color_card = UI_RGBA(17, 18, 22, 240);
@@ -379,6 +386,7 @@ static void draw_rail(struct browser_ui *ui, struct ui_canvas *canvas,
         {UI_ICON_SERVER, "Jellyfin"},
         {UI_ICON_DISK, "Lokale Dateien"},
         {UI_ICON_SEARCH, "Suchen"},
+        {UI_ICON_SETTINGS, "Einstellungen"},
     };
     int active = rail_active(ui);
     for (int i = 0; i < RAIL_COUNT; ++i)
@@ -1443,6 +1451,8 @@ enum browser_ui_action browser_ui_activate(struct browser_ui *ui, char *path,
     } else if (hover == ID_RAIL + RAIL_LOCAL) {
         const char *home = getenv("HOME");
         request(ui, home && home[0] ? home : "/");
+    } else if (hover == ID_RAIL + RAIL_SETTINGS) {
+        return BROWSER_UI_SETTINGS_REQUESTED;
     } else if (hover == ID_EXIT) {
         return BROWSER_UI_EXIT_REQUESTED;
     }
