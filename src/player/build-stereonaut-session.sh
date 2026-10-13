@@ -59,7 +59,7 @@ cc -std=c11 -O2 -Wall -Wextra -Werror \
 
 cc -std=c11 -O2 -Wall -Wextra -Werror \
   -I"$script_dir" -o "$build_dir/stereonaut-launcher" \
-  "$script_dir/stereonaut-launcher.c"
+  "$script_dir/stereonaut-launcher.c" "$script_dir"/i18n*.c -pthread
 
 glslc -fshader-stage=vert \
   "$project_dir/tools/openxr-playback/video-projection.vert" \

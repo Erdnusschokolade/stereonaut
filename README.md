@@ -123,7 +123,11 @@ The installer also keeps a copy of the sources in
 installed binaries were linked against (a new major version), the launcher
 notices it at start, asks in a dialog (visible in the headset) and rebuilds
 and reinstalls itself in about half a minute. The TP10 Turnip is not rebuilt;
-if its libraries are missing it is disabled for that start.
+if its libraries are missing it is disabled for that start. If the rebuild
+fails, or the VR view fails to start or ends with an error, the start
+script offers a newer release when there is one (it may be built for the
+new SteamOS), installs it and starts it; otherwise it shows the error with
+the path of the log.
 
 The Jellyfin connection is stored in `~/.config/stereonaut/jellyfin.json`
 (created by the Quick Connect login in the browser).

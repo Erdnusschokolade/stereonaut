@@ -94,15 +94,28 @@ set -eu
 state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/stereonaut"
 mkdir -p "$state_dir"
 log="$state_dir/launcher.log"
-# After an update the launcher starts this again: keep the update's lines.
-if [ -n "${STEREONAUT_RESTART:-}" ]; then
+# The launcher runs this again in its own process after an update and when
+# the XR host failed: keep the lines before.
+if [ -n "${STEREONAUT_RESTART:-}${STEREONAUT_HOST_FAILED:-}" ]; then
     exec >>"$log" 2>&1
-    echo "--- restarted after an update"
+    echo "--- start script again"
 else
     exec >"$log" 2>&1
 fi
 source_dir="${XDG_DATA_HOME:-$HOME/.local/share}/stereonaut/source"
+initial=${1:-}
 cd "$HOME/.local/lib/stereonaut"
+
+# Dialogs in the language of the interface (English or German); the
+# launcher only needs the C library and answers even when the rest broke.
+language=$(./stereonaut-launcher --language 2>/dev/null || echo en)
+text() {
+    if [ "$language" = de ]; then
+        printf '%s' "$2"
+    else
+        printf '%s' "$1"
+    fi
+}
 
 # Libraries the given files need but the system no longer has (a SteamOS
 # update can replace a library by a new major version).
@@ -123,10 +136,12 @@ dialog() {
     ADW_DEBUG_COLOR_SCHEME=prefer-dark GTK_THEME=Adwaita:dark zenity "$@"
 }
 
+# A question ($1) with the label of its yes button ($2).
 ask() {
     has_dialogs &&
         dialog --question --title=Stereonaut --text="$1" \
-            --ok-label="Neu bauen" --cancel-label="Abbrechen" --timeout=120
+            --ok-label="$2" --cancel-label="$(text Cancel Abbrechen)" \
+            --timeout=120
 }
 
 report_error() {
@@ -135,52 +150,114 @@ report_error() {
         dialog --error --title=Stereonaut --timeout=120 \
             --text="$1
 
-Details: $log" || true
+$(text Details Details): $log" || true
     fi
 }
 
-# Builds and installs from the source copy; progress as a pulsing bar.
-rebuild() {
-    status="$state_dir/rebuild.status"
+# Runs a command (its output to the log) under a pulsing progress bar with
+# the text $1; succeeds if the command does.
+with_progress() {
+    message=$1
+    shift
+    status="$state_dir/progress.status"
     echo 1 >"$status"
     {
-        if "$source_dir/src/player/build-stereonaut-session.sh" >&2 &&
-            "$source_dir/src/player/install-user-launcher.sh" >&2; then
+        if "$@" >&2; then
             echo 0 >"$status"
         fi
         echo 100
     } | if has_dialogs; then
         dialog --progress --pulsate --no-cancel --auto-close \
-            --title=Stereonaut --text="Stereonaut wird neu gebaut …" || true
+            --title=Stereonaut --text="$message" || true
     else
         cat >/dev/null
     fi
     [ "$(cat "$status")" = 0 ]
 }
 
+rebuild() {
+    "$source_dir/src/player/build-stereonaut-session.sh" &&
+        "$source_dir/src/player/install-user-launcher.sh"
+}
+
+# A release newer than this installation (any release for a build from the
+# sources), or nothing.
+newer_release() {
+    [ -x ./stereonaut-update.sh ] && [ -s release-signers ] || return 1
+    latest=$(sh ./stereonaut-update.sh check 2>/dev/null |
+        sed -n 's/^latest //p')
+    installed=$(sed -n 's/^STEREONAUT_VERSION=//p' MANIFEST 2>/dev/null ||
+        true)
+    [ -n "$latest" ] && [ "$latest" != "$installed" ] || return 1
+    echo "$latest"
+}
+
+# After the problem $1 a SteamOS update may have caused: offers a newer
+# release, which may be built for that SteamOS, and starts it. Returns if
+# there is none or the viewer declines.
+offer_update() {
+    tag=$(newer_release) || return 1
+    echo "offering release $tag"
+    ask "$1
+
+$(text "Version $tag is available. Install it now?" \
+       "Version $tag ist verfügbar. Jetzt installieren?")" \
+        "$(text Install Installieren)" || return 1
+    if ! with_progress "$(text "Installing Stereonaut $tag …" \
+                               "Stereonaut $tag wird installiert …")" \
+            sh ./stereonaut-update.sh install "$tag"; then
+        report_error "$(text "The update failed." \
+                             "Das Update ist fehlgeschlagen.")"
+        exit 1
+    fi
+    echo "update installed; starting it"
+    unset STEREONAUT_HOST_FAILED
+    STEREONAUT_RESTART=1 exec "$0" ${initial:+"$initial"}
+}
+
+if [ -n "${STEREONAUT_HOST_FAILED:-}" ]; then
+    unset STEREONAUT_HOST_FAILED
+    problem=$(text "The VR view of Stereonaut could not start or ended unexpectedly." \
+                   "Die VR-Ansicht von Stereonaut konnte nicht starten oder wurde unerwartet beendet.")
+    offer_update "$problem" || report_error "$problem"
+    exit 1
+fi
+
 missing=$(missing_libraries stereonaut-launcher stereonaut-session \
                             stereonaut-renderer)
 if [ -n "$missing" ]; then
     echo "missing libraries: $missing"
+    problem=$(text "After a SteamOS update libraries are missing: $missing" \
+                   "Nach einem SteamOS-Update fehlen Bibliotheken: $missing")
     if [ ! -x "$source_dir/src/player/build-stereonaut-session.sh" ]; then
-        report_error "Nach einem SteamOS-Update fehlen Bibliotheken ($missing). Es liegt kein Quelltext zum Neubauen vor; bitte Stereonaut neu installieren."
+        offer_update "$problem" ||
+            report_error "$problem
+
+$(text "There are no sources to rebuild from; please reinstall Stereonaut." \
+       "Es liegt kein Quelltext zum Neubauen vor; bitte Stereonaut neu installieren.")"
         exit 1
     fi
-    if ! ask "Nach einem SteamOS-Update fehlen Bibliotheken:
-$missing
+    if ! ask "$problem
 
-Stereonaut jetzt neu bauen? Das dauert etwa 10 Sekunden."; then
+$(text "Rebuild Stereonaut now? It takes about 10 seconds." \
+       "Stereonaut jetzt neu bauen? Das dauert etwa 10 Sekunden.")" \
+            "$(text Rebuild "Neu bauen")"; then
         echo "rebuild declined or not answered"
         exit 1
     fi
-    if ! rebuild; then
-        report_error "Der Neubau von Stereonaut ist fehlgeschlagen."
+    if ! with_progress "$(text "Rebuilding Stereonaut …" \
+                               "Stereonaut wird neu gebaut …")" rebuild; then
+        problem=$(text "Rebuilding Stereonaut failed." \
+                       "Der Neubau von Stereonaut ist fehlgeschlagen.")
+        offer_update "$problem" || report_error "$problem"
         exit 1
     fi
     missing=$(missing_libraries stereonaut-launcher stereonaut-session \
                                 stereonaut-renderer)
     if [ -n "$missing" ]; then
-        report_error "Auch nach dem Neubau fehlen Bibliotheken: $missing"
+        problem=$(text "Libraries are still missing after the rebuild: $missing" \
+                       "Auch nach dem Neubau fehlen Bibliotheken: $missing")
+        offer_update "$problem" || report_error "$problem"
         exit 1
     fi
     echo "rebuild finished"

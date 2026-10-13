@@ -218,7 +218,18 @@ and runs its `install.sh`. The host then asks the launcher for a restart
 (`PLAYER_UI_RESTART_REQUESTED`); the launcher ends the host and executes
 `~/.local/bin/stereonaut` again in the same process, which SteamVR keeps as
 the running app. The installed version is the MANIFEST of the release
-package; a build from the sources has none. Without `release-signers`
+package; a build from the sources has none.
+
+The start script (`~/.local/bin/stereonaut`, written by
+`install-user-launcher.sh`) uses the same script when the player cannot run
+after a SteamOS update: when libraries are missing and there are no
+sources, the rebuild fails or libraries are still missing after it, and
+when the XR host fails (exits with an error or a signal; the launcher then
+executes the start script again with `STEREONAUT_HOST_FAILED`). It offers a
+release newer than the installed one in a dialog, installs it and starts
+again; without one it reports the error. Its dialogs follow the interface
+language, which `stereonaut-launcher --language` prints (the launcher only
+needs the C library). Without `release-signers`
 updates are off. `STEREONAUT_RELEASES` (a base URL) and
 `STEREONAUT_RELEASE_SIGNERS` replace the release page and the keys for
 tests.

@@ -25,6 +25,7 @@
 
 static int ui_fd = -1;
 static pid_t host_pid = -1;
+static bool host_failed; /* the XR host ended with an error or a signal */
 
 static bool exit_after_playback; /* the host ended during playback */
 
@@ -247,22 +248,88 @@ static void shutdown_host(void)
     }
     if (host_pid > 0) {
         int status;
-        waitpid(host_pid, &status, 0);
+        if (waitpid(host_pid, &status, 0) == host_pid &&
+            (WIFSIGNALED(status) ||
+             (WIFEXITED(status) && WEXITSTATUS(status) != 0))) {
+            host_failed = true;
+            fprintf(stderr, "XR host failed (status %d)\n", status);
+        }
         host_pid = -1;
     }
+}
+
+/* Runs the start script (~/.local/bin/stereonaut) again in this process,
+ * which SteamVR keeps as the running app, with `variable` set: after an
+ * update (STEREONAUT_RESTART) or when the XR host failed
+ * (STEREONAUT_HOST_FAILED: the script offers a newer release, as a SteamOS
+ * update may have broken the old one). */
+static int run_start_script(const char *variable)
+{
+    char script[PLAYER_UI_PATH_MAX];
+    const char *home = getenv("HOME");
+    snprintf(script, sizeof(script), "%s/.local/bin/stereonaut",
+             home ? home : "");
+    printf("start_script=%s %s\n", script, variable);
+    fflush(stdout);
+    fflush(stderr);
+    setenv(variable, "1", 1);
+    execl(script, script, (char *)NULL);
+    perror("start script");
+    return 1;
+}
+
+/* Ends the host; if it failed, hands over to the start script. */
+static int finish(int code)
+{
+    shutdown_host();
+    return host_failed ? run_start_script("STEREONAUT_HOST_FAILED") : code;
+}
+
+/* "--language": the code of the interface language (settings.json, else
+ * the system's), for the dialogs of the start script. Only the C library
+ * is needed, so this answers when a SteamOS update broke the rest. */
+static int print_language(void)
+{
+    char path[4200], choice[32] = "auto";
+    const char *base = getenv("XDG_CONFIG_HOME"), *home = getenv("HOME");
+    if (base && base[0])
+        snprintf(path, sizeof(path), "%s/stereonaut/settings.json", base);
+    else
+        snprintf(path, sizeof(path), "%s/.config/stereonaut/settings.json",
+                 home ? home : "");
+    FILE *file = fopen(path, "r");
+    if (file) {
+        char text[16384];
+        size_t length = fread(text, 1, sizeof(text) - 1, file);
+        fclose(file);
+        text[length] = '\0';
+        const char *key = strstr(text, "\"language\"");
+        const char *colon = key ? strchr(key + 10, ':') : NULL;
+        const char *quote = colon ? strchr(colon, '"') : NULL;
+        size_t size = quote ? strcspn(quote + 1, "\"") : 0;
+        if (quote && size < sizeof(choice)) {
+            memcpy(choice, quote + 1, size);
+            choice[size] = '\0';
+        }
+    }
+    printf("%s\n", i18n_languages[i18n_select(choice)]->code);
+    return 0;
 }
 
 int main(int argc, char **argv)
 {
     setvbuf(stdout, NULL, _IOLBF, 0);
     signal(SIGPIPE, SIG_IGN);
+    if (argc == 2 && strcmp(argv[1], "--language") == 0)
+        return print_language();
     bool play_only = argc >= 3 && strcmp(argv[1], "--play") == 0;
     if ((!play_only && argc > 2) || (argc >= 2 && !play_only &&
                                       strncmp(argv[1], "--", 2) == 0)) {
         fprintf(stderr,
                 "usage: %s [INITIAL_LOCATION]\n"
-                "       %s --play PATH [SESSION_ARGS...]\n",
-                argv[0], argv[0]);
+                "       %s --play PATH [SESSION_ARGS...]\n"
+                "       %s --language\n",
+                argv[0], argv[0], argv[0]);
         return 2;
     }
     if (start_host() < 0)
@@ -284,10 +351,8 @@ int main(int argc, char **argv)
     char directory[PLAYER_UI_PATH_MAX];
     char browser_message[PLAYER_UI_MESSAGE_MAX] = {0};
     snprintf(directory, sizeof(directory), "%s", initial);
-    if (send_command(PLAYER_UI_BROWSE, directory, NULL, -1) < 0) {
-        shutdown_host();
-        return 1;
-    }
+    if (send_command(PLAYER_UI_BROWSE, directory, NULL, -1) < 0)
+        return finish(1);
     for (;;) {
         struct player_ui_result result = {0};
         ssize_t received;
@@ -296,28 +361,17 @@ int main(int argc, char **argv)
         } while (received < 0 && errno == EINTR);
         if (received != (ssize_t)sizeof(result)) {
             fprintf(stderr, "XR host ended\n");
-            shutdown_host();
-            return 0;
+            return finish(0);
         }
         if (result.type == PLAYER_UI_EXIT_REQUESTED) {
             shutdown_host();
             return 0;
         }
         if (result.type == PLAYER_UI_RESTART_REQUESTED) {
-            /* The wrapper checks the libraries and starts the new
-             * launcher in the same process, which SteamVR keeps as the
-             * running app. */
+            /* The script checks the libraries and starts the new
+             * launcher. */
             shutdown_host();
-            char wrapper[PLAYER_UI_PATH_MAX];
-            const char *home = getenv("HOME");
-            snprintf(wrapper, sizeof(wrapper), "%s/.local/bin/stereonaut",
-                     home ? home : "");
-            printf("restart=%s\n", wrapper);
-            fflush(stdout);
-            setenv("STEREONAUT_RESTART", "1", 1);
-            execl(wrapper, wrapper, (char *)NULL);
-            perror("restart");
-            return 1;
+            return run_start_script("STEREONAUT_RESTART");
         }
         if (result.type != PLAYER_UI_FILE_SELECTED || !result.path[0]) {
             fprintf(stderr, "XR host returned unknown action\n");
@@ -338,10 +392,8 @@ int main(int argc, char **argv)
                                   result.start_us > 0 ? start_arguments
                                                       : NULL,
                                   &exit_code);
-        if (exit_after_playback) {
-            shutdown_host();
-            return 0;
-        }
+        if (exit_after_playback)
+            return finish(0);
         if (played < 0) {
             fprintf(stderr, "playback failed; returning to browser\n");
             if (exit_code == EXIT_BROKEN_SOURCE)
@@ -356,9 +408,7 @@ int main(int argc, char **argv)
                             "yet"));
         }
         if (send_command(PLAYER_UI_BROWSE, directory, browser_message,
-                         -1) < 0) {
-            shutdown_host();
-            return 1;
-        }
+                         -1) < 0)
+            return finish(1);
     }
 }
