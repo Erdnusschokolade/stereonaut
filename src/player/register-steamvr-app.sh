@@ -11,16 +11,31 @@ set -eu
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 data_dir="${XDG_DATA_HOME:-$HOME/.local/share}/stereonaut"
 manifest="$data_dir/stereonaut.vrmanifest"
+vrpath="$HOME/.config/openvr/openvrpaths.vrpath"
 launcher="$HOME/.local/bin/stereonaut"
-if [ -n "${VRCMD:-}" ]; then
-    vrcmd=$VRCMD
-elif [ -x /opt/steamvr/bin/linuxarm64/vrcmd ]; then
-    vrcmd=/opt/steamvr/bin/linuxarm64/vrcmd
-elif command -v vrcmd >/dev/null 2>&1; then
-    vrcmd=$(command -v vrcmd)
-else
-    vrcmd=
-fi
+
+# SteamVR's tool: on the Frame in /opt/steamvr, on a PC in the runtime
+# directories listed in openvrpaths.vrpath.
+find_vrcmd() {
+    if [ -n "${VRCMD:-}" ]; then
+        echo "$VRCMD"
+        return
+    fi
+    {
+        echo /opt/steamvr
+        [ -f "$vrpath" ] &&
+            sed -n '/"runtime"/,/]/s/.*"\(\/[^"]*\)".*/\1/p' "$vrpath"
+    } | while read -r runtime; do
+        for platform in linuxarm64 linux64; do
+            if [ -x "$runtime/bin/$platform/vrcmd" ]; then
+                echo "$runtime/bin/$platform/vrcmd"
+                return
+            fi
+        done
+    done | head -n 1
+    command -v vrcmd 2>/dev/null || true
+}
+vrcmd=$(find_vrcmd | head -n 1)
 
 if [ ! -x "$launcher" ]; then
     echo "launcher missing: run install-user-launcher.sh first" >&2
@@ -60,7 +75,6 @@ chmod 0644 "$manifest"
 # SteamVR keeps the registered manifests in appconfig.json of its config
 # directories (listed in openvrpaths.vrpath).
 registered() {
-    vrpath="$HOME/.config/openvr/openvrpaths.vrpath"
     {
         echo "$HOME/.config/openvr/config"
         [ -f "$vrpath" ] &&

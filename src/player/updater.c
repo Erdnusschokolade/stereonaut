@@ -36,12 +36,12 @@ void updater_init(struct updater *updater)
                       access("release-signers", R_OK) == 0;
     FILE *manifest = fopen("MANIFEST", "r");
     char line[256];
-    while (manifest && fgets(line, sizeof(line), manifest))
-        if (strncmp(line, "STEREONAUT_VERSION=", 19) == 0) {
-            line[strcspn(line, "\r\n")] = '\0';
+    while (manifest && fgets(line, sizeof(line), manifest)) {
+        line[strcspn(line, "\r\n")] = '\0';
+        if (strncmp(line, "STEREONAUT_VERSION=", 19) == 0)
             snprintf(updater->installed, sizeof(updater->installed),
                      "%.63s", line + 19);
-        }
+    }
     if (manifest)
         fclose(manifest);
     printf("updater usable=%d installed=%s\n", updater->usable,

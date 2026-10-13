@@ -672,21 +672,38 @@ struct ui_font {
     struct glyph cache[GLYPH_CACHE_SIZE];
 };
 
+/* Arch and SteamOS, Debian and Ubuntu, Fedora (whose Noto Sans is a
+ * variable font only: DejaVu comes first there, it has a bold face). */
 static const char *const regular_paths[] = {
     "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
     "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf",
+    "/usr/share/fonts/google-noto-vf/NotoSans[wght].ttf",
     "/usr/share/fonts/cantarell/Cantarell-VF.otf",
 };
 static const char *const bold_paths[] = {
     "/usr/share/fonts/noto/NotoSans-SemiBold.ttf",
     "/usr/share/fonts/noto/NotoSans-Bold.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
     "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    "/usr/share/fonts/dejavu-sans-fonts/DejaVuSans-Bold.ttf",
 };
+/* CJK (the first found), then symbols (the first found). */
 static const char *const fallback_paths[] = {
     "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/noto-cjk/NotoSansCJK-Medium.ttc",
     "/usr/share/fonts/noto-cjk/NotoSansCJK-Light.ttc",
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/google-noto-sans-cjk-fonts/NotoSansCJK-Regular.ttc",
+    "/usr/share/fonts/google-noto-sans-cjk-vf-fonts/NotoSansCJK-VF.ttc",
+};
+static const char *const symbol_paths[] = {
     "/usr/share/fonts/noto/NotoSansSymbols2-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
+    "/usr/share/fonts/google-noto/NotoSansSymbols2-Regular.ttf",
 };
 
 static bool add_face(struct ui_font *font, const char *path)
@@ -723,8 +740,11 @@ struct ui_font *ui_font_load(bool bold)
     if (!font->face_count)
         add_first(font, "STEREONAUT_FONT_REGULAR", regular_paths,
                   ARRAY_COUNT(regular_paths));
-    add_first(font, "STEREONAUT_FONT_FALLBACK", fallback_paths, 3);
-    add_face(font, fallback_paths[3]);
+    add_first(font, "STEREONAUT_FONT_FALLBACK", fallback_paths,
+              ARRAY_COUNT(fallback_paths));
+    for (size_t i = 0; i < ARRAY_COUNT(symbol_paths); ++i)
+        if (add_face(font, symbol_paths[i]))
+            break;
     if (!font->face_count)
         fprintf(stderr, "ui: no usable font found\n");
     return font;

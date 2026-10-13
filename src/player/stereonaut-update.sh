@@ -1,6 +1,7 @@
 #!/bin/sh
-# Updates an installed Stereonaut from the project's GitHub releases. The
-# XR host runs it and reads the lines it prints:
+# Updates an installed Stereonaut from the project's GitHub releases (on
+# the Frame its binary package, on a PC the source package, which
+# install.sh builds). The XR host runs it and reads the lines it prints:
 #
 #   stereonaut-update.sh check         prints "latest TAG"
 #   stereonaut-update.sh install TAG   prints "phase download|verify|unpack|
@@ -17,7 +18,13 @@ set -eu
 repository=${STEREONAUT_RELEASES:-https://github.com/Erdnusschokolade/stereonaut}
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 signers=${STEREONAUT_RELEASE_SIGNERS:-$here/release-signers}
-asset="stereonaut-steamos-$(uname -m).tar.gz"
+# The Frame's package holds binaries for its SteamOS; a PC builds the
+# sources.
+if [ "$(sed -n 's/^ID=//p' /etc/os-release | tr -d '"')" = steamos ]; then
+    asset="stereonaut-steamos-$(uname -m).tar.gz"
+else
+    asset=stereonaut-linux-source.tar.gz
+fi
 
 fail() {
     echo "error $*"

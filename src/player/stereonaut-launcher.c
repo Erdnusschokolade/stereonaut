@@ -258,17 +258,22 @@ static void shutdown_host(void)
     }
 }
 
-/* Runs the start script (~/.local/bin/stereonaut) again in this process,
- * which SteamVR keeps as the running app, with `variable` set: after an
- * update (STEREONAUT_RESTART) or when the XR host failed
- * (STEREONAUT_HOST_FAILED: the script offers a newer release, as a SteamOS
- * update may have broken the old one). */
+/* Runs the start script (STEREONAUT_START_SCRIPT, which it sets, else
+ * ~/.local/bin/stereonaut) again in this process, which SteamVR keeps as
+ * the running app, with `variable` set: after an update
+ * (STEREONAUT_RESTART) or when the XR host failed (STEREONAUT_HOST_FAILED:
+ * the script offers a newer release, as a system update may have broken
+ * the old one). */
 static int run_start_script(const char *variable)
 {
     char script[PLAYER_UI_PATH_MAX];
     const char *home = getenv("HOME");
-    snprintf(script, sizeof(script), "%s/.local/bin/stereonaut",
-             home ? home : "");
+    const char *own = getenv("STEREONAUT_START_SCRIPT");
+    if (own && own[0])
+        snprintf(script, sizeof(script), "%s", own);
+    else
+        snprintf(script, sizeof(script), "%s/.local/bin/stereonaut",
+                 home ? home : "");
     printf("start_script=%s %s\n", script, variable);
     fflush(stdout);
     fflush(stderr);
