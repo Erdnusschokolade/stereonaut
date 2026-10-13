@@ -448,8 +448,15 @@ struct app {
     int system_language; /* what "automatic" finds, see i18n_detect */
     float adjust[PLAYER_ADJUST_COUNT];   /* see player_adjust_info */
     char title_key[TITLE_KEY_SIZE];      /* titles.json entry, "" if none */
+    /* Home: where the viewer looked when Stereonaut started or was last
+     * centred ("Centre" in the player, SteamVR's recenter). The browser
+     * faces it and every title starts turned towards it. */
+    bool home_pending;
+    XrTime home_after;        /* SteamVR's recenter applies from then on */
+    XrVector3f home_position; /* head */
+    float home_yaw;           /* as panel_yaw: 0 looks along -z */
     /* The dome (and the flat screen) is centred on this head position and
-     * faces this gaze yaw; set at the first frame and by "zentrieren". */
+     * faces this gaze yaw; set at the first frame and by "Centre". */
     bool recenter_pending;
     bool recenter_yaw;
     XrVector3f dome_center;
@@ -1365,6 +1372,17 @@ static void poll_events(struct app *app)
         }
         if (event.type == RENDER_MODELS_CHANGED_EVENT) {
             app->render_models_dirty = true;
+            continue;
+        }
+        if (event.type == XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING) {
+            const XrEventDataReferenceSpaceChangePending *change =
+                (const XrEventDataReferenceSpaceChangePending *)&event;
+            printf("reference_space_change type=%d time=%" PRId64 "\n",
+                   change->referenceSpaceType, change->changeTime);
+            if (change->referenceSpaceType == XR_REFERENCE_SPACE_TYPE_LOCAL) {
+                app->home_pending = true;
+                app->home_after = change->changeTime;
+            }
             continue;
         }
         if (event.type != XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) continue;
@@ -3741,7 +3759,17 @@ static XrCompositionLayerQuad make_ui_layer(const struct app *app)
 
 /* ---- browser mode ---------------------------------------------------- */
 
-#define BROWSER_PANEL_Z (-2.4f)
+#define BROWSER_PANEL_DISTANCE 2.4f
+
+/* The browser stands in front of home at eye height. */
+static XrVector3f browser_center(const struct app *app)
+{
+    return (XrVector3f){
+        app->home_position.x - sinf(app->home_yaw) * BROWSER_PANEL_DISTANCE,
+        app->home_position.y,
+        app->home_position.z - cosf(app->home_yaw) * BROWSER_PANEL_DISTANCE,
+    };
+}
 
 static void create_browser_texture(struct app *app)
 {
@@ -4225,7 +4253,7 @@ static XrCompositionLayerQuad make_browser_layer(const struct app *app)
             .swapchain = app->browser_swapchain,
             .imageRect = {.extent = {BROWSER_UI_WIDTH, BROWSER_UI_HEIGHT}},
         },
-        .pose = {{0, 0, 0, 1}, {0, 0, BROWSER_PANEL_Z}},
+        .pose = {yaw_quaternion(app->home_yaw), browser_center(app)},
         .size = {BROWSER_UI_PANEL_WIDTH_METERS,
                  BROWSER_UI_PANEL_HEIGHT_METERS},
     };
@@ -4330,12 +4358,11 @@ static void begin_playback(struct app *app, int fd, const char *location)
     else
         app->title_key[0] = '\0';
     load_adjust(app, false);
-    /* Centre the dome on the head at the first rendered frame; the gaze
-     * yaw only changes on "zentrieren" (SteamVR's seated origin faces the
-     * viewer already). */
+    /* Centre the dome on the head at the first rendered frame, turned
+     * towards home (kept across titles until the viewer centres again). */
     app->recenter_pending = true;
     app->recenter_yaw = false;
-    app->dome_yaw = 0.0f;
+    app->dome_yaw = -app->home_yaw;
     app->autofocus_offset = 0.0f;
     app->autofocus_speed = 0.0f;
     app->autofocus_time = 0.0;
@@ -4471,7 +4498,7 @@ static void sync_browser_input(struct app *app, XrTime time)
         if ((location.locationFlags & valid) != valid)
             continue;
         struct panel_hit hit = panel_ray_at(
-            (XrVector3f){0, 0, BROWSER_PANEL_Z}, 0.0f,
+            browser_center(app), app->home_yaw,
             BROWSER_UI_PANEL_WIDTH_METERS, BROWSER_UI_PANEL_HEIGHT_METERS,
             location.pose);
         app->lasers[hand] = (struct laser){
@@ -4493,7 +4520,7 @@ static void sync_browser_input(struct app *app, XrTime time)
                     (float)(page_x + PLAYER_UI_POPUP_X) / PLAYER_UI_WIDTH,
                     (float)(page_y + PLAYER_UI_POPUP_Y) / PLAYER_UI_HEIGHT);
             }
-            place_pointer(app, (XrVector3f){0, 0, BROWSER_PANEL_Z}, 0.0f,
+            place_pointer(app, browser_center(app), app->home_yaw,
                           BROWSER_UI_PANEL_WIDTH_METERS,
                           BROWSER_UI_PANEL_HEIGHT_METERS, hit, 0.04f);
         }
@@ -5784,6 +5811,55 @@ static XrEnvironmentBlendMode environment_blend_mode(const struct app *app)
                                    : XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
 }
 
+/* Takes the head pose as home: its position and the direction the face
+ * points in. With `panel` the player panel moves in front of it. */
+static void set_home(struct app *app, XrPosef head, bool panel)
+{
+    XrVector3f forward = rotate_vector(head.orientation,
+                                       (XrVector3f){0, 0, -1});
+    XrVector3f up = rotate_vector(head.orientation, (XrVector3f){0, 1, 0});
+    /* Looking down the top of the head points forward, looking up it
+     * points back: the heading holds even for a headset woken up facing
+     * the ceiling. */
+    float x = forward.x - up.x * forward.y;
+    float z = forward.z - up.z * forward.y;
+    app->home_yaw = atan2f(-x, -z);
+    app->home_position = head.position;
+    app->home_pending = false;
+    if (panel) {
+        app->panel_x = head.position.x - sinf(app->home_yaw) * 1.3f;
+        app->panel_y = head.position.y - 0.35f;
+        app->panel_z = head.position.z - cosf(app->home_yaw) * 1.3f;
+        app->panel_yaw = app->home_yaw;
+    }
+    printf("home x=%.3f y=%.3f z=%.3f yaw=%.1f\n", head.position.x,
+           head.position.y, head.position.z,
+           app->home_yaw * 180.0f / PI_F);
+}
+
+/* Sets home at the start and after SteamVR's recenter (once the changed
+ * space applies), turning a playing title with it. */
+static void update_home(struct app *app, XrTime time)
+{
+    if (!app->home_pending || time < app->home_after)
+        return;
+    XrSpaceLocation head = {.type = XR_TYPE_SPACE_LOCATION};
+    need_xr("xrLocateSpace(home)",
+            xrLocateSpace(app->view_space, app->space, time, &head));
+    const XrSpaceLocationFlags valid =
+        XR_SPACE_LOCATION_POSITION_VALID_BIT |
+        XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+    if ((head.locationFlags & valid) != valid)
+        return;
+    set_home(app, head.pose, true);
+    if (app->playing) {
+        app->recenter_pending = true;
+        app->recenter_yaw = false;
+        app->dome_yaw = -app->home_yaw;
+        send_panel_state(app);
+    }
+}
+
 static void render_frame(struct app *app)
 {
     if (app->render_models_dirty) {
@@ -5799,6 +5875,7 @@ static void render_frame(struct app *app)
     need_xr("xrBeginFrame", xrBeginFrame(app->session, &begin));
     ++app->xr_frames;
     app->xr_should_render = frame_state.shouldRender;
+    update_home(app, frame_state.predictedDisplayTime);
     if (app->playing) {
         sync_player_input(app, frame_state.predictedDisplayTime);
         if (app->ui_dirty)
@@ -5874,9 +5951,8 @@ static void render_frame(struct app *app)
         (center.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT)) {
         app->dome_center = center.pose.position;
         if (app->recenter_yaw) {
-            XrVector3f gaze = rotate_vector(center.pose.orientation,
-                                            (XrVector3f){0, 0, -1});
-            app->dome_yaw = atan2f(gaze.x, -gaze.z);
+            set_home(app, center.pose, false);
+            app->dome_yaw = -app->home_yaw;
         }
         app->recenter_pending = false;
         printf("player_recenter x=%.3f y=%.3f z=%.3f yaw=%.1f\n",
@@ -6322,6 +6398,7 @@ int main(int argc, char **argv)
     app.grab_hand = -1;
     app.scrub_hand = -1;
     app.learn_action = -1;
+    app.home_pending = true;
     app.settings_tab = PLAYER_UI_TAB_PLAYBACK;
     app.awaiting_frame = true;
     char language[16];

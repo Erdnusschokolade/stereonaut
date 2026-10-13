@@ -180,6 +180,14 @@ decoding times, and a backward search for one of them landed a keyframe
 early. The position the seek starts from travels through the pipeline and,
 for a re-exec, `--seek-from-us`.
 
+The host keeps a home orientation: the head pose of the first frame (its
+heading also when the headset wakes up facing the ceiling or the floor),
+renewed by "Centre" in the player and by SteamVR's recenter
+(`XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING` for the local space).
+The browser stands 2.4 m in front of it at eye height, the player panel
+starts below the gaze, and every title starts turned towards it, so a
+centring holds across titles. The log shows it as `home x=… yaw=…`.
+
 The interface speaks English and German (`i18n.c`). As with gettext the
 English text in the code is the key: `tr("Settings")` returns the text of
 the language in effect, strings in static tables are marked with `N_()`.
