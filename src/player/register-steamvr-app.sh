@@ -2,8 +2,8 @@
 # Registers Stereonaut as a SteamVR application, so it can be started from
 # the SteamVR library instead of the desktop. Run after
 # install-user-launcher.sh. This changes the persistent SteamVR app list
-# (~/.config/openvr/config/appconfig.json via AddApplicationManifest).
-# Running it again updates the manifest. To remove the entry, delete the
+# (~/.config/openvr/config/appconfig.json via AddApplicationManifest) once;
+# running it again only updates the manifest, as SteamVR already lists it. To remove the entry, delete the
 # manifest path from "manifest_paths" in appconfig.json while SteamVR is not
 # running.
 set -eu
@@ -20,11 +20,6 @@ elif command -v vrcmd >/dev/null 2>&1; then
     vrcmd=$(command -v vrcmd)
 else
     vrcmd=
-fi
-
-if [ -z "$vrcmd" ] || [ ! -x "$vrcmd" ]; then
-    echo "SteamVR tool not found: $vrcmd" >&2
-    exit 1
 fi
 
 if [ ! -x "$launcher" ]; then
@@ -61,5 +56,31 @@ cat >"$manifest" <<EOF
 }
 EOF
 chmod 0644 "$manifest"
+
+# SteamVR keeps the registered manifests in appconfig.json of its config
+# directories (listed in openvrpaths.vrpath).
+registered() {
+    vrpath="$HOME/.config/openvr/openvrpaths.vrpath"
+    {
+        echo "$HOME/.config/openvr/config"
+        [ -f "$vrpath" ] &&
+            sed -n '/"config"/,/]/s/.*"\(\/[^"]*\)".*/\1/p' "$vrpath"
+    } | while read -r directory; do
+        if grep -qF "\"$manifest\"" "$directory/appconfig.json" 2>/dev/null
+        then
+            echo yes
+        fi
+    done | grep -q yes
+}
+if registered; then
+    printf 'SteamVR app already registered, manifest updated: %s\n' \
+        "$manifest"
+    exit 0
+fi
+
+if [ -z "$vrcmd" ] || [ ! -x "$vrcmd" ]; then
+    echo "SteamVR tool not found: $vrcmd" >&2
+    exit 1
+fi
 "$vrcmd" --appmanifest "$manifest"
 printf 'registered SteamVR app: %s\n' "$manifest"

@@ -81,6 +81,19 @@ src/player/install-user-launcher.sh      # installs to ~/.local/lib/stereonaut a
 src/player/register-steamvr-app.sh       # once: adds "Stereonaut" to the SteamVR library
 ```
 
+A release package bundles the binaries built on the Frame, the sources and
+an installer. `src/player/make-release.sh [VERSION] [--turnip LIBRARY]`
+builds it on the Frame (the version defaults to the current, clean commit);
+the name carries the SteamOS version and build it was made on, e.g.
+`stereonaut-<commit>-steamos-0.4.5-20261007.6125817-aarch64.tar.gz`, next
+to a `.sha256`. To install, unpack it and run `./install.sh`: it checks the
+architecture and the checksums, installs the binaries as they are on the
+same SteamOS build (an atomic image, so the libraries match), checks the
+libraries with `ldd` on any other build and rebuilds from the included
+sources if one is missing, then installs as below and adds the SteamVR
+library entry unless it exists (`--no-steamvr` skips it, `--rebuild`
+always rebuilds).
+
 HEVC Main10 needs a Turnip (Mesa) build with TP10 texture formats; see
 `tools/mesa-tp10/` and `docs/main10-linear-output.md`. Without it, Main10 is
 rejected locally and transcoded by Jellyfin.
