@@ -11,6 +11,7 @@
 #include <math.h>
 #include <signal.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,6 +28,8 @@
 
 #include "browser-ui.h"
 #include "controller-bindings.h"
+#include "gltf-model.h"
+#include "render-models.h"
 #include "jellyfin.h"
 #include "player-ui.h"
 #include "settings.h"
@@ -171,9 +174,9 @@ struct video_buffer {
     VkDeviceMemory host_memory;
 };
 
-/* A UI panel drawn into the eye images (PC, see panels_in_eye_images): a
- * mipmapped image the renderer samples itself. On the Frame the panels are
- * quad layers and only width and height are used. */
+/* A UI panel drawn into the overlay layer (see panels_in_eye_images): a
+ * mipmapped image the renderer samples itself. As a quad layer
+ * (STEREONAUT_UI_LAYER=quad) only width and height are used. */
 struct ui_texture {
     uint32_t width, height;
     uint32_t mip_levels;
@@ -182,6 +185,19 @@ struct ui_texture {
     VkImageView view;
     VkDescriptorSet descriptor_set;
     bool ready;
+};
+
+/* A controller model on the GPU (record_overlay). */
+struct gpu_model {
+    struct gltf_model mesh;
+    uint32_t source;          /* index in app->render_models */
+    int *animation;           /* per glTF node: animatable node or -1 */
+    VkBuffer vertices, indices;
+    VkDeviceMemory vertex_memory, index_memory;
+    VkImage texture;
+    VkDeviceMemory texture_memory;
+    VkImageView texture_view;
+    VkDescriptorSet set;
 };
 
 struct app {
@@ -328,6 +344,39 @@ struct app {
     /* Eye tracking (XR_EXT_eye_gaze_interaction): the gaze ray steers the
      * autofocus measurement; without it the head's forward direction. */
     bool has_eye_gaze_extension, has_eye_gaze;
+    /* Controller models (render-models.h); reloaded when the runtime
+     * reports other devices. */
+    struct render_models render_models;
+    bool render_models_dirty;
+    /* Overlay layer above the panels: controller models and pointer
+     * beams with their own depth buffer (record_overlay). */
+    /* One swapchain per eye: SteamVR showed the first array layer of a
+     * second projection layer to both eyes. */
+    XrSwapchain overlay_swapchains[2];
+    uint32_t overlay_image_counts[2];
+    XrSwapchainImageVulkan2KHR overlay_images[2][MAX_IMAGES];
+    VkImageView overlay_views[2][MAX_IMAGES];
+    VkFramebuffer overlay_framebuffers[2][MAX_IMAGES];
+    VkImage overlay_depth;
+    VkDeviceMemory overlay_depth_memory;
+    VkImageView overlay_depth_views[2];
+    VkRenderPass overlay_pass;
+    VkSampler model_sampler;
+    VkDescriptorSetLayout model_descriptor_layout;
+    VkDescriptorPool model_descriptor_pool;
+    VkPipelineLayout model_pipeline_layout, beam_pipeline_layout;
+    VkPipeline model_pipeline, beam_pipeline;
+    uint32_t overlay_width, overlay_height;
+    struct gpu_model gpu_models[RENDER_MODELS_MAX];
+    uint32_t gpu_model_count;
+    /* Pointer beam per hand from the last input sync: aim and the distance
+     * to the panel it hits (<= 0: none). */
+    struct laser {
+        bool valid;
+        XrPosef aim;
+        float panel_length;
+    } lasers[2];
+    bool overlay_wanted;
     XrAction gaze_action;
     XrSpace gaze_space;
     bool gaze_logged;
@@ -699,6 +748,7 @@ static void initialize_actions(struct app *app)
     };
     need_xr("xrAttachSessionActionSets",
             xrAttachSessionActionSets(app->session, &attach));
+    app->render_models_dirty = true;
 }
 
 static void apply_init(struct app *app, const struct nv12_ipc_message *message,
@@ -1311,6 +1361,10 @@ static void poll_events(struct app *app)
             }
             continue;
         }
+        if (event.type == RENDER_MODELS_CHANGED_EVENT) {
+            app->render_models_dirty = true;
+            continue;
+        }
         if (event.type != XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) continue;
         XrEventDataSessionStateChanged *change =
             (XrEventDataSessionStateChanged *)&event;
@@ -1395,12 +1449,11 @@ static void initialize_xr_vulkan(struct app *app)
         if (strcmp(available[i].extensionName, generic_extension) == 0)
             app->has_generic_controller = true;
     }
-    free(available);
     /* No extension is required for the standardized PC interaction
      * profiles. Unsupported profiles are harmlessly rejected by
      * xrSuggestInteractionProfileBindings. */
     app->has_pcvr_controller = true;
-    const char *extensions[4] = {XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME};
+    const char *extensions[8] = {XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME};
     uint32_t extension_count = 1;
     if (app->has_eye_gaze_extension)
         extensions[extension_count++] =
@@ -1409,6 +1462,10 @@ static void initialize_xr_vulkan(struct app *app)
         extensions[extension_count++] = valve_extension;
     if (app->has_generic_controller)
         extensions[extension_count++] = generic_extension;
+    render_models_request_extensions(&app->render_models, available,
+                                     available_count, extensions,
+                                     &extension_count);
+    free(available);
     XrInstanceCreateInfo info = {
         .type = XR_TYPE_INSTANCE_CREATE_INFO,
         .applicationInfo = {.applicationVersion = 1, .engineVersion = 1,
@@ -2295,22 +2352,19 @@ static struct player_ui_state player_state(const struct app *app)
     };
 }
 
-/* Where the panels are drawn. SteamVR on a PC composites quad layers so
- * that text and thin lines shimmer and step when the head moves, also when
- * the image has mipmaps or is filtered down beforehand; the video, which the
- * renderer draws into the eye images itself, stays clean. On a PC the
- * panels are therefore drawn into the eye images as well, from a mipmapped
- * image with trilinear and anisotropic filtering. The Frame's compositor
- * shows quad layers cleanly and sharper. STEREONAUT_UI_LAYER=quad|eye
- * overrides. */
+/* Where the panels are drawn. SteamVR makes quad layers overlays of its
+ * own, which it composites over every projection layer: the controllers
+ * and pointer beams (overlay layer, see record_overlay) vanished behind a
+ * panel. On a PC quad layers also shimmer and step while the head moves.
+ * The panels are therefore drawn into the overlay layer's eye images, from
+ * mipmapped images with trilinear and anisotropic filtering, below the
+ * controllers; the overlay has a higher resolution than the video for the
+ * text (OVERLAY_SCALE). STEREONAUT_UI_LAYER=quad brings the quad layers
+ * back (controllers then disappear behind the panels). */
 static bool panels_in_eye_images(void)
 {
     const char *forced = getenv("STEREONAUT_UI_LAYER");
-    if (forced && strcmp(forced, "quad") == 0)
-        return false;
-    if (forced && strcmp(forced, "eye") == 0)
-        return true;
-    return access("/dev/video-dec0", F_OK) < 0;
+    return !(forced && strcmp(forced, "quad") == 0);
 }
 
 /* A panel's quad-layer swapchain or, drawn into the eye images, its
@@ -2864,6 +2918,7 @@ static float vector_dot(XrVector3f a, XrVector3f b)
 struct panel_hit {
     bool plane;
     float u, v;
+    float distance; /* metres along the aim ray */
 };
 
 static bool panel_hit_inside(const struct panel_hit *hit)
@@ -2897,6 +2952,7 @@ static struct panel_hit panel_ray_at(XrVector3f center, float yaw,
                         aim.position.z + direction.z * distance - center.z};
     XrVector3f local = rotate_vector(quaternion_conjugate(orientation), point);
     hit.plane = true;
+    hit.distance = distance;
     hit.u = local.x / width_meters + 0.5f;
     hit.v = 0.5f - local.y / height_meters;
     return hit;
@@ -3434,6 +3490,16 @@ static void sync_player_input(struct app *app, XrTime time)
     bool grips[2];
     read_grips(app, hands, grips);
     process_bindings(app, grips);
+    for (unsigned hand = 0; hand < 2; ++hand)
+        app->lasers[hand] = (struct laser){
+            .valid = hands[hand].aim_valid,
+            .aim = hands[hand].aim,
+            .panel_length = app->ui_visible &&
+                                    on_player_panel(app, &hands[hand].hit)
+                                ? hands[hand].hit.distance
+                                : -1.0f,
+        };
+    app->overlay_wanted = app->ui_visible || app->key_picking;
 
     /* Auto-hide: any trigger, grip or stick, or pointing at the panel,
      * counts as input; a trigger brings a hidden panel back without
@@ -3956,9 +4022,10 @@ static void create_panel_pipeline(struct app *app)
         .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
         .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
     };
-    VkViewport viewport = {.width = (float)app->width,
-                           .height = (float)app->height, .maxDepth = 1};
-    VkRect2D scissor = {.extent = {app->width, app->height}};
+    VkViewport viewport = {.width = (float)app->overlay_width,
+                           .height = (float)app->overlay_height,
+                           .maxDepth = 1};
+    VkRect2D scissor = {.extent = {app->overlay_width, app->overlay_height}};
     VkPipelineViewportStateCreateInfo view = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
         .viewportCount = 1, .pViewports = &viewport,
@@ -3988,13 +4055,18 @@ static void create_panel_pipeline(struct app *app)
         .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
         .attachmentCount = 1, .pAttachments = &blend_attachment,
     };
+    /* Drawn first in the overlay; the controllers come over it. */
+    VkPipelineDepthStencilStateCreateInfo depth = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+    };
     VkGraphicsPipelineCreateInfo pipeline = {
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .stageCount = 2, .pStages = stages, .pVertexInputState = &vertex,
         .pInputAssemblyState = &assembly, .pViewportState = &view,
         .pRasterizationState = &raster, .pMultisampleState = &multisample,
-        .pColorBlendState = &blend, .layout = app->panel_pipeline_layout,
-        .renderPass = app->render_pass,
+        .pDepthStencilState = &depth, .pColorBlendState = &blend,
+        .layout = app->panel_pipeline_layout,
+        .renderPass = app->overlay_pass,
     };
     need_vk("vkCreateGraphicsPipelines(panel)",
             vkCreateGraphicsPipelines(app->device, VK_NULL_HANDLE, 1,
@@ -4354,6 +4426,8 @@ static void sync_browser_input(struct app *app, XrTime time)
     app->pointer_layer_visible = false;
     int pointer_x = 0, pointer_y = 0, hover = -1, settings_hover = -1;
     struct hand_input hands[2] = {0};
+    app->lasers[0].valid = app->lasers[1].valid = false;
+    app->overlay_wanted = true;
     for (unsigned hand = 0; hand < 2; ++hand) {
         XrActionStateGetInfo pose_info = {
             .type = XR_TYPE_ACTION_STATE_GET_INFO,
@@ -4383,6 +4457,10 @@ static void sync_browser_input(struct app *app, XrTime time)
             (XrVector3f){0, 0, BROWSER_PANEL_Z}, 0.0f,
             BROWSER_UI_PANEL_WIDTH_METERS, BROWSER_UI_PANEL_HEIGHT_METERS,
             location.pose);
+        app->lasers[hand] = (struct laser){
+            .valid = true, .aim = location.pose,
+            .panel_length = panel_hit_inside(&hit) ? hit.distance : -1.0f,
+        };
         if (panel_hit_inside(&hit)) {
             pointer_visible = true;
             pointer_x = (int)(hit.u * BROWSER_UI_WIDTH);
@@ -4761,6 +4839,746 @@ static void update_debug_text(struct app *app)
     }
 }
 
+/* ---- overlay: panels, controller models and pointer beams ------------
+ * A second projection layer above the video, transparent where nothing is
+ * drawn: the panels first, then the controllers (with depth) and the beams.
+ * Quad layers would not do for the panels, SteamVR composites them over
+ * every projection layer and so over the controllers. Only submitted while
+ * the pointer is in use: always in the browser, during playback while the
+ * panel is visible or a key colour is being picked. */
+
+#define OVERLAY_DEPTH_FORMAT VK_FORMAT_D16_UNORM
+#define BEAM_HALF_WIDTH 0.0012f
+#define BEAM_DEFAULT_LENGTH 2.5f
+#define BEAM_DOT_RADIUS 0.006f /* per metre of beam */
+/* Overlay resolution against the recommended eye image, for the panel
+ * text: about the panels' own pixel density (1.25 on the Frame looked soft
+ * against quad layers; STEREONAUT_OVERLAY_SCALE overrides). */
+#define OVERLAY_SCALE 1.75f
+
+struct model_push {
+    struct mat4 mvp;
+    float normal_x[4], normal_y[4], normal_z[4];
+    float color[4];
+};
+
+struct beam_push {
+    struct mat4 view_projection;
+    float start[4], end[4], eye[4], color[4];
+};
+
+_Static_assert(sizeof(struct model_push) <= 128, "model push too large");
+_Static_assert(sizeof(struct beam_push) <= 128, "beam push too large");
+
+static void make_buffer(struct app *app, VkDeviceSize size,
+                        VkBufferUsageFlags usage, VkBuffer *buffer,
+                        VkDeviceMemory *memory, void **mapping)
+{
+    VkBufferCreateInfo info = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = size, .usage = usage,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+    };
+    need_vk("vkCreateBuffer(overlay)",
+            vkCreateBuffer(app->device, &info, NULL, buffer));
+    VkMemoryRequirements requirements;
+    vkGetBufferMemoryRequirements(app->device, *buffer, &requirements);
+    VkMemoryAllocateInfo allocation = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize = requirements.size,
+        .memoryTypeIndex = memory_type(
+            app->physical, requirements.memoryTypeBits,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
+    };
+    need_vk("vkAllocateMemory(overlay buffer)",
+            vkAllocateMemory(app->device, &allocation, NULL, memory));
+    need_vk("vkBindBufferMemory(overlay)",
+            vkBindBufferMemory(app->device, *buffer, *memory, 0));
+    need_vk("vkMapMemory(overlay)",
+            vkMapMemory(app->device, *memory, 0, size, 0, mapping));
+}
+
+static VkPipeline overlay_pipeline(struct app *app, const char *vertex_path,
+                                   const char *fragment_path,
+                                   VkPipelineLayout layout, bool mesh)
+{
+    VkShaderModule vert = shader(app->device, vertex_path);
+    VkShaderModule frag = shader(app->device, fragment_path);
+    VkPipelineShaderStageCreateInfo stages[2] = {
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+         .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = vert, .pName = "main"},
+        {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+         .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = frag,
+         .pName = "main"},
+    };
+    VkVertexInputBindingDescription binding = {
+        .binding = 0, .stride = sizeof(struct gltf_vertex),
+        .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+    };
+    VkVertexInputAttributeDescription attributes[3] = {
+        {.location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT,
+         .offset = offsetof(struct gltf_vertex, position)},
+        {.location = 1, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT,
+         .offset = offsetof(struct gltf_vertex, normal)},
+        {.location = 2, .binding = 0, .format = VK_FORMAT_R32G32_SFLOAT,
+         .offset = offsetof(struct gltf_vertex, uv)},
+    };
+    VkPipelineVertexInputStateCreateInfo vertex = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        .vertexBindingDescriptionCount = mesh ? 1U : 0U,
+        .pVertexBindingDescriptions = &binding,
+        .vertexAttributeDescriptionCount = mesh ? 3U : 0U,
+        .pVertexAttributeDescriptions = attributes,
+    };
+    VkPipelineInputAssemblyStateCreateInfo assembly = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        .topology = mesh ? VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
+                         : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
+    };
+    VkViewport viewport = {.width = (float)app->overlay_width,
+                           .height = (float)app->overlay_height, .maxDepth = 1};
+    VkRect2D scissor = {.extent = {app->overlay_width, app->overlay_height}};
+    VkPipelineViewportStateCreateInfo view = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+        .viewportCount = 1, .pViewports = &viewport,
+        .scissorCount = 1, .pScissors = &scissor,
+    };
+    VkPipelineRasterizationStateCreateInfo raster = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        .polygonMode = VK_POLYGON_MODE_FILL, .cullMode = VK_CULL_MODE_NONE,
+        .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE, .lineWidth = 1,
+    };
+    VkPipelineMultisampleStateCreateInfo multisample = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+        .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT,
+    };
+    /* The beam is tested against the controller but writes no depth. */
+    VkPipelineDepthStencilStateCreateInfo depth = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        .depthTestEnable = VK_TRUE, .depthWriteEnable = mesh,
+        .depthCompareOp = VK_COMPARE_OP_LESS,
+    };
+    VkPipelineColorBlendAttachmentState blend_attachment = {
+        .blendEnable = !mesh,
+        .srcColorBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+        .colorBlendOp = VK_BLEND_OP_ADD,
+        .srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE,
+        .dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA,
+        .alphaBlendOp = VK_BLEND_OP_ADD,
+        .colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                          VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT,
+    };
+    VkPipelineColorBlendStateCreateInfo blend = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        .attachmentCount = 1, .pAttachments = &blend_attachment,
+    };
+    VkGraphicsPipelineCreateInfo info = {
+        .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
+        .stageCount = 2, .pStages = stages, .pVertexInputState = &vertex,
+        .pInputAssemblyState = &assembly, .pViewportState = &view,
+        .pRasterizationState = &raster, .pMultisampleState = &multisample,
+        .pDepthStencilState = &depth, .pColorBlendState = &blend,
+        .layout = layout, .renderPass = app->overlay_pass,
+    };
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    need_vk("vkCreateGraphicsPipelines(overlay)",
+            vkCreateGraphicsPipelines(app->device, VK_NULL_HANDLE, 1, &info,
+                                      NULL, &pipeline));
+    vkDestroyShaderModule(app->device, vert, NULL);
+    vkDestroyShaderModule(app->device, frag, NULL);
+    return pipeline;
+}
+
+static void create_overlay(struct app *app)
+{
+    float scale = OVERLAY_SCALE;
+    const char *forced = getenv("STEREONAUT_OVERLAY_SCALE");
+    if (forced && atof(forced) >= 0.5 && atof(forced) <= 2.0)
+        scale = (float)atof(forced);
+    XrViewConfigurationView limits[2] = {
+        {.type = XR_TYPE_VIEW_CONFIGURATION_VIEW},
+        {.type = XR_TYPE_VIEW_CONFIGURATION_VIEW},
+    };
+    uint32_t limit_count = 0;
+    need_xr("xrEnumerateViewConfigurationViews(overlay)",
+            xrEnumerateViewConfigurationViews(
+                app->xr, app->system,
+                XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 2, &limit_count,
+                limits));
+    app->overlay_width = (uint32_t)((float)app->width * scale + 0.5f);
+    app->overlay_height = (uint32_t)((float)app->height * scale + 0.5f);
+    if (app->overlay_width > limits[0].maxImageRectWidth)
+        app->overlay_width = limits[0].maxImageRectWidth;
+    if (app->overlay_height > limits[0].maxImageRectHeight)
+        app->overlay_height = limits[0].maxImageRectHeight;
+    for (uint32_t eye = 0; eye < 2; ++eye) {
+        XrSwapchainCreateInfo swapchain = {
+            .type = XR_TYPE_SWAPCHAIN_CREATE_INFO,
+            .usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT,
+            .format = app->color_format, .sampleCount = 1,
+            .width = app->overlay_width, .height = app->overlay_height, .faceCount = 1,
+            .arraySize = 1, .mipCount = 1,
+        };
+        need_xr("xrCreateSwapchain(overlay)",
+                xrCreateSwapchain(app->session, &swapchain,
+                                  &app->overlay_swapchains[eye]));
+        uint32_t *count = &app->overlay_image_counts[eye];
+        need_xr("xrEnumerateSwapchainImages(overlay count)",
+                xrEnumerateSwapchainImages(app->overlay_swapchains[eye], 0,
+                                           count, NULL));
+        need(*count > 0 && *count <= MAX_IMAGES,
+             "unexpected overlay swapchain image count");
+        for (uint32_t i = 0; i < *count; ++i)
+            app->overlay_images[eye][i].type =
+                XR_TYPE_SWAPCHAIN_IMAGE_VULKAN2_KHR;
+        need_xr("xrEnumerateSwapchainImages(overlay list)",
+                xrEnumerateSwapchainImages(
+                    app->overlay_swapchains[eye], *count, count,
+                    (XrSwapchainImageBaseHeader *)app->overlay_images[eye]));
+    }
+
+    VkImageCreateInfo depth = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .imageType = VK_IMAGE_TYPE_2D, .format = OVERLAY_DEPTH_FORMAT,
+        .extent = {app->overlay_width, app->overlay_height, 1}, .mipLevels = 1,
+        .arrayLayers = 2, .samples = VK_SAMPLE_COUNT_1_BIT,
+        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+    };
+    need_vk("vkCreateImage(overlay depth)",
+            vkCreateImage(app->device, &depth, NULL, &app->overlay_depth));
+    VkMemoryRequirements requirements;
+    vkGetImageMemoryRequirements(app->device, app->overlay_depth,
+                                 &requirements);
+    VkMemoryAllocateInfo allocation = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize = requirements.size,
+        .memoryTypeIndex = memory_type(app->physical,
+                                       requirements.memoryTypeBits,
+                                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
+    };
+    need_vk("vkAllocateMemory(overlay depth)",
+            vkAllocateMemory(app->device, &allocation, NULL,
+                             &app->overlay_depth_memory));
+    need_vk("vkBindImageMemory(overlay depth)",
+            vkBindImageMemory(app->device, app->overlay_depth,
+                              app->overlay_depth_memory, 0));
+
+    VkAttachmentDescription attachments[2] = {
+        {.format = app->color_format, .samples = VK_SAMPLE_COUNT_1_BIT,
+         .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+         .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
+         .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+         .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+         .finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
+        {.format = OVERLAY_DEPTH_FORMAT, .samples = VK_SAMPLE_COUNT_1_BIT,
+         .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+         .storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+         .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
+         .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
+         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+         .finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL},
+    };
+    VkAttachmentReference color_reference = {
+        .attachment = 0, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+    };
+    VkAttachmentReference depth_reference = {
+        .attachment = 1,
+        .layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+    };
+    VkSubpassDescription subpass = {
+        .pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS,
+        .colorAttachmentCount = 1, .pColorAttachments = &color_reference,
+        .pDepthStencilAttachment = &depth_reference,
+    };
+    /* The two eye passes share the depth image's layers; earlier passes
+     * must have finished with it. */
+    VkSubpassDependency dependency = {
+        .srcSubpass = VK_SUBPASS_EXTERNAL, .dstSubpass = 0,
+        .srcStageMask = VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
+                        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        .dstStageMask = VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        .srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                         VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+        .dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                         VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                         VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+    };
+    VkRenderPassCreateInfo pass = {
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
+        .attachmentCount = 2, .pAttachments = attachments,
+        .subpassCount = 1, .pSubpasses = &subpass,
+        .dependencyCount = 1, .pDependencies = &dependency,
+    };
+    need_vk("vkCreateRenderPass(overlay)",
+            vkCreateRenderPass(app->device, &pass, NULL, &app->overlay_pass));
+    for (uint32_t eye = 0; eye < 2; ++eye) {
+        VkImageViewCreateInfo view = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+            .image = app->overlay_depth, .viewType = VK_IMAGE_VIEW_TYPE_2D,
+            .format = OVERLAY_DEPTH_FORMAT,
+            .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+                                 .levelCount = 1, .baseArrayLayer = eye,
+                                 .layerCount = 1},
+        };
+        need_vk("vkCreateImageView(overlay depth)",
+                vkCreateImageView(app->device, &view, NULL,
+                                  &app->overlay_depth_views[eye]));
+    }
+    for (uint32_t eye = 0; eye < 2; ++eye)
+        for (uint32_t image = 0; image < app->overlay_image_counts[eye];
+             ++image) {
+            VkImageViewCreateInfo view = {
+                .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                .image = app->overlay_images[eye][image].image,
+                .viewType = VK_IMAGE_VIEW_TYPE_2D,
+                .format = app->color_format,
+                .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                     .levelCount = 1, .layerCount = 1},
+            };
+            need_vk("vkCreateImageView(overlay)",
+                    vkCreateImageView(app->device, &view, NULL,
+                                      &app->overlay_views[eye][image]));
+            VkImageView views[2] = {app->overlay_views[eye][image],
+                                    app->overlay_depth_views[eye]};
+            VkFramebufferCreateInfo framebuffer = {
+                .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+                .renderPass = app->overlay_pass, .attachmentCount = 2,
+                .pAttachments = views, .width = app->overlay_width,
+                .height = app->overlay_height, .layers = 1,
+            };
+            need_vk("vkCreateFramebuffer(overlay)",
+                    vkCreateFramebuffer(app->device, &framebuffer, NULL,
+                                        &app->overlay_framebuffers[eye][image]));
+        }
+
+    VkSamplerCreateInfo sampler = {
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .magFilter = VK_FILTER_LINEAR, .minFilter = VK_FILTER_LINEAR,
+        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR,
+        .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        .addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        .maxLod = VK_LOD_CLAMP_NONE,
+    };
+    need_vk("vkCreateSampler(model)",
+            vkCreateSampler(app->device, &sampler, NULL,
+                            &app->model_sampler));
+    VkDescriptorSetLayoutBinding binding = {
+        .binding = 0,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT,
+        .pImmutableSamplers = &app->model_sampler,
+    };
+    VkDescriptorSetLayoutCreateInfo layout = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .bindingCount = 1, .pBindings = &binding,
+    };
+    need_vk("vkCreateDescriptorSetLayout(model)",
+            vkCreateDescriptorSetLayout(app->device, &layout, NULL,
+                                        &app->model_descriptor_layout));
+    VkDescriptorPoolSize size = {
+        .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .descriptorCount = RENDER_MODELS_MAX,
+    };
+    VkDescriptorPoolCreateInfo pool = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .maxSets = RENDER_MODELS_MAX, .poolSizeCount = 1,
+        .pPoolSizes = &size,
+    };
+    need_vk("vkCreateDescriptorPool(model)",
+            vkCreateDescriptorPool(app->device, &pool, NULL,
+                                   &app->model_descriptor_pool));
+    VkPushConstantRange model_push = {
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+        .size = sizeof(struct model_push),
+    };
+    VkPipelineLayoutCreateInfo model_layout = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1, .pSetLayouts = &app->model_descriptor_layout,
+        .pushConstantRangeCount = 1, .pPushConstantRanges = &model_push,
+    };
+    need_vk("vkCreatePipelineLayout(model)",
+            vkCreatePipelineLayout(app->device, &model_layout, NULL,
+                                   &app->model_pipeline_layout));
+    VkPushConstantRange beam_push = {
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+        .size = sizeof(struct beam_push),
+    };
+    VkPipelineLayoutCreateInfo beam_layout = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .pushConstantRangeCount = 1, .pPushConstantRanges = &beam_push,
+    };
+    need_vk("vkCreatePipelineLayout(beam)",
+            vkCreatePipelineLayout(app->device, &beam_layout, NULL,
+                                   &app->beam_pipeline_layout));
+    app->model_pipeline = overlay_pipeline(
+        app, "controller-model.vert.spv", "controller-model.frag.spv",
+        app->model_pipeline_layout, true);
+    app->beam_pipeline = overlay_pipeline(app, "laser.vert.spv",
+                                          "laser.frag.spv",
+                                          app->beam_pipeline_layout, false);
+    printf("overlay images=%u+%u dimensions=%ux%u maximum=%ux%u depth=%d\n",
+           app->overlay_image_counts[0], app->overlay_image_counts[1],
+           app->overlay_width, app->overlay_height,
+           limits[0].maxImageRectWidth, limits[0].maxImageRectHeight,
+           OVERLAY_DEPTH_FORMAT);
+}
+
+static void destroy_gpu_model(struct app *app, struct gpu_model *model)
+{
+    if (model->texture_view)
+        vkDestroyImageView(app->device, model->texture_view, NULL);
+    if (model->texture)
+        vkDestroyImage(app->device, model->texture, NULL);
+    if (model->texture_memory)
+        vkFreeMemory(app->device, model->texture_memory, NULL);
+    if (model->vertices)
+        vkDestroyBuffer(app->device, model->vertices, NULL);
+    if (model->vertex_memory)
+        vkFreeMemory(app->device, model->vertex_memory, NULL);
+    if (model->indices)
+        vkDestroyBuffer(app->device, model->indices, NULL);
+    if (model->index_memory)
+        vkFreeMemory(app->device, model->index_memory, NULL);
+    free(model->animation);
+    gltf_model_free(&model->mesh);
+    *model = (struct gpu_model){0};
+}
+
+/* The model's first texture with its mip chain (all parts share it). */
+static bool upload_model_texture(struct app *app, struct gpu_model *model)
+{
+    const struct gltf_texture *texture = &model->mesh.textures[0];
+    uint32_t levels = 0;
+    for (uint32_t size = texture->width > texture->height ? texture->width
+                                                          : texture->height;
+         size; size >>= 1)
+        ++levels;
+    VkImageCreateInfo image = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .imageType = VK_IMAGE_TYPE_2D, .format = VK_FORMAT_R8G8B8A8_SRGB,
+        .extent = {texture->width, texture->height, 1}, .mipLevels = levels,
+        .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT,
+        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+                 VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+    };
+    need_vk("vkCreateImage(model texture)",
+            vkCreateImage(app->device, &image, NULL, &model->texture));
+    VkMemoryRequirements requirements;
+    vkGetImageMemoryRequirements(app->device, model->texture, &requirements);
+    VkMemoryAllocateInfo allocation = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+        .allocationSize = requirements.size,
+        .memoryTypeIndex = memory_type(app->physical,
+                                       requirements.memoryTypeBits,
+                                       VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
+    };
+    need_vk("vkAllocateMemory(model texture)",
+            vkAllocateMemory(app->device, &allocation, NULL,
+                             &model->texture_memory));
+    need_vk("vkBindImageMemory(model texture)",
+            vkBindImageMemory(app->device, model->texture,
+                              model->texture_memory, 0));
+    VkDeviceSize bytes = (VkDeviceSize)texture->width * texture->height * 4U;
+    VkBuffer staging;
+    VkDeviceMemory staging_memory;
+    void *mapping;
+    make_buffer(app, bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, &staging,
+                &staging_memory, &mapping);
+    memcpy(mapping, texture->rgba, (size_t)bytes);
+    VkCommandBufferAllocateInfo allocate = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .commandPool = app->command_pool,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY, .commandBufferCount = 1,
+    };
+    VkCommandBuffer command;
+    need_vk("vkAllocateCommandBuffers(model)",
+            vkAllocateCommandBuffers(app->device, &allocate, &command));
+    VkCommandBufferBeginInfo begin = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
+    };
+    need_vk("vkBeginCommandBuffer(model)",
+            vkBeginCommandBuffer(command, &begin));
+    struct ui_texture as_panel = {
+        .width = texture->width, .height = texture->height,
+        .mip_levels = levels, .image = model->texture,
+    };
+    record_ui_upload(command, &as_panel, VK_NULL_HANDLE, staging, false);
+    need_vk("vkEndCommandBuffer(model)", vkEndCommandBuffer(command));
+    VkFenceCreateInfo fence_info = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    VkFence fence;
+    need_vk("vkCreateFence(model)",
+            vkCreateFence(app->device, &fence_info, NULL, &fence));
+    VkSubmitInfo submit = {
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .commandBufferCount = 1, .pCommandBuffers = &command,
+    };
+    need_vk("vkQueueSubmit(model)",
+            vkQueueSubmit(app->queue, 1, &submit, fence));
+    need_vk("vkWaitForFences(model)",
+            vkWaitForFences(app->device, 1, &fence, VK_TRUE,
+                            UINT64_C(5000000000)));
+    vkDestroyFence(app->device, fence, NULL);
+    vkFreeCommandBuffers(app->device, app->command_pool, 1, &command);
+    vkDestroyBuffer(app->device, staging, NULL);
+    vkFreeMemory(app->device, staging_memory, NULL);
+    VkImageViewCreateInfo view = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+        .image = model->texture, .viewType = VK_IMAGE_VIEW_TYPE_2D,
+        .format = VK_FORMAT_R8G8B8A8_SRGB,
+        .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                             .levelCount = levels, .layerCount = 1},
+    };
+    need_vk("vkCreateImageView(model texture)",
+            vkCreateImageView(app->device, &view, NULL,
+                              &model->texture_view));
+    VkDescriptorSetAllocateInfo set = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+        .descriptorPool = app->model_descriptor_pool,
+        .descriptorSetCount = 1,
+        .pSetLayouts = &app->model_descriptor_layout,
+    };
+    need_vk("vkAllocateDescriptorSets(model)",
+            vkAllocateDescriptorSets(app->device, &set, &model->set));
+    VkDescriptorImageInfo descriptor = {
+        .imageView = model->texture_view,
+        .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+    };
+    VkWriteDescriptorSet write = {
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .dstSet = model->set, .dstBinding = 0, .descriptorCount = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+        .pImageInfo = &descriptor,
+    };
+    vkUpdateDescriptorSets(app->device, 1, &write, 0, NULL);
+    return true;
+}
+
+/* Turns the runtime's assets (render-models.c) into buffers and
+ * textures; replaces the previous ones. */
+static void upload_render_models(struct app *app)
+{
+    need_vk("vkDeviceWaitIdle(models)", vkDeviceWaitIdle(app->device));
+    for (uint32_t i = 0; i < app->gpu_model_count; ++i)
+        destroy_gpu_model(app, &app->gpu_models[i]);
+    app->gpu_model_count = 0;
+    need_vk("vkResetDescriptorPool(models)",
+            vkResetDescriptorPool(app->device, app->model_descriptor_pool, 0));
+    for (uint32_t i = 0; i < app->render_models.count; ++i) {
+        const struct render_model *source = &app->render_models.models[i];
+        struct gpu_model *model = &app->gpu_models[app->gpu_model_count];
+        char error[128] = "";
+        if (gltf_model_load(source->glb, source->glb_size, &model->mesh,
+                            error, sizeof(error)) < 0 ||
+            !model->mesh.texture_count || !model->mesh.index_count) {
+            fprintf(stderr, "render_model %u not shown: %s\n", i,
+                    error[0] ? error : "no texture or triangles");
+            gltf_model_free(&model->mesh);
+            continue;
+        }
+        void *mapping;
+        make_buffer(app,
+                    (VkDeviceSize)model->mesh.vertex_count *
+                        sizeof(struct gltf_vertex),
+                    VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, &model->vertices,
+                    &model->vertex_memory, &mapping);
+        memcpy(mapping, model->mesh.vertices,
+               model->mesh.vertex_count * sizeof(struct gltf_vertex));
+        make_buffer(app,
+                    (VkDeviceSize)model->mesh.index_count * sizeof(uint32_t),
+                    VK_BUFFER_USAGE_INDEX_BUFFER_BIT, &model->indices,
+                    &model->index_memory, &mapping);
+        memcpy(mapping, model->mesh.indices,
+               model->mesh.index_count * sizeof(uint32_t));
+        upload_model_texture(app, model);
+        /* glTF nodes the runtime animates, by name. */
+        model->animation = malloc(model->mesh.node_count * sizeof(int));
+        need(model->animation != NULL, "allocate model animation");
+        for (uint32_t n = 0; n < model->mesh.node_count; ++n) {
+            model->animation[n] = -1;
+            for (uint32_t a = 0; a < source->node_count; ++a)
+                if (strcmp(model->mesh.nodes[n].name,
+                           source->node_names[a]) == 0)
+                    model->animation[n] = (int)a;
+        }
+        model->source = i;
+        app->gpu_model_count++;
+        printf("render_model_upload index=%u triangles=%u nodes=%u\n", i,
+               model->mesh.index_count / 3, model->mesh.node_count);
+    }
+}
+
+static struct mat4 pose_matrix(XrPosef pose)
+{
+    struct mat4 m = rotation_from_pose(pose);
+    m.v[12] = pose.position.x;
+    m.v[13] = pose.position.y;
+    m.v[14] = pose.position.z;
+    return m;
+}
+
+/* Records the overlay's two eye passes into `command`. */
+static void record_overlay(struct app *app, VkCommandBuffer command,
+                           const uint32_t images[2], const XrView views[2],
+                           XrTime time, const struct ui_texture *panel,
+                           struct mat4 panel_matrix,
+                           const float beam_lengths[2],
+                           const bool beam_dots[2])
+{
+    struct mat4 node_world[64];
+    struct mat4 model_world[RENDER_MODELS_MAX];
+    bool model_valid[RENDER_MODELS_MAX] = {false};
+    render_models_update(&app->render_models, time);
+    for (uint32_t i = 0; i < app->gpu_model_count; ++i) {
+        const struct render_model *source =
+            &app->render_models.models[app->gpu_models[i].source];
+        XrSpaceLocation location = {.type = XR_TYPE_SPACE_LOCATION};
+        const XrSpaceLocationFlags valid =
+            XR_SPACE_LOCATION_POSITION_VALID_BIT |
+            XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
+        if (XR_SUCCEEDED(xrLocateSpace(source->space, app->space, time,
+                                       &location)) &&
+            (location.locationFlags & valid) == valid) {
+            model_world[i] = pose_matrix(location.pose);
+            model_valid[i] = true;
+        }
+    }
+    for (uint32_t eye = 0; eye < 2; ++eye) {
+        VkClearValue clears[2] = {
+            {.color = {{0.0f, 0.0f, 0.0f, 0.0f}}},
+            {.depthStencil = {1.0f, 0}},
+        };
+        VkRenderPassBeginInfo pass = {
+            .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+            .renderPass = app->overlay_pass,
+            .framebuffer = app->overlay_framebuffers[eye][images[eye]],
+            .renderArea = {.extent = {app->overlay_width, app->overlay_height}},
+            .clearValueCount = 2, .pClearValues = clears,
+        };
+        vkCmdBeginRenderPass(command, &pass, VK_SUBPASS_CONTENTS_INLINE);
+        struct mat4 view_projection = multiply(
+            projection_from_fov(views[eye].fov),
+            view_from_pose(views[eye].pose));
+        if (panel && panel->ready) {
+            struct mat4 mvp = multiply(view_projection, panel_matrix);
+            vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              app->panel_pipeline);
+            vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    app->panel_pipeline_layout, 0, 1,
+                                    &panel->descriptor_set, 0, NULL);
+            vkCmdPushConstants(command, app->panel_pipeline_layout,
+                               VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(mvp),
+                               &mvp);
+            vkCmdDraw(command, 4, 1, 0, 0);
+        }
+        vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          app->model_pipeline);
+        for (uint32_t i = 0; i < app->gpu_model_count; ++i) {
+            struct gpu_model *model = &app->gpu_models[i];
+            if (!model_valid[i] || model->mesh.node_count > 64)
+                continue;
+            const struct render_model *source =
+                &app->render_models.models[model->source];
+            VkDeviceSize offset = 0;
+            vkCmdBindVertexBuffers(command, 0, 1, &model->vertices, &offset);
+            vkCmdBindIndexBuffer(command, model->indices, 0,
+                                 VK_INDEX_TYPE_UINT32);
+            vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    app->model_pipeline_layout, 0, 1,
+                                    &model->set, 0, NULL);
+            for (uint32_t n = 0; n < model->mesh.node_count; ++n) {
+                const struct gltf_node *node = &model->mesh.nodes[n];
+                int animated = model->animation[n];
+                struct mat4 local;
+                if (animated >= 0) {
+                    if (!source->node_visible[animated]) {
+                        node_world[n] = model_world[i];
+                        continue;
+                    }
+                    local = pose_matrix(source->node_poses[animated]);
+                } else {
+                    memcpy(local.v, node->local, sizeof(local.v));
+                }
+                node_world[n] = multiply(node->parent >= 0
+                                             ? node_world[node->parent]
+                                             : model_world[i],
+                                         local);
+                if (animated >= 0 && !source->node_visible[animated])
+                    continue;
+                struct model_push push = {
+                    .mvp = multiply(view_projection, node_world[n]),
+                };
+                for (int r = 0; r < 3; ++r) {
+                    push.normal_x[r] = node_world[n].v[r];
+                    push.normal_y[r] = node_world[n].v[4 + r];
+                    push.normal_z[r] = node_world[n].v[8 + r];
+                }
+                for (uint32_t p = 0; p < node->primitive_count; ++p) {
+                    const struct gltf_primitive *primitive =
+                        &model->mesh.primitives[node->first_primitive + p];
+                    memcpy(push.color, primitive->color, sizeof(push.color));
+                    vkCmdPushConstants(command, app->model_pipeline_layout,
+                                       VK_SHADER_STAGE_VERTEX_BIT |
+                                           VK_SHADER_STAGE_FRAGMENT_BIT,
+                                       0, sizeof(push), &push);
+                    vkCmdDrawIndexed(command, primitive->index_count, 1,
+                                     primitive->first_index, 0, 0);
+                }
+            }
+        }
+        vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                          app->beam_pipeline);
+        for (unsigned hand = 0; hand < 2; ++hand) {
+            if (!app->lasers[hand].valid)
+                continue;
+            XrPosef aim = app->lasers[hand].aim;
+            XrVector3f direction =
+                rotate_vector(aim.orientation, (XrVector3f){0, 0, -1});
+            float length = beam_lengths[hand];
+            XrVector3f end = {aim.position.x + direction.x * length,
+                              aim.position.y + direction.y * length,
+                              aim.position.z + direction.z * length};
+            struct beam_push push = {
+                .view_projection = view_projection,
+                .start = {aim.position.x, aim.position.y, aim.position.z,
+                          BEAM_HALF_WIDTH},
+                .end = {end.x, end.y, end.z, 0.0f},
+                .eye = {views[eye].pose.position.x,
+                        views[eye].pose.position.y,
+                        views[eye].pose.position.z, 0.0f},
+                .color = {0.55f, 0.78f, 1.0f, 0.85f},
+            };
+            vkCmdPushConstants(command, app->beam_pipeline_layout,
+                               VK_SHADER_STAGE_VERTEX_BIT |
+                                   VK_SHADER_STAGE_FRAGMENT_BIT,
+                               0, sizeof(push), &push);
+            vkCmdDraw(command, 4, 1, 0, 0);
+            if (beam_dots[hand]) {
+                push.start[3] = BEAM_DOT_RADIUS * fmaxf(length, 0.6f);
+                push.end[3] = 1.0f;
+                push.color[3] = 1.0f;
+                vkCmdPushConstants(command, app->beam_pipeline_layout,
+                                   VK_SHADER_STAGE_VERTEX_BIT |
+                                       VK_SHADER_STAGE_FRAGMENT_BIT,
+                                   0, sizeof(push), &push);
+                vkCmdDraw(command, 4, 1, 0, 0);
+            }
+        }
+        vkCmdEndRenderPass(command);
+    }
+}
+
 /* Passthrough shows the room where nothing is drawn, if the viewer chose
  * it and the runtime blends with the room (the Frame since SteamVR's
  * update of 2026-10-10; not the PC streaming to it). */
@@ -4827,8 +5645,9 @@ static void chroma_key_uniform(const struct app *app, float key[4],
     spill[1] = color ? 1.0f : 0.0f;
 }
 
-/* Where a ray (LOCAL space) hits the video as render_frame shows it:
- * texture uv in the picture the left eye sees, false if it misses. The
+/* Where a ray (LOCAL space, unit direction) hits the video as render_frame
+ * shows it: texture uv in the picture the left eye sees and the distance
+ * along the ray (if `distance` is not NULL), false if it misses. The
  * dome is the unit sphere around the eye position in dome axes, the flat
  * screen the quad of screen_model; mirrors nv12-projection.frag without
  * the stereo offsets. */
@@ -4836,8 +5655,9 @@ static bool video_uv_at_ray(const struct app *app, XrVector3f origin,
                             XrVector3f direction, XrVector3f head,
                             struct mat4 world_to_dome,
                             XrVector3f eye_position, struct mat4 screen_model,
-                            float uv[2])
+                            float uv[2], float *distance)
 {
+    float along = 0.0f;
     float u, v;
     if (app->projection_mode == NV12_PROJECTION_FLAT) {
         XrVector3f axis_x = {screen_model.v[0], screen_model.v[1],
@@ -4856,6 +5676,7 @@ static bool video_uv_at_ray(const struct app *app, XrVector3f origin,
         float t = vector_dot(to_centre, normal) / facing;
         if (t <= 0.0f)
             return false;
+        along = t;
         XrVector3f offset = {origin.x + t * direction.x - centre.x,
                              origin.y + t * direction.y - centre.y,
                              origin.z + t * direction.z - centre.z};
@@ -4879,6 +5700,7 @@ static bool video_uv_at_ray(const struct app *app, XrVector3f origin,
         d.z /= length;
         float b = vector_dot(c, d);
         float t = -b + sqrtf(b * b - vector_dot(c, c) + 1.0f);
+        along = t / length;
         XrVector3f q = {c.x + t * d.x, c.y + t * d.y, c.z + t * d.z};
         float longitude = atan2f(q.x, -q.z);
         float latitude = asinf(fmaxf(-1.0f, fminf(1.0f, q.y)));
@@ -4911,6 +5733,8 @@ static bool video_uv_at_ray(const struct app *app, XrVector3f origin,
         v = 0.5f * eye + 0.5f * v;
     uv[0] = u;
     uv[1] = v;
+    if (distance)
+        *distance = along;
     return true;
 }
 
@@ -4943,6 +5767,12 @@ static XrEnvironmentBlendMode environment_blend_mode(const struct app *app)
 
 static void render_frame(struct app *app)
 {
+    if (app->render_models_dirty) {
+        app->render_models_dirty = false;
+        render_models_load(&app->render_models, app->xr, app->session,
+                           app->hands);
+        upload_render_models(app);
+    }
     XrFrameState frame_state = {.type = XR_TYPE_FRAME_STATE};
     XrFrameWaitInfo wait = {.type = XR_TYPE_FRAME_WAIT_INFO};
     need_xr("xrWaitFrame", xrWaitFrame(app->session, &wait, &frame_state));
@@ -5115,7 +5945,7 @@ static void render_frame(struct app *app)
                                        (XrVector3f){0, 0, -1});
         if (video_uv_at_ray(app, app->key_pick_aim.position, aim,
                             center.pose.position, world_to_dome,
-                            eye_position, screen_model, uv)) {
+                            eye_position, screen_model, uv, NULL)) {
             float step_u = app->video_width ? 1.5f / (float)app->video_width
                                             : 0.0f;
             float step_v = app->video_height
@@ -5288,21 +6118,6 @@ static void render_frame(struct app *app)
                                     &video->descriptor_set, 1, &offset);
             vkCmdDraw(app->command, 4, 1, 0, 0);
         }
-        if (panel && panel->ready) {
-            struct mat4 mvp = multiply(
-                projection_from_fov(views[eye].fov),
-                multiply(view_from_pose(views[eye].pose), panel_matrix));
-            vkCmdBindPipeline(app->command, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                              app->panel_pipeline);
-            vkCmdBindDescriptorSets(app->command,
-                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                    app->panel_pipeline_layout, 0, 1,
-                                    &panel->descriptor_set, 0, NULL);
-            vkCmdPushConstants(app->command, app->panel_pipeline_layout,
-                               VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(mvp),
-                               &mvp);
-            vkCmdDraw(app->command, 4, 1, 0, 0);
-        }
         vkCmdEndRenderPass(app->command);
     }
     VkImageMemoryBarrier video_release = video_acquire;
@@ -5321,6 +6136,53 @@ static void render_frame(struct app *app)
                                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                              VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, NULL,
                              0, NULL, video_images, video_releases);
+    /* Beams end at the panel they hit, else at the video (with a dot
+     * while a key colour is picked), else after a fixed length. */
+    bool overlay = app->overlay_wanted;
+    uint32_t overlay_indices[2] = {0, 0};
+    if (overlay) {
+        float beam_lengths[2];
+        bool beam_dots[2] = {false, false};
+        for (unsigned hand = 0; hand < 2; ++hand) {
+            const struct laser *laser = &app->lasers[hand];
+            beam_lengths[hand] = BEAM_DEFAULT_LENGTH;
+            float uv[2], distance;
+            XrVector3f direction = rotate_vector(laser->aim.orientation,
+                                                 (XrVector3f){0, 0, -1});
+            if (laser->panel_length > 0.0f) {
+                beam_lengths[hand] = laser->panel_length;
+                beam_dots[hand] = app->panels_in_eye_images;
+            } else if (laser->valid && video &&
+                       video_uv_at_ray(app, laser->aim.position, direction,
+                                       center.pose.position, world_to_dome,
+                                       eye_position, screen_model, uv,
+                                       &distance)) {
+                beam_lengths[hand] = distance;
+                beam_dots[hand] = app->key_picking;
+            }
+        }
+        for (uint32_t eye = 0; eye < 2; ++eye) {
+            XrSwapchainImageAcquireInfo overlay_acquire = {
+                .type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO,
+            };
+            need_xr("xrAcquireSwapchainImage(overlay)",
+                    xrAcquireSwapchainImage(app->overlay_swapchains[eye],
+                                            &overlay_acquire,
+                                            &overlay_indices[eye]));
+            XrSwapchainImageWaitInfo overlay_wait = {
+                .type = XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO,
+                .timeout = XR_INFINITE_DURATION,
+            };
+            need_xr("xrWaitSwapchainImage(overlay)",
+                    xrWaitSwapchainImage(app->overlay_swapchains[eye],
+                                         &overlay_wait));
+            need(overlay_indices[eye] < app->overlay_image_counts[eye],
+                 "invalid overlay swapchain index");
+        }
+        record_overlay(app, app->command, overlay_indices, views,
+                       frame_state.predictedDisplayTime, panel, panel_matrix,
+                       beam_lengths, beam_dots);
+    }
     need_vk("vkEndCommandBuffer(render)", vkEndCommandBuffer(app->command));
     VkPipelineStageFlags producer_stage =
         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
@@ -5354,6 +6216,25 @@ static void render_frame(struct app *app)
     need_vk("vkWaitForFences(render completion)", vkWaitForFences(app->device, 1, &app->fence, VK_TRUE, UINT64_C(5000000000)));
     XrSwapchainImageReleaseInfo release = {.type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
     need_xr("xrReleaseSwapchainImage", xrReleaseSwapchainImage(app->swapchain, &release));
+    for (uint32_t eye = 0; overlay && eye < 2; ++eye)
+        need_xr("xrReleaseSwapchainImage(overlay)",
+                xrReleaseSwapchainImage(app->overlay_swapchains[eye],
+                                        &release));
+    XrCompositionLayerProjectionView overlay_views[2];
+    for (uint32_t eye = 0; eye < 2; ++eye)
+        overlay_views[eye] = (XrCompositionLayerProjectionView){
+            .type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW,
+            .pose = views[eye].pose, .fov = views[eye].fov,
+            .subImage = {.swapchain = app->overlay_swapchains[eye],
+                         .imageRect = {.extent = {
+                             (int32_t)app->overlay_width,
+                             (int32_t)app->overlay_height}}},
+        };
+    XrCompositionLayerProjection overlay_layer = {
+        .type = XR_TYPE_COMPOSITION_LAYER_PROJECTION,
+        .layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT,
+        .space = app->space, .viewCount = 2, .views = overlay_views,
+    };
     XrCompositionLayerProjectionView projection_views[2] = {{.type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}, {.type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}};
     for (uint32_t eye = 0; eye < 2; ++eye) {
         projection_views[eye].pose = views[eye].pose; projection_views[eye].fov = views[eye].fov;
@@ -5366,7 +6247,7 @@ static void render_frame(struct app *app)
         .space = app->space, .viewCount = 2, .views = projection_views};
     XrCompositionLayerQuad pointer_layer = make_pointer_layer(app);
     XrCompositionLayerQuad gaze_layer = make_gaze_marker_layer(app);
-    const XrCompositionLayerBaseHeader *layers[4] = {
+    const XrCompositionLayerBaseHeader *layers[5] = {
         (const XrCompositionLayerBaseHeader *)&layer,
     };
     uint32_t layer_count = 1;
@@ -5376,10 +6257,13 @@ static void render_frame(struct app *app)
         if (!app->panels_in_eye_images)
             layers[layer_count++] =
                 (const XrCompositionLayerBaseHeader *)&ui_layer;
-        if (app->pointer_layer_visible)
-            layers[layer_count++] =
-                (const XrCompositionLayerBaseHeader *)&pointer_layer;
     }
+    if (overlay)
+        layers[layer_count++] =
+            (const XrCompositionLayerBaseHeader *)&overlay_layer;
+    if (show_ui && app->pointer_layer_visible && !app->panels_in_eye_images)
+        layers[layer_count++] =
+            (const XrCompositionLayerBaseHeader *)&pointer_layer;
     XrFrameEndInfo end = {.type = XR_TYPE_FRAME_END_INFO, .displayTime = frame_state.predictedDisplayTime,
         .environmentBlendMode = environment_blend_mode(app),
         .layerCount = layer_count,
@@ -5460,6 +6344,7 @@ int main(int argc, char **argv)
     create_render_resources(&app);
     create_ui_resources(&app);
     create_browser_texture(&app);
+    create_overlay(&app);
     create_panel_pipeline(&app);
     create_pointer_texture(&app);
     create_gaze_markers(&app);

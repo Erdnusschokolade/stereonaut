@@ -42,7 +42,7 @@ cc -std=c11 -O2 -Wall -Wextra -Werror \
 
 # XR host: video renderer, media browser and Jellyfin client in one process.
 cc -std=c11 -O2 -Wall -Wextra -Werror \
-  $(pkg-config --cflags libcurl json-c freetype2 libjpeg libavformat \
+  $(pkg-config --cflags libcurl json-c freetype2 libjpeg libpng libavformat \
                        libavcodec libavutil) \
   -I/usr/include -I"$script_dir" -I"$project_dir/tools/openxr-playback" \
   -o "$build_dir/stereonaut-renderer" \
@@ -51,8 +51,9 @@ cc -std=c11 -O2 -Wall -Wextra -Werror \
   "$script_dir/file-browser.c" "$script_dir/jellyfin.c" \
   "$script_dir/trickplay.c" "$script_dir/settings.c" \
   "$script_dir/title-settings.c" "$script_dir/local-thumbnail.c" \
-  "$script_dir/controller-bindings.c" \
-  $(pkg-config --libs libcurl json-c freetype2 libjpeg libavformat \
+  "$script_dir/controller-bindings.c" "$script_dir/render-models.c" \
+  "$script_dir/gltf-model.c" \
+  $(pkg-config --libs libcurl json-c freetype2 libjpeg libpng libavformat \
                 libavcodec libavutil) \
   -lvulkan -lm -pthread $openxr_loader
 
@@ -69,6 +70,14 @@ glslc -fshader-stage=frag \
 glslc -fshader-stage=frag \
   "$project_dir/tools/openxr-playback/tp10-projection.frag" \
   -o "$build_dir/tp10-projection.frag.spv"
+for shader in controller-model laser; do
+  glslc -fshader-stage=vert \
+    "$project_dir/tools/openxr-playback/$shader.vert" \
+    -o "$build_dir/$shader.vert.spv"
+  glslc -fshader-stage=frag \
+    "$project_dir/tools/openxr-playback/$shader.frag" \
+    -o "$build_dir/$shader.frag.spv"
+done
 glslc -fshader-stage=vert \
   "$project_dir/tools/openxr-playback/ui-panel.vert" \
   -o "$build_dir/ui-panel.vert.spv"

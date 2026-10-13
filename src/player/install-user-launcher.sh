@@ -11,7 +11,9 @@ for file in stereonaut-launcher stereonaut-session \
             stereonaut-renderer video-projection.vert.spv \
             nv12-projection.frag.spv tp10-projection.frag.spv \
             stereo-disparity.comp.spv stereo-disparity-tp10.comp.spv \
-            ui-panel.vert.spv ui-panel.frag.spv; do
+            ui-panel.vert.spv ui-panel.frag.spv \
+            controller-model.vert.spv controller-model.frag.spv \
+            laser.vert.spv laser.frag.spv; do
     if [ ! -f "$build_dir/$file" ]; then
         echo "missing build artifact: $build_dir/$file" >&2
         exit 1
@@ -32,6 +34,10 @@ install -m 0644 \
     "$build_dir/stereo-disparity-tp10.comp.spv" \
     "$build_dir/ui-panel.vert.spv" \
     "$build_dir/ui-panel.frag.spv" \
+    "$build_dir/controller-model.vert.spv" \
+    "$build_dir/controller-model.frag.spv" \
+    "$build_dir/laser.vert.spv" \
+    "$build_dir/laser.frag.spv" \
     "$install_dir/"
 
 # Optional: the Turnip build with TP10 sampling (tools/mesa-tp10), copied to
