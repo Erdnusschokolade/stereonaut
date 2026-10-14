@@ -68,9 +68,7 @@ sha256sum -c stereonaut-steamos-aarch64.tar.gz.sha256 &&
 ```
 
 Stereonaut then appears in the SteamVR library. Later versions install from
-the headset: Settings → Updates checks the release page (at start, unless
-switched off) and installs a newer release after verifying its signature,
-then restarts.
+the headset under Settings → Updates.
 
 ## Building
 
@@ -98,21 +96,8 @@ src/player/install-user-launcher.sh      # installs to ~/.local/lib/stereonaut a
 src/player/register-steamvr-app.sh       # once: adds "Stereonaut" to the SteamVR library
 ```
 
-A release package bundles the binaries built on the Frame, the sources and
-an installer. `src/player/make-release.sh [VERSION] [--turnip LIBRARY]`
-builds it on the Frame (the version defaults to the current, clean commit);
-the name carries the SteamOS version and build it was made on, e.g.
-`stereonaut-<commit>-steamos-0.4.5-20261007.6125817-aarch64.tar.gz`, next
-to a `.sha256`. To install, unpack it and run `./install.sh`: it checks the
-architecture and the checksums, installs the binaries as they are on the
-same SteamOS build (an atomic image, so the libraries match), checks the
-libraries with `ldd` on any other build and rebuilds from the included
-sources if one is missing, then installs as below and adds the SteamVR
-library entry unless it exists (`--no-steamvr` skips it, `--rebuild`
-always rebuilds). `tools/release/publish-release.sh DIRECTORY KEY` signs
-the packages (`ssh-keygen -Y sign`, checked against
-`src/player/release-signers` in the package) and publishes them with `gh`
-under the version, which must be a pushed git tag.
+How release packages are built, signed and published is described in
+`tools/release/README.md`.
 
 HEVC Main10 needs a Turnip (Mesa) build with TP10 texture formats; see
 `tools/mesa-tp10/` and `docs/main10-linear-output.md`. Without it, Main10 is
@@ -123,11 +108,8 @@ The installer also keeps a copy of the sources in
 installed binaries were linked against (a new major version), the launcher
 notices it at start, asks in a dialog (visible in the headset) and rebuilds
 and reinstalls itself in about half a minute. The TP10 Turnip is not rebuilt;
-if its libraries are missing it is disabled for that start. If the rebuild
-fails, or the VR view fails to start or ends with an error, the start
-script offers a newer release when there is one (it may be built for the
-new SteamOS), installs it and starts it; otherwise it shows the error with
-the path of the log.
+if its libraries are missing it is disabled for that start. If that does
+not help, it offers a newer release instead.
 
 The Jellyfin connection is stored in `~/.config/stereonaut/jellyfin.json`
 (created by the Quick Connect login in the browser).
