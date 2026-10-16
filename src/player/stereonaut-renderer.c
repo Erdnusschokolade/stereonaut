@@ -189,6 +189,12 @@ struct ui_texture {
     bool ready;
 };
 
+/* Trigger state with hysteresis (button_update). */
+struct button {
+    bool down;       /* debounced physical state */
+    bool suppressed; /* ignore the current press until a genuine release */
+};
+
 /* A controller model on the GPU (record_overlay). */
 struct gpu_model {
     struct gltf_model mesh;
@@ -383,7 +389,7 @@ struct app {
     XrSpace gaze_space;
     bool gaze_logged;
     int stick_direction[2]; /* -1 left, +1 right, 0 centred */
-    bool select_down[2];
+    struct button select[2];
     bool has_valve_frame_controller;
     bool has_pcvr_controller;
     bool has_generic_controller;
@@ -3089,6 +3095,26 @@ static int read_stick(struct app *app, unsigned hand)
     return 0;
 }
 
+/* One frame of an analog button; true on the rising edge of a new press.
+ * While the action is inactive (focus loss, SteamVR dashboard) the last
+ * state is kept: treating that as a release turned a trigger still held on
+ * return into a phantom press and lifted the suppression after "back". */
+static bool button_update(struct button *button, bool active, float value,
+                          bool *held)
+{
+    bool was = button->down;
+    if (active) {
+        if (!button->down && value >= SELECT_PRESS_THRESHOLD)
+            button->down = true;
+        else if (button->down && value < SELECT_RELEASE_THRESHOLD)
+            button->down = false;
+        if (!button->down)
+            button->suppressed = false;
+    }
+    *held = button->down;
+    return active && button->down && !was && !button->suppressed;
+}
+
 static void read_select(struct app *app, unsigned hand,
                         struct hand_input *input)
 {
@@ -3100,16 +3126,9 @@ static void read_select(struct app *app, unsigned hand,
     XrActionStateFloat state = {.type = XR_TYPE_ACTION_STATE_FLOAT};
     need_xr("xrGetActionStateFloat",
             xrGetActionStateFloat(app->session, &info, &state));
-    bool down = app->select_down[hand];
-    if (!state.isActive)
-        down = false;
-    else if (!down && state.currentState >= SELECT_PRESS_THRESHOLD)
-        down = true;
-    else if (down && state.currentState < SELECT_RELEASE_THRESHOLD)
-        down = false;
-    input->select_edge = down && !app->select_down[hand];
-    input->select_held = down;
-    app->select_down[hand] = down;
+    input->select_edge = button_update(&app->select[hand], state.isActive,
+                                       state.currentState,
+                                       &input->select_held);
 }
 
 static bool pressed_edge(const XrActionStateBoolean *state)
@@ -4405,10 +4424,10 @@ static void end_playback(struct app *app)
     app->position_us = 0;
     app->duration_us = 0;
     app->video_width = app->video_height = 0;
-    /* The trigger that pressed "back" is usually still held: treat it as
-     * held so the browser only reacts after a release (it could otherwise
-     * land on "Beenden" and close the program). */
-    app->select_down[0] = app->select_down[1] = true;
+    /* The trigger that pressed "back" is usually still held: ignore it
+     * until a release so the browser does not react to it (it could
+     * otherwise land on "Beenden" and close the program). */
+    app->select[0].suppressed = app->select[1].suppressed = true;
     trickplay_open(app->trickplay, NULL);
     app->details_valid = false;
     ui_image_free(app->preview);
@@ -4460,7 +4479,8 @@ static void begin_playback(struct app *app, int fd, const char *location)
     app->awaiting_command = false;
     app->eos_received = false;
     app->ui_dirty = true;
-    app->select_down[0] = app->select_down[1] = true; /* see end_playback */
+    /* see end_playback */
+    app->select[0].suppressed = app->select[1].suppressed = true;
     printf("playback_attached\n");
 }
 
