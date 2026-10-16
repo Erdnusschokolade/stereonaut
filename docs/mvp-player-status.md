@@ -57,7 +57,14 @@ dav1d AV1 bis 4K auf der CPU (Standard an, siehe unten).
   Wiedergabe, Spulen und Panels. Die Panels zeichnet der Renderer am PC
   selbst ins Augenbild (Mipmaps, anisotrop); als Quad-Layer flimmerte Schrift
   in SteamVR am PC bei Kopfbewegung. Am PC wirkt die Schrift dadurch etwas
-  weicher als nativ auf dem Frame.
+  weicher als nativ auf dem Frame; die Augenbilder sind dort deshalb
+  1,3-mal so groß wie empfohlen (darüber passen beim Streaming die
+  Perspektiven beider Augen nicht mehr zusammen). Auch die Zeiger und
+  Controller zeichnet der PC ins Augenbild (eine zweite Projektionsebene
+  blieb dort schwarz). Per USB-C läuft die Wiedergabe so flüssig wie
+  nativ; leichte Ruckler über WLAN kommen vom Streaming (Renderer ohne
+  verpasste Bilder). Panel-Zeichnen und Pufferimport laufen außerhalb der
+  Bildschleife, Hovern und Spulen verlieren keine Bilder mehr.
 - Projektion, Stereo, Augentausch, Position, 6DoF und Bildwerte je Titel.
 - H.264 nativ, HEVC Main10 nativ mit dem eigenen Turnip (`STEREONAUT_TP10`).
 - Jellyfin-Wiedergabemeldungen (Start, Fortschritt, Pause, Stopp).
