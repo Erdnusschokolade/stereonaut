@@ -108,6 +108,23 @@ seeks on release (`NV12_ACTION_SEEK_TO`). The renderer reports the panel pose
 to the session (`NV12_IPC_PANEL`), which forwards it through a decoder
 reopen or the seek re-exec (`--panel x,y,z,yaw,visible`).
 
+The seek bindings (stick left/right by default) send absolute
+`NV12_ACTION_SEEK_TO` targets that continue from a pending one. Up to the
+fourth press less than 0.5 s after the previous one each press seeks at
+once; from the fifth, or once a held input repeats, the renderer pauses
+playback (`NV12_ACTION_TOGGLE_PAUSE` with `player_state` set: pause, not
+toggle), shows the panel and moves only the seek bar with the trickplay
+preview, in steps that grow while held (10 s, 30 s after 2.5 s, 60 s after
+5 s). Once the input rests for 0.5 s it sends the seek with `player_state`
+`PLAYING` if playback ran before, which the session takes over as the start
+state after the seek. Each `SEEK_TO` carries a number in `frame_index` that
+the session repeats in `NV12_IPC_HOLD`/`NV12_IPC_SEEKING`; until the frame
+of the last number arrives the panel shows its target, so pictures of
+earlier seeks do not make the time jump back. The session keeps pause and
+seek in separate slots, so a pause cannot replace a seek queued in the same
+batch of messages, and a seek that arrives before the renderer has the new
+decoder's buffers waits for them.
+
 When a seek sets up a new decoder the renderer stays alive: the session
 sends `NV12_IPC_HOLD`, the renderer retains only the frame on screen and
 acknowledges with `NV12_IPC_HELD`, and the session sends a fresh `INIT` with
@@ -168,6 +185,9 @@ source and sets Iris up as at the start, which a freshly opened device
 accepts (8K Main10 over Jellyfin: 0.3 to 0.6 s instead of 1.3 s for a
 re-exec, most of which went into opening the source again). Only if seeking
 the source fails does the session fall back to the re-exec described above.
+A stop from the launcher (SIGTERM) reaches the re-executed process: the
+session blocks the signal across `execv`, and the new process unblocks it
+once its handler is installed.
 Seeks that set up a new decoder log each phase (`seek_restart_phase`).
 `--seek-test FRAMES:US` triggers such a seek in a bounded test run.
 

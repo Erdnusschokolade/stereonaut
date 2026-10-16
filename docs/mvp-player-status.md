@@ -1,6 +1,6 @@
 # Stereonaut – Projektstand
 
-Stand: 2026-10-13, Branch `main` (zuvor `player/mvp` und
+Stand: 2026-10-16, Branch `main` (zuvor `player/mvp` und
 `hardware/main10-baseline`)
 
 Der erste vollständige Player (MVP) ist abgeschlossen; er wird
@@ -29,6 +29,13 @@ dav1d AV1 bis 4K auf der CPU (Standard an, siehe unten).
   Direct Play und Transkodierung, 4K bis 8K60).
 - Pause, ±10 s, Seek-Leiste mit Trickplay-Vorschau; Griff zum Verschieben
   und Ein-/Ausblenden.
+- Spulen mit dem Stick: bis zu vier schnelle Drücke springen sofort, ab dem
+  fünften (Abstand unter 0,5 s) oder beim Halten pausiert die Wiedergabe,
+  das Panel erscheint und nur Seek-Leiste und Trickplay-Vorschau bewegen
+  sich (gehalten mit wachsenden Schritten: 10 s, nach 2,5 s 30 s, nach 5 s
+  60 s); 0,5 s nach dem letzten Druck folgt der Sprung, danach läuft die
+  Wiedergabe weiter, wenn sie vorher lief. Die Zeitanzeige bleibt bis zur
+  Landung auf dem Ziel.
 - Spulen ohne Neustart der Session auf den Keyframe in Spulrichtung (siehe
   Grenzen), das letzte Bild bleibt bis zum neuen stehen. Bis zum ersten
   Bild über Jellyfin: H.264 4K meist 0,15–0,2 s, HEVC 8K um 0,25 s,
@@ -121,6 +128,8 @@ geprüft:
   zusätzlich einen Bitstream-Splice mit durchlaufender Zeitachse.
 - Parallel laufende Player mit Iris-Nutzung (Playa) führen zu
   `VIDIOC_REQBUFS OUTPUT: ENOMEM`.
+- Die Logs zeigen Jellyfin-URLs ohne Server und Query (`<server>`, `?…`),
+  der API-Schlüssel steht dort nicht mehr; ältere Logs enthalten ihn noch.
 - Gelegentliches Stocken bei einem HLS-Transkodier-Titel ist ungeklärt.
 
 ## Offen
