@@ -339,12 +339,25 @@ static double monotonic_seconds(void)
  * session before the restart; CLOCK_MONOTONIC is system-wide), so the
  * restarted session can log how long each phase took. 0 otherwise. */
 static double seek_requested_at;
+/* Monotonic start of a session that is not a seek restart, until its first
+ * picture: the phases until then are logged as start_phase. */
+static double session_started;
 
 static void log_seek_phase(const char *phase)
 {
     if (seek_requested_at > 0.0)
         printf("seek_restart_phase=%s ms=%.0f\n", phase,
                (monotonic_seconds() - seek_requested_at) * 1000.0);
+    else if (session_started > 0.0)
+        printf("start_phase=%s ms=%.0f\n", phase,
+               (monotonic_seconds() - session_started) * 1000.0);
+}
+
+/* The first picture is out: ends the start phases. */
+static void log_first_picture(void)
+{
+    log_seek_phase("first_picture");
+    session_started = 0.0;
 }
 
 static void send_renderer_message(uint32_t type, uint32_t index,
@@ -2540,6 +2553,7 @@ static int play_decoded(char **argv, struct playback_options *options,
         fprintf(stderr, "open video decoder: %s\n", error);
         return EXIT_UNSUPPORTED_FORMAT;
     }
+    log_seek_phase("decoder_open");
     const struct decoded_video_layout *frames =
         decoded_video_layout(decoded_video);
     struct capture_buffer buffers[MAX_CAPTURE_BUFFERS];
@@ -2650,6 +2664,7 @@ static int play_decoded(char **argv, struct playback_options *options,
             audio_started = true;
             printf("player_state=PAUSED start_paused=1"
                    " first_video_pts_us=%" PRId64 "\n", pts_us);
+            log_first_picture();
         } else if (!audio_started) {
             if (media_pipeline_pause(pipeline, false, error,
                                      sizeof(error)) < 0) {
@@ -2658,6 +2673,7 @@ static int play_decoded(char **argv, struct playback_options *options,
             }
             audio_started = true;
             printf("audio_started first_video_pts_us=%" PRId64 "\n", pts_us);
+            log_first_picture();
         }
         int64_t audio_clock = media_pipeline_clock_us(pipeline);
         while (audio_clock != AV_NOPTS_VALUE &&
@@ -2749,6 +2765,8 @@ int main(int argc, char **argv)
     sigaddset(&stop_signal, SIGTERM);
     sigprocmask(SIG_UNBLOCK, &stop_signal, NULL);
     struct playback_options options = parse_playback_options(argc, argv);
+    if (seek_requested_at <= 0.0)
+        session_started = monotonic_seconds();
     log_seek_phase("exec");
     panel_state = options.panel;
     title_settings_key(argv[1], title_key, sizeof(title_key));
@@ -3322,6 +3340,7 @@ open_decoder:
                         printf("player_state=PAUSED start_paused=1"
                                " first_video_pts_us=%" PRId64 "\n",
                                frame_pts_us);
+                        log_first_picture();
                     } else if (!audio_started) {
                         if (media_pipeline_pause(
                                 pipeline, false, pipeline_error,
@@ -3333,6 +3352,7 @@ open_decoder:
                         audio_started = true;
                         printf("audio_started first_video_pts_us=%" PRId64
                                "\n", frame_pts_us);
+                        log_first_picture();
                     }
                     if (renderer_outstanding[dequeued.index])
                         fail_message("Iris returned a renderer-owned buffer");

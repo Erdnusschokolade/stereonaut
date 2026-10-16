@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <libavcodec/bsf.h>
@@ -292,6 +293,8 @@ int media_demux_open(struct media_demux **result, const char *path,
         av_dict_set(&options, "reconnect", "1", 0);
         av_dict_set(&options, "reconnect_delay_max", "2", 0);
     }
+    struct timespec opening;
+    clock_gettime(CLOCK_MONOTONIC, &opening);
     int av_result = avformat_open_input(&demux->format, path, NULL, &options);
     av_dict_free(&options);
     if (av_result < 0) {
@@ -299,12 +302,29 @@ int media_demux_open(struct media_demux **result, const char *path,
         media_demux_close(&demux);
         return -1;
     }
+    struct timespec probing;
+    clock_gettime(CLOCK_MONOTONIC, &probing);
     av_result = avformat_find_stream_info(demux->format, NULL);
     if (av_result < 0) {
         set_av_error(error, error_size, "avformat_find_stream_info",
                      av_result);
         media_demux_close(&demux);
         return -1;
+    }
+    struct timespec probed;
+    clock_gettime(CLOCK_MONOTONIC, &probed);
+    printf("demux_open open_ms=%.0f probe_ms=%.0f streams=%u\n",
+           (probing.tv_sec - opening.tv_sec) * 1e3 +
+               (probing.tv_nsec - opening.tv_nsec) / 1e6,
+           (probed.tv_sec - probing.tv_sec) * 1e3 +
+               (probed.tv_nsec - probing.tv_nsec) / 1e6,
+           demux->format->nb_streams);
+    for (unsigned i = 0; i < demux->format->nb_streams; ++i) {
+        const AVCodecParameters *stream = demux->format->streams[i]->codecpar;
+        printf("demux_stream index=%u type=%s codec=%s\n", i,
+               av_get_media_type_string(stream->codec_type) ?
+                   av_get_media_type_string(stream->codec_type) : "?",
+               avcodec_get_name(stream->codec_id));
     }
     int video = av_find_best_stream(demux->format, AVMEDIA_TYPE_VIDEO,
                                     -1, -1, NULL, 0);
