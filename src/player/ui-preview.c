@@ -228,28 +228,32 @@ static int preview_player(const char *path, int hover, bool popup, int tab)
         .debug_text = "Gaze: eye · disparity +11.40° · score 0.98 · "
                       "structure 0.0020 · valid · offset 7.80°",
     };
-    /* Hovering the seek bar shows the scrub preview (a stand-in picture of
-     * one SBS eye). */
-    struct ui_image *picture = NULL;
+    /* Hovering the seek bar shows the scrub preview (stand-in pictures of
+     * one SBS eye, a different blue per slot). */
+    struct ui_image *pictures[PLAYER_UI_PREVIEW_STRIP] = {NULL};
     if (hover == PLAYER_UI_SEEK_BAR) {
-        picture = ui_image_create(160, 180);
-        for (int i = 0; picture && i < 160 * 180; ++i) {
-            uint8_t *p = picture->rgba + i * 4;
-            p[0] = (uint8_t)(40 + i % 160);
-            p[1] = (uint8_t)(60 + i / 160 / 2);
-            p[2] = 140;
-            p[3] = 255;
+        for (int slot = 0; slot < PLAYER_UI_PREVIEW_STRIP; ++slot) {
+            struct ui_image *picture = ui_image_create(160, 180);
+            for (int i = 0; picture && i < 160 * 180; ++i) {
+                uint8_t *p = picture->rgba + i * 4;
+                p[0] = (uint8_t)(40 + i % 160);
+                p[1] = (uint8_t)(60 + i / 160 / 2);
+                p[2] = (uint8_t)(100 + 30 * slot);
+                p[3] = 255;
+            }
+            pictures[slot] = picture;
+            state.preview[slot] = picture;
         }
         state.preview_visible = true;
         state.preview_us = INT64_C(2900000000);
-        state.preview = picture;
     }
     uint32_t *pixels = malloc((size_t)PLAYER_UI_WIDTH * PLAYER_UI_HEIGHT * 4);
     if (state.settings_page)
         player_ui_render_settings(&ui, &state, pixels, false);
     else
         player_ui_render(&ui, &state, pixels, false);
-    ui_image_free(picture);
+    for (int slot = 0; slot < PLAYER_UI_PREVIEW_STRIP; ++slot)
+        ui_image_free(pictures[slot]);
     int result = write_ppm(path, (const uint8_t *)pixels, PLAYER_UI_WIDTH,
                            PLAYER_UI_HEIGHT, true);
     player_ui_close(&ui);

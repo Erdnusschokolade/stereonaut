@@ -158,6 +158,9 @@ enum player_ui_control {
 #define PLAYER_UI_AUTOHIDE_COUNT 3
 extern const int player_ui_autohide[PLAYER_UI_AUTOHIDE_COUNT];
 
+/* Pictures in the scrub preview strip (= TRICKPLAY_STRIP). */
+#define PLAYER_UI_PREVIEW_STRIP 5
+
 /* Field of view choices (degrees) of the perspective scrub preview. */
 #define PLAYER_UI_PREVIEW_FOV_COUNT 4
 extern const int player_ui_preview_fovs[PLAYER_UI_PREVIEW_FOV_COUNT];
@@ -207,10 +210,12 @@ struct player_ui_state {
     const char *debug_text; /* line at the bottom of the card, or NULL */
     int hover;         /* enum player_ui_control */
     /* Scrub preview above the seek bar (while hovered or dragged): the
-     * position and, if the server has trickplay tiles, its picture. */
+     * position and, if the server has trickplay tiles, a strip of pictures
+     * (the middle one at the position, earlier ones to the left; NULL where
+     * there is none). */
     bool preview_visible;
     int64_t preview_us;
-    const struct ui_image *preview;
+    const struct ui_image *preview[PLAYER_UI_PREVIEW_STRIP];
     /* Preview settings shown in the view popup. */
     bool preview_perspective;
     int preview_fov; /* degrees */

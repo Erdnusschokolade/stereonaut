@@ -493,12 +493,17 @@ struct app {
     char title[256];
     /* Seek bar preview: trickplay pictures of the playing Jellyfin item. */
     struct trickplay *trickplay;
-    struct ui_image *preview;
+    struct ui_image *preview[TRICKPLAY_STRIP];
     /* Jellyfin description of the playing title (chapters, info tab). */
     struct jf_details details;
     bool details_valid;
     bool preview_visible;
     int64_t preview_us;
+    int64_t preview_spacing_us; /* between the strip's pictures */
+    /* The whole strip only for seeks by binding or panel button: on the
+     * hovered or dragged seek bar it was redrawn every frame (frame drops). */
+    bool preview_strip;
+    bool seek_by_binding; /* the pending seek came from seek_binding */
     bool preview_perspective; /* straighten 180/360 degree previews */
     int preview_fov;          /* degrees, one of player_ui_preview_fovs */
     VkCommandBuffer ui_command;
@@ -2371,6 +2376,9 @@ static void compose_settings(struct app *app)
         }
 }
 
+_Static_assert(TRICKPLAY_STRIP == PLAYER_UI_PREVIEW_STRIP,
+               "trickplay strip and panel preview differ");
+
 static struct player_ui_state player_state(const struct app *app)
 {
     return (struct player_ui_state){
@@ -2423,7 +2431,13 @@ static struct player_ui_state player_state(const struct app *app)
         .hover = app->ui_hover,
         .preview_visible = app->preview_visible,
         .preview_us = app->preview_us,
-        .preview = app->preview,
+        /* One picture unless the strip is wanted (the worker may still
+         * hold a strip from before). */
+        .preview = {app->preview_strip ? app->preview[0] : NULL,
+                    app->preview_strip ? app->preview[1] : NULL,
+                    app->preview[2],
+                    app->preview_strip ? app->preview[3] : NULL,
+                    app->preview_strip ? app->preview[4] : NULL},
         .preview_perspective = app->preview_perspective,
         .preview_fov = app->preview_fov,
     };
@@ -3209,20 +3223,25 @@ static void show_panel(struct app *app, const XrSpaceLocation *head,
            app->panel_x, app->panel_y, app->panel_z, app->panel_yaw);
 }
 
-/* Shows the scrub preview for `position_us` (-1 hides it) and asks the
- * trickplay worker for the matching picture. */
-static void update_preview(struct app *app, int64_t position_us)
+/* Shows the scrub preview for `position_us` (-1 hides it), a strip or one
+ * picture, and asks the trickplay worker for it. */
+static void update_preview(struct app *app, int64_t position_us, bool strip)
 {
     bool visible = position_us >= 0 && app->duration_us > 0;
-    if (visible != app->preview_visible ||
+    if (visible != app->preview_visible || strip != app->preview_strip ||
         (visible && position_us / 1000000 != app->preview_us / 1000000))
         app->ui_dirty = true;
     app->preview_visible = visible;
+    app->preview_strip = strip;
     if (!visible)
         return;
     app->preview_us = position_us;
-    trickplay_request(app->trickplay, position_us, app->stereo_layout,
-                      app->projection_mode,
+    /* The strip steps as the seek bindings do: held, by the grown step. */
+    int64_t spacing = !strip                ? 0
+                      : app->seek_scrubbing ? app->preview_spacing_us
+                                            : SEEK_STEP_US;
+    trickplay_request(app->trickplay, position_us, spacing,
+                      app->stereo_layout, app->projection_mode,
                       app->preview_perspective ? app->preview_fov : 0);
 }
 
@@ -3281,9 +3300,9 @@ static void skip_title(struct app *app, int direction)
         send_control(app, PLAYER_UI_STOP_REQUESTED, NULL, 0);
 }
 
-/* One step of seeking with the bindings, see SEEK_BURST_GAP. Targets are
- * absolute and continue from a pending one, so the session lands where
- * the seek bar shows. */
+/* One step of seeking with the bindings or the panel's -10/+10 buttons,
+ * see SEEK_BURST_GAP. Targets are absolute and continue from a pending
+ * one, so the session lands where the seek bar shows. */
 static void seek_binding(struct app *app, int direction, bool repeated)
 {
     if (app->scrub_hand >= 0)
@@ -3307,6 +3326,7 @@ static void seek_binding(struct app *app, int direction, bool repeated)
         app->seek_press_time = now;
     }
     app->seek_step_time = now;
+    app->preview_spacing_us = step;
     int64_t target = app->seek_pending || app->seek_scrubbing
                          ? app->scrub_us
                          : app->position_us;
@@ -3316,6 +3336,7 @@ static void seek_binding(struct app *app, int direction, bool repeated)
     if (target < 0)
         target = 0;
     app->scrub_us = target;
+    app->seek_by_binding = true;
     app->ui_dirty = true;
     if (!app->seek_scrubbing &&
         (repeated || app->seek_burst >= SEEK_BURST_SCRUB)) {
@@ -3838,6 +3859,7 @@ static void sync_player_input(struct app *app, XrTime time)
             printf("player_seek_bar target_us=%" PRId64 "\n", app->scrub_us);
             app->scrub_hand = -1;
             app->seek_pending = true;
+            app->seek_by_binding = false;
             app->ui_dirty = true;
             send_seek_to(app, app->scrub_us, 0);
         }
@@ -3894,6 +3916,10 @@ static void sync_player_input(struct app *app, XrTime time)
             change_preview(app, action);
         } else if (action >= PLAYER_UI_PROJECTION) {
             change_view(app, action);
+        } else if (action == PLAYER_UI_SEEK_BACK ||
+                   action == PLAYER_UI_SEEK_FORWARD) {
+            seek_binding(app, action == PLAYER_UI_SEEK_FORWARD ? 1 : -1,
+                         false);
         } else if (action) {
             send_ipc(app, NV12_IPC_ACTION, (uint32_t)action);
             /* Before the first frame the session may be blocked opening the
@@ -3937,10 +3963,14 @@ static void sync_player_input(struct app *app, XrTime time)
     }
     /* While a seek is pending or the bindings scrub, the preview shows
      * the target (only with the panel visible: it is part of it). */
-    if (app->scrub_hand >= 0 ||
-        (app->ui_visible && (app->seek_pending || app->seek_scrubbing)))
+    bool strip = false;
+    if (app->scrub_hand >= 0) {
         hover_us = app->scrub_us;
-    update_preview(app, hover_us);
+    } else if (app->ui_visible && (app->seek_pending || app->seek_scrubbing)) {
+        hover_us = app->scrub_us;
+        strip = app->seek_by_binding;
+    }
+    update_preview(app, hover_us, strip);
     if (pointer_visible != app->ui_pointer_visible ||
         (pointer_visible &&
          (pointer_x != app->ui_pointer_x ||
@@ -4543,8 +4573,10 @@ static void end_playback(struct app *app)
     app->select[0].suppressed = app->select[1].suppressed = true;
     trickplay_open(app->trickplay, NULL);
     app->details_valid = false;
-    ui_image_free(app->preview);
-    app->preview = NULL;
+    for (int i = 0; i < TRICKPLAY_STRIP; ++i) {
+        ui_image_free(app->preview[i]);
+        app->preview[i] = NULL;
+    }
     app->preview_visible = false;
     app->ui_dirty = true;
     app->browser.dirty = true;
@@ -6677,10 +6709,12 @@ int main(int argc, char **argv)
         handle_control(&app);
         if (app.playing) {
             receive_frame_messages(&app);
-            struct ui_image *preview = NULL;
-            if (trickplay_poll(app.trickplay, &preview)) {
-                ui_image_free(app.preview);
-                app.preview = preview;
+            struct ui_image *strip[TRICKPLAY_STRIP];
+            if (trickplay_poll(app.trickplay, strip)) {
+                for (int i = 0; i < TRICKPLAY_STRIP; ++i) {
+                    ui_image_free(app.preview[i]);
+                    app.preview[i] = strip[i];
+                }
                 if (app.preview_visible)
                     app.ui_dirty = true;
             }
@@ -6707,6 +6741,7 @@ int main(int argc, char **argv)
     browser_ui_close(&app.browser);
     player_ui_close(&app.player_ui);
     trickplay_destroy(app.trickplay);
-    ui_image_free(app.preview);
+    for (int i = 0; i < TRICKPLAY_STRIP; ++i)
+        ui_image_free(app.preview[i]);
     return 0;
 }

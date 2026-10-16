@@ -7,6 +7,7 @@
 #include "nv12-playback-ipc.h"
 #include "ui-draw.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,8 +44,11 @@
 #define SKIP_R 42
 #define PLAY_R 54
 
-/* Scrub preview above the card, centred on the previewed position. */
+/* Scrub preview above the card: a strip of trickplay pictures, the middle
+ * one (the previewed position, centred on it) larger and framed. */
 #define PREVIEW_IMAGE_H 196
+#define PREVIEW_SIDE_H 140
+#define PREVIEW_GAP 10
 #define PREVIEW_PAD 6
 #define PREVIEW_LABEL_H 40
 #define PREVIEW_BOTTOM (CARD_Y - 12)
@@ -860,17 +864,47 @@ static const char *chapter_at(const struct player_ui_state *state,
 
 /* Picture (if any) with the time (and chapter) below it; without a
  * picture just the label. */
+static int preview_width(const struct ui_image *image, int height)
+{
+    if (!image || image->width <= 0 || image->height <= 0)
+        return 0;
+    int width = image->width * height / image->height;
+    return width > 2 * height ? 2 * height : width;
+}
+
+/* Width of the strip's slots first..last that have a picture. */
+static int strip_width(const int widths[PLAYER_UI_PREVIEW_STRIP], int first,
+                       int last)
+{
+    int total = 0;
+    for (int slot = first; slot <= last; ++slot)
+        if (widths[slot])
+            total += (total ? PREVIEW_GAP : 0) + widths[slot];
+    return total;
+}
+
 static void draw_preview(struct player_ui *ui, struct ui_canvas *canvas,
                          const struct player_ui_state *state)
 {
-    const struct ui_image *image = state->preview;
-    int image_w = 0, image_h = 0;
-    if (image && image->width > 0 && image->height > 0) {
-        image_h = PREVIEW_IMAGE_H;
-        image_w = image->width * PREVIEW_IMAGE_H / image->height;
-        if (image_w > 2 * PREVIEW_IMAGE_H)
-            image_w = 2 * PREVIEW_IMAGE_H;
+    const int middle = PLAYER_UI_PREVIEW_STRIP / 2;
+    int widths[PLAYER_UI_PREVIEW_STRIP] = {0};
+    int first = middle, last = middle;
+    widths[middle] = preview_width(state->preview[middle], PREVIEW_IMAGE_H);
+    if (widths[middle]) {
+        for (int slot = 0; slot < PLAYER_UI_PREVIEW_STRIP; ++slot)
+            if (slot != middle)
+                widths[slot] =
+                    preview_width(state->preview[slot], PREVIEW_SIDE_H);
+        first = 0;
+        last = PLAYER_UI_PREVIEW_STRIP - 1;
+        /* Outer pictures go pairwise until the strip fits the card. */
+        while (first < middle &&
+               strip_width(widths, first, last) + 2 * PREVIEW_PAD > CARD_W) {
+            ++first;
+            --last;
+        }
     }
+    int images_w = strip_width(widths, first, last);
     char text[96];
     format_time(text, state->preview_us);
     const char *chapter = chapter_at(state, state->preview_us);
@@ -878,27 +912,50 @@ static void draw_preview(struct player_ui *ui, struct ui_canvas *canvas,
         size_t used = strlen(text);
         snprintf(text + used, sizeof(text) - used, " · %s", chapter);
     }
-    int width = image_w ? image_w + 2 * PREVIEW_PAD : 140;
+    int width = images_w ? images_w + 2 * PREVIEW_PAD : 140;
     if (chapter && width < 360)
         width = 360;
-    int height = (image_h ? image_h + PREVIEW_PAD : 0) + PREVIEW_LABEL_H;
+    int height = (images_w ? PREVIEW_IMAGE_H + PREVIEW_PAD : 0) +
+                 PREVIEW_LABEL_H;
+    /* Keep the middle picture over the previewed position. */
+    float strip_x = (width - images_w) / 2.0f;
+    int before = strip_width(widths, first, middle - 1);
+    float middle_center = strip_x + before + (before ? PREVIEW_GAP : 0) +
+                          widths[middle] / 2.0f;
+    if (!images_w)
+        middle_center = width / 2.0f;
     float center = BAR_X + BAR_W * time_ratio(state, state->preview_us);
-    float x = center - width / 2.0f;
+    float x = center - middle_center;
     if (x < CARD_X)
         x = CARD_X;
     if (x > CARD_X + CARD_W - width)
         x = CARD_X + CARD_W - width;
     float y = PREVIEW_BOTTOM - height;
-    ui_shadow_round_rect(canvas, x, y + 6, width, height, 18, 18,
-                         color_shadow);
+    /* No shadow: redrawn on every hovered position, it cost 2 ms. */
     ui_fill_round_rect(canvas, x, y, width, height, 18,
                        UI_RGBA(17, 18, 22, 240));
     ui_stroke_round_rect(canvas, x, y, width, height, 18, 2, color_border);
-    if (image_w)
-        ui_draw_image(canvas, image, x + (width - image_w) / 2.0f,
-                      y + PREVIEW_PAD, image_w, image_h, 12, 0.0f);
-    ui_draw_text(canvas, ui->bold, 26, (int)(x + width / 2.0f),
-                 (int)(y + height - PREVIEW_LABEL_H + 5), width - 12,
+    float cursor = x + strip_x;
+    for (int slot = first; slot <= last; ++slot) {
+        if (!widths[slot])
+            continue;
+        bool current = slot == middle;
+        int image_h = current ? PREVIEW_IMAGE_H : PREVIEW_SIDE_H;
+        float image_y = y + PREVIEW_PAD + PREVIEW_IMAGE_H - image_h;
+        ui_draw_image(canvas, state->preview[slot], cursor, image_y,
+                      widths[slot], image_h, 12, current ? 0.0f : 0.35f);
+        if (current)
+            ui_stroke_round_rect(canvas, cursor - 2, image_y - 2,
+                                 widths[slot] + 4, image_h + 4, 14, 3,
+                                 color_accent);
+        cursor += widths[slot] + PREVIEW_GAP;
+    }
+    float label_center = x + middle_center;
+    float half = fminf(label_center - x, x + width - label_center) - 6.0f;
+    if (half < 70.0f)
+        half = 70.0f;
+    ui_draw_text(canvas, ui->bold, 26, (int)label_center,
+                 (int)(y + height - PREVIEW_LABEL_H + 5), (int)(2.0f * half),
                  UI_ALIGN_CENTER, color_text, text);
 }
 
