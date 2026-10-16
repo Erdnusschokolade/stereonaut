@@ -2510,6 +2510,17 @@ static void restart_session(char **argv, struct playback_options *options,
         restart_argv[restart_argc++] = from_text;
     }
     restart_argv[restart_argc] = NULL;
+    /* A stop from the launcher (SIGTERM) must reach the new process: the
+     * flag does not survive exec, a blocked signal stays pending until
+     * main() installed its handler and unblocks it. */
+    sigset_t stop_signal;
+    sigemptyset(&stop_signal);
+    sigaddset(&stop_signal, SIGTERM);
+    sigprocmask(SIG_BLOCK, &stop_signal, NULL);
+    if (stop_requested) {
+        printf("player_stop=signal\n");
+        exit(0);
+    }
     execv(argv[0], restart_argv);
     fail_errno("restart stereonaut-session after seek");
 }
@@ -2733,6 +2744,10 @@ int main(int argc, char **argv)
     struct sigaction stop_action = {.sa_handler = handle_stop};
     sigemptyset(&stop_action.sa_mask);
     sigaction(SIGTERM, &stop_action, NULL);
+    sigset_t stop_signal; /* blocked across a seek restart's exec */
+    sigemptyset(&stop_signal);
+    sigaddset(&stop_signal, SIGTERM);
+    sigprocmask(SIG_UNBLOCK, &stop_signal, NULL);
     struct playback_options options = parse_playback_options(argc, argv);
     log_seek_phase("exec");
     panel_state = options.panel;
