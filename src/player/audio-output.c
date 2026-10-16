@@ -355,16 +355,23 @@ int audio_output_pause(struct audio_output *audio, bool paused,
      * e.g. when a seek pauses a stream that the user already paused. */
     if (audio->paused == paused)
         return 0;
-    if (!audio->hardware_pause) {
-        set_error(error, error_size,
-                  "ALSA default device does not support hardware pause");
-        return -1;
-    }
-    int result = snd_pcm_pause(audio->pcm, paused ? 1 : 0);
-    if (result < 0) {
-        set_error(error, error_size, "snd_pcm_pause: %s",
-                  snd_strerror(result));
-        return -1;
+    /* Only a running stream is paused in the device (EBADFD otherwise, e.g.
+     * a seek right after the start, before the first write started it);
+     * else nothing plays and the worker just stops writing. */
+    snd_pcm_state_t state = snd_pcm_state(audio->pcm);
+    if (paused ? state == SND_PCM_STATE_RUNNING
+               : state == SND_PCM_STATE_PAUSED) {
+        if (!audio->hardware_pause) {
+            set_error(error, error_size,
+                      "ALSA default device does not support hardware pause");
+            return -1;
+        }
+        int result = snd_pcm_pause(audio->pcm, paused ? 1 : 0);
+        if (result < 0) {
+            set_error(error, error_size, "snd_pcm_pause: %s",
+                      snd_strerror(result));
+            return -1;
+        }
     }
     int64_t now = monotonic_us();
     if (paused && !audio->paused)
