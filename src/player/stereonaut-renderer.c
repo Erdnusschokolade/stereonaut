@@ -9,7 +9,9 @@
 #include <inttypes.h>
 #include <linux/dma-buf.h>
 #include <math.h>
+#include <pthread.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -53,6 +55,7 @@
 #define UI_HEIGHT PLAYER_UI_HEIGHT
 #define UI_BYTES (UI_WIDTH * UI_HEIGHT * 4U)
 #define UI_PANEL_WIDTH_METERS PLAYER_UI_PANEL_WIDTH_METERS
+#define PC_RENDER_SCALE 1.3f
 #define UI_PANEL_HEIGHT_METERS PLAYER_UI_PANEL_HEIGHT_METERS
 #define GRAB_RECENTER_COS 0.5f
 /* The select action is analog so the press point can be lower than the
@@ -230,6 +233,35 @@ struct frame_timing {
     double period_ms;
 };
 
+/* The player panel is drawn on the CPU in a thread of its own: in the
+ * frame loop its several milliseconds pushed frames past their deadline
+ * on a PC, where the video copy takes its share. The loop hands the thread
+ * a snapshot of the panel's state (with its own copies of everything the
+ * state points to) and uploads the finished pixels. */
+struct panel_job {
+    struct player_ui_state state;
+    char title[256];
+    struct jf_details details;
+    float adjust[PLAYER_ADJUST_COUNT];
+    char update_installed[64], update_latest[64], update_status[256];
+    struct binding bindings[BINDING_ACTION_COUNT];
+    char debug_text[192];
+    struct ui_image *preview[PLAYER_UI_PREVIEW_STRIP];
+};
+
+struct panel_thread {
+    pthread_t thread;
+    bool started;
+    pthread_mutex_t mutex;
+    pthread_cond_t changed;
+    bool stopping;
+    bool pending; /* the job waits for the thread */
+    bool busy;    /* the thread draws the job into pixels */
+    bool done;    /* pixels hold a finished panel */
+    struct panel_job job;
+    uint32_t *pixels; /* UI_BYTES */
+};
+
 /* A controller model on the GPU (record_overlay). */
 struct gpu_model {
     struct gltf_model mesh;
@@ -316,6 +348,10 @@ struct app {
     bool awaiting_frame;
     bool first_init_done;
     uint32_t video_buffer_count;
+    /* Host buffers being imported by video_import_worker. */
+    pthread_t video_import_thread;
+    bool video_importing;
+    atomic_bool video_import_done;
     int current_video_index;
     bool current_video_presented;
     int ui_fd;              /* control socket to the launcher */
@@ -489,8 +525,11 @@ struct app {
     VkBuffer ui_staging_buffer;
     VkDeviceMemory ui_staging_memory;
     uint32_t *ui_pixels; /* mapped staging memory: write-only */
-    uint32_t *ui_cpu;    /* the panel draws here */
     struct player_ui player_ui;
+    /* The player panel's thread and the lock of player_ui (fonts), which
+     * the settings page shares with it. */
+    struct panel_thread panel_thread;
+    pthread_mutex_t player_ui_mutex;
     bool popup_open;
     int popup_tab;                       /* enum player_ui_tab */
     /* Settings page over the browser: the popup's settings tabs, drawn
@@ -1178,8 +1217,12 @@ static void release_current_video(struct app *app)
     app->current_video_index = -1;
 }
 
+static bool video_import_pending(struct app *app, bool wait);
+
 static void receive_frame_messages(struct app *app)
 {
+    if (video_import_pending(app, false))
+        return;
     for (;;) {
         struct nv12_ipc_message message = {0};
         char control[CMSG_SPACE(sizeof(int) * NV12_IPC_MAX_BUFFERS)] = {0};
@@ -1709,6 +1752,8 @@ static void initialize_xr_vulkan(struct app *app)
                 app->device, "vkGetMemoryHostPointerPropertiesEXT");
 }
 
+static bool overlay_in_eye_images(void);
+
 static void initialize_swapchain(struct app *app)
 {
     uint32_t format_count = 0;
@@ -1729,6 +1774,22 @@ static void initialize_swapchain(struct app *app)
     app->width = views[0].recommendedImageRectWidth;
     app->height = views[0].recommendedImageRectHeight;
     need(views[1].recommendedImageRectWidth == app->width && views[1].recommendedImageRectHeight == app->height, "eyes have different recommended dimensions");
+    /* On a PC the panels are drawn into the eye images, which at the
+     * recommended size blur them: render larger. Above 1.3 streaming to
+     * the Frame shows the eyes with mismatched perspectives (other players
+     * too). STEREONAUT_RENDER_SCALE (1 to 2) overrides it. */
+    const char *scale_text = getenv("STEREONAUT_RENDER_SCALE");
+    float scale = scale_text ? strtof(scale_text, NULL)
+                             : overlay_in_eye_images() ? PC_RENDER_SCALE
+                                                       : 1.0f;
+    if (scale > 1.0f && scale <= 2.0f) {
+        app->width = (uint32_t)(app->width * scale);
+        app->height = (uint32_t)(app->height * scale);
+        if (app->width > views[0].maxImageRectWidth)
+            app->width = views[0].maxImageRectWidth;
+        if (app->height > views[0].maxImageRectHeight)
+            app->height = views[0].maxImageRectHeight;
+    }
     XrSwapchainCreateInfo info = {.type = XR_TYPE_SWAPCHAIN_CREATE_INFO,
         .usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT,
         .format = app->color_format, .sampleCount = 1, .width = app->width,
@@ -1882,8 +1943,11 @@ static void create_upload_image(struct app *app, VkFormat format,
  * transfer buffer and create the images it is copied into. Sampling
  * device-local images is also much cheaper than reading system memory over
  * PCIe for every eye and display frame. */
+static double monotonic_seconds(void);
+
 static void import_host_buffer(struct app *app, uint32_t i)
 {
+    double started = monotonic_seconds();
     struct video_buffer *buffer = &app->video_buffers[i];
     bool p010 = app->video_format == NV12_FORMAT_P010;
     buffer->host = true;
@@ -1947,8 +2011,9 @@ static void import_host_buffer(struct app *app, uint32_t i)
                             app->video_width, app->video_height, true,
                             &buffer->image, &buffer->memory, &buffer->view);
     }
-    printf("host_import index=%u format=%s bytes=%zu\n", i,
-           p010 ? "p010" : "nv12", buffer->host_size);
+    printf("host_import index=%u format=%s bytes=%zu ms=%.1f\n", i,
+           p010 ? "p010" : "nv12", buffer->host_size,
+           (monotonic_seconds() - started) * 1e3);
 }
 
 /* Records the copy of a new host-memory frame into its image(s); the
@@ -2383,8 +2448,10 @@ static void compose_settings(struct app *app)
         need(app->settings_cpu != NULL, "allocate settings pixels");
     }
     struct player_ui_state state = settings_state(app);
+    pthread_mutex_lock(&app->player_ui_mutex);
     player_ui_render_settings(&app->player_ui, &state, app->settings_cpu,
                               app->ui_bgra);
+    pthread_mutex_unlock(&app->player_ui_mutex);
     uint8_t *browser = (uint8_t *)app->browser_cpu;
     for (size_t i = 0; i < (size_t)BROWSER_UI_WIDTH * BROWSER_UI_HEIGHT;
          ++i)
@@ -2739,15 +2806,12 @@ static void create_ui_resources(struct app *app)
     need_vk("vkMapMemory(UI staging)",
             vkMapMemory(app->device, app->ui_staging_memory, 0,
                         UI_BYTES, 0, (void **)&app->ui_pixels));
-    app->ui_cpu = calloc(1, UI_BYTES);
-    need(app->ui_cpu != NULL, "allocate panel pixels");
     app->ui_dirty = true;
 }
 
-static void upload_ui(struct app *app)
+/* Uploads a drawn player panel into its texture or quad swapchain. */
+static void upload_ui(struct app *app, const uint32_t *pixels)
 {
-    struct player_ui_state state = player_state(app);
-    player_ui_render(&app->player_ui, &state, app->ui_cpu, app->ui_bgra);
     XrSwapchainImageAcquireInfo acquire = {
         .type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO,
     };
@@ -2768,7 +2832,7 @@ static void upload_ui(struct app *app)
                             VK_TRUE, UINT64_C(5000000000)));
     need_vk("vkResetFences(UI)",
             vkResetFences(app->device, 1, &app->ui_fence));
-    memcpy(app->ui_pixels, app->ui_cpu, UI_BYTES);
+    memcpy(app->ui_pixels, pixels, UI_BYTES);
     need_vk("vkResetCommandBuffer(UI)",
             vkResetCommandBuffer(app->ui_command, 0));
     VkCommandBufferBeginInfo begin = {
@@ -2799,7 +2863,138 @@ static void upload_ui(struct app *app)
     if (app->ui_swapchain)
         need_xr("xrReleaseSwapchainImage(UI)",
                 xrReleaseSwapchainImage(app->ui_swapchain, &release));
+}
+
+static double monotonic_seconds(void);
+static void timing_ui(struct app *app, double started);
+
+static void *panel_worker(void *argument)
+{
+    struct app *app = argument;
+    struct panel_thread *panel = &app->panel_thread;
+    pthread_mutex_lock(&panel->mutex);
+    for (;;) {
+        while (!panel->stopping && !panel->pending)
+            pthread_cond_wait(&panel->changed, &panel->mutex);
+        if (panel->stopping)
+            break;
+        panel->pending = false;
+        panel->busy = true;
+        pthread_mutex_unlock(&panel->mutex);
+        pthread_mutex_lock(&app->player_ui_mutex);
+        player_ui_render(&app->player_ui, &panel->job.state, panel->pixels,
+                         app->ui_bgra);
+        pthread_mutex_unlock(&app->player_ui_mutex);
+        pthread_mutex_lock(&panel->mutex);
+        panel->busy = false;
+        panel->done = true;
+    }
+    pthread_mutex_unlock(&panel->mutex);
+    return NULL;
+}
+
+static void start_panel_thread(struct app *app)
+{
+    struct panel_thread *panel = &app->panel_thread;
+    pthread_mutex_init(&app->player_ui_mutex, NULL);
+    pthread_mutex_init(&panel->mutex, NULL);
+    pthread_cond_init(&panel->changed, NULL);
+    panel->pixels = calloc(1, UI_BYTES);
+    need(panel->pixels != NULL, "allocate panel pixels");
+    panel->started =
+        pthread_create(&panel->thread, NULL, panel_worker, app) == 0;
+    need(panel->started, "start panel thread");
+}
+
+static void stop_panel_thread(struct app *app)
+{
+    struct panel_thread *panel = &app->panel_thread;
+    if (!panel->started)
+        return;
+    pthread_mutex_lock(&panel->mutex);
+    panel->stopping = true;
+    pthread_cond_signal(&panel->changed);
+    pthread_mutex_unlock(&panel->mutex);
+    pthread_join(panel->thread, NULL);
+    panel->started = false;
+    for (int i = 0; i < PLAYER_UI_PREVIEW_STRIP; ++i)
+        ui_image_free(panel->job.preview[i]);
+    free(panel->pixels);
+}
+
+static struct ui_image *copy_ui_image(const struct ui_image *image)
+{
+    struct ui_image *copy = ui_image_create(image->width, image->height);
+    if (copy)
+        memcpy(copy->rgba, image->rgba,
+               (size_t)image->width * (size_t)image->height * 4U);
+    return copy;
+}
+
+/* The panel's state with copies of what it points to, for the thread. */
+static void fill_panel_job(const struct app *app, struct panel_job *job)
+{
+    for (int i = 0; i < PLAYER_UI_PREVIEW_STRIP; ++i) {
+        ui_image_free(job->preview[i]);
+        job->preview[i] = NULL;
+    }
+    struct player_ui_state state = player_state(app);
+    snprintf(job->title, sizeof(job->title), "%s",
+             state.title ? state.title : "");
+    state.title = job->title;
+    if (state.details) {
+        job->details = *state.details;
+        state.details = &job->details;
+    }
+    memcpy(job->adjust, app->adjust, sizeof(job->adjust));
+    state.adjust = job->adjust;
+    snprintf(job->update_installed, sizeof(job->update_installed), "%s",
+             state.update_installed ? state.update_installed : "");
+    snprintf(job->update_latest, sizeof(job->update_latest), "%s",
+             state.update_latest ? state.update_latest : "");
+    snprintf(job->update_status, sizeof(job->update_status), "%s",
+             state.update_status ? state.update_status : "");
+    state.update_installed = job->update_installed;
+    state.update_latest = job->update_latest;
+    state.update_status = job->update_status;
+    memcpy(job->bindings, app->bindings, sizeof(job->bindings));
+    state.bindings = job->bindings;
+    if (state.debug_text) {
+        snprintf(job->debug_text, sizeof(job->debug_text), "%s",
+                 state.debug_text);
+        state.debug_text = job->debug_text;
+    }
+    for (int i = 0; i < PLAYER_UI_PREVIEW_STRIP; ++i)
+        if (state.preview[i]) {
+            job->preview[i] = copy_ui_image(state.preview[i]);
+            state.preview[i] = job->preview[i];
+        }
+    job->state = state;
+}
+
+/* Per frame while playing: uploads a panel the thread finished and hands
+ * it the next one when the state changed. */
+static void sync_player_panel(struct app *app)
+{
+    struct panel_thread *panel = &app->panel_thread;
+    pthread_mutex_lock(&panel->mutex);
+    bool idle = !panel->busy && !panel->pending;
+    bool done = idle && panel->done;
+    panel->done = panel->done && !done;
+    pthread_mutex_unlock(&panel->mutex);
+    if (done) {
+        double uploading = monotonic_seconds();
+        upload_ui(app, panel->pixels);
+        timing_ui(app, uploading);
+    }
+    if (!idle || !app->ui_dirty)
+        return;
+    fill_panel_job(app, &panel->job);
     app->ui_dirty = false;
+    pthread_mutex_lock(&panel->mutex);
+    panel->pending = true;
+    pthread_cond_signal(&panel->changed);
+    pthread_mutex_unlock(&panel->mutex);
 }
 
 static void write_video_descriptor(struct app *app, VkDescriptorSet set,
@@ -2986,21 +3181,61 @@ static void discard_held_frame(struct app *app)
     app->has_held = false;
 }
 
-static void reinitialize_video(struct app *app,
-                               const struct nv12_ipc_message *message,
-                               const struct msghdr *received)
+/* Mapping and importing a host buffer takes about 30 ms (8K P010, 100 MB),
+ * so a worker imports them and the frame loop keeps the display rate. The
+ * session waits for READY and sends nothing meanwhile. */
+static void *video_import_worker(void *data)
 {
-    apply_init(app, message, received);
-    for (uint32_t i = 0; i < app->video_buffer_count; ++i) {
-        import_video_buffer(app, i);
+    struct app *app = data;
+    for (uint32_t i = 0; i < app->video_buffer_count; ++i)
+        import_host_buffer(app, i);
+    atomic_store(&app->video_import_done, true);
+    return NULL;
+}
+
+static void finish_video_init(struct app *app)
+{
+    for (uint32_t i = 0; i < app->video_buffer_count; ++i)
         write_video_descriptor(app, app->video_buffers[i].descriptor_set,
                                &app->video_buffers[i]);
-    }
     app->current_video_index = -1;
     app->eos_received = false;
     send_ipc(app, NV12_IPC_READY, 0);
     send_volume(app);
     printf("video_reinit buffers=%u\n", app->video_buffer_count);
+}
+
+static void reinitialize_video(struct app *app,
+                               const struct nv12_ipc_message *message,
+                               const struct msghdr *received)
+{
+    apply_init(app, message, received);
+    if (app->buffer_kind == NV12_BUFFER_HOST) {
+        atomic_store(&app->video_import_done, false);
+        need(pthread_create(&app->video_import_thread, NULL,
+                            video_import_worker, app) == 0,
+             "start video import thread");
+        app->video_importing = true;
+        return;
+    }
+    for (uint32_t i = 0; i < app->video_buffer_count; ++i)
+        import_video_buffer(app, i);
+    finish_video_init(app);
+}
+
+/* True while the worker still imports; completes the INIT once it is done
+ * (or, with wait, after waiting for it). */
+static bool video_import_pending(struct app *app, bool wait)
+{
+    if (!app->video_importing)
+        return false;
+    if (!wait && !atomic_load(&app->video_import_done))
+        return true;
+    pthread_join(app->video_import_thread, NULL);
+    app->video_importing = false;
+    if (!wait)
+        finish_video_init(app);
+    return false;
 }
 
 static XrVector3f rotate_vector(XrQuaternionf q, XrVector3f vector)
@@ -4580,6 +4815,7 @@ static void send_control(struct app *app, uint32_t type, const char *path,
 static void end_playback(struct app *app)
 {
     app->popup_open = false;
+    video_import_pending(app, true);
     need_vk("vkDeviceWaitIdle(end playback)", vkDeviceWaitIdle(app->device));
     discard_held_frame(app);
     for (uint32_t i = 0; i < app->video_buffer_count; ++i)
@@ -6280,11 +6516,7 @@ static void render_frame(struct app *app)
     update_home(app, frame_state.predictedDisplayTime);
     if (app->playing) {
         sync_player_input(app, frame_state.predictedDisplayTime);
-        if (app->ui_dirty) {
-            double drawing = monotonic_seconds();
-            upload_ui(app);
-            timing_ui(app, drawing);
-        }
+        sync_player_panel(app);
     } else {
         sync_browser_input(app, frame_state.predictedDisplayTime);
         if (app->browser.dirty) {
@@ -6293,6 +6525,7 @@ static void render_frame(struct app *app)
             timing_ui(app, drawing);
         }
     }
+    double inputs_done = monotonic_seconds();
     if (!frame_state.shouldRender) {
         XrFrameEndInfo end = {.type = XR_TYPE_FRAME_END_INFO, .displayTime = frame_state.predictedDisplayTime,
             .environmentBlendMode = environment_blend_mode(app)};
@@ -6352,6 +6585,7 @@ static void render_frame(struct app *app)
     XrSwapchainImageWaitInfo image_wait = {.type = XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, .timeout = XR_INFINITE_DURATION};
     need_xr("xrWaitSwapchainImage", xrWaitSwapchainImage(app->swapchain, &image_wait));
     need(image_index < app->image_count, "invalid OpenXR swapchain index");
+    double acquired = monotonic_seconds();
     /* Dome placement: centred on the head of the first frame (or of
      * "zentrieren"), turned by the gaze yaw and the viewer's rotation.
      * world_to_dome undoes yaw, then tilt, then roll. */
@@ -6527,6 +6761,7 @@ static void render_frame(struct app *app)
     }
     need_vk("vkWaitForFences(render)", vkWaitForFences(app->device, 1, &app->fence, VK_TRUE, UINT64_C(5000000000)));
     need_vk("vkResetFences(render)", vkResetFences(app->device, 1, &app->fence));
+    double fenced = monotonic_seconds();
     if (app->key_sample_pending) {
         app->key_sample_pending = false;
         finish_key_pick(app);
@@ -6719,6 +6954,7 @@ static void render_frame(struct app *app)
         submit.pWaitDstStageMask = &producer_stage;
         video->producer_wait_pending = false;
     }
+    double recorded = monotonic_seconds();
     need_vk("vkQueueSubmit(render)", vkQueueSubmit(app->queue, 1, &submit, app->fence));
     double submitted = monotonic_seconds();
     need_vk("vkWaitForFences(render completion)", vkWaitForFences(app->device, 1, &app->fence, VK_TRUE, UINT64_C(5000000000)));
@@ -6781,9 +7017,17 @@ static void render_frame(struct app *app)
         .environmentBlendMode = environment_blend_mode(app),
         .layerCount = layer_count,
         .layers = layers};
+    double ending = monotonic_seconds();
     need_xr("xrEndFrame", xrEndFrame(app->session, &end));
     ++app->rendered_frames;
     double cpu_ms = (monotonic_seconds() - frame_started) * 1e3;
+    if (cpu_ms > 50.0)
+        printf("slow_frame ms=%.0f inputs=%.0f acquire=%.0f fence=%.0f"
+               " record=%.0f submit=%.0f gpu=%.0f end=%.0f copy=%d\n",
+               cpu_ms, (inputs_done - frame_started) * 1e3,
+               (acquired - inputs_done) * 1e3, (fenced - acquired) * 1e3,
+               (recorded - fenced) * 1e3, (submitted - recorded) * 1e3,
+               gpu_ms, (monotonic_seconds() - ending) * 1e3, copied_video);
     app->timing.rendered++;
     app->timing.cpu_ms += cpu_ms;
     note_max(&app->timing.cpu_max_ms, cpu_ms);
@@ -6873,6 +7117,7 @@ int main(int argc, char **argv)
     create_video_sampler(&app);
     create_render_resources(&app);
     create_ui_resources(&app);
+    start_panel_thread(&app);
     create_browser_texture(&app);
     create_overlay(&app);
     create_panel_pipeline(&app);
@@ -6913,6 +7158,7 @@ int main(int argc, char **argv)
         end_playback(&app);
     updater_close(&app.updater);
     browser_ui_close(&app.browser);
+    stop_panel_thread(&app);
     player_ui_close(&app.player_ui);
     trickplay_destroy(app.trickplay);
     for (int i = 0; i < TRICKPLAY_STRIP; ++i)

@@ -153,7 +153,13 @@ On the Frame both panels are OpenXR quad layers. On a PC the renderer draws
 them into the eye images itself, from a mipmapped image with trilinear and
 anisotropic filtering: SteamVR on a PC composites quad layers so that text
 shimmers and steps while the head moves, even with mipmaps.
-`STEREONAUT_UI_LAYER=quad|eye` overrides the choice.
+`STEREONAUT_UI_LAYER=quad|eye` overrides the choice. Because the panel
+images have about twice the pixels per degree of SteamVR's recommended eye
+image, a PC renders the eye images 1.3 times larger
+(`STEREONAUT_RENDER_SCALE`, 1 to 2); above 1.3, streaming to the Frame shows
+the two eyes with mismatching perspectives. The panels are drawn in a
+thread of their own, and the host buffers of a new stream (about 30 ms each
+for 8K P010) are imported by a worker, so neither stalls the frame loop.
 
 The video shaders average up to 4x4 bilinear taps over each pixel's
 footprint when the video is drawn smaller than it is (a 4K flat screen gets
