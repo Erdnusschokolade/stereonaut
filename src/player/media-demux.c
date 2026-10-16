@@ -4,6 +4,7 @@
 #include <signal.h>
 #include <inttypes.h>
 #include <limits.h>
+#include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,6 +13,7 @@
 
 #include <libavcodec/bsf.h>
 #include <libavutil/error.h>
+#include <libavutil/log.h>
 #include <libavutil/pixdesc.h>
 
 #include "decoded-video.h"
@@ -199,6 +201,47 @@ static int initialize_video_filter(struct media_demux *demux,
     return 0;
 }
 
+/* libavformat logs the URLs it opens (HLS segments, reconnects, playlist
+ * lines), whose query carries the Jellyfin API key: replace the server by
+ * <server> and every query by "?…", keep the path. */
+static void redact_urls(const char *line, char *out, size_t size)
+{
+    size_t used = 0;
+    for (const char *c = line; *c && used + 12 < size;) {
+        if (strncmp(c, "://", 3) == 0) {
+            memcpy(out + used, "://<server>", 11);
+            used += 11;
+            c += 3;
+            while (*c && !strchr("/?'\" \n", *c))
+                ++c;
+        } else if (*c == '?') {
+            memcpy(out + used, "?…", sizeof("?…") - 1);
+            used += sizeof("?…") - 1;
+            while (*c && !strchr("'\" \n", *c))
+                ++c;
+        } else {
+            out[used++] = *c++;
+        }
+    }
+    out[used] = '\0';
+}
+
+static void log_redacted(void *context, int level, const char *format,
+                         va_list arguments)
+{
+    static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+    static int print_prefix = 1;
+    if (level > av_log_get_level())
+        return;
+    char line[2048], redacted[2048];
+    pthread_mutex_lock(&mutex);
+    av_log_format_line2(context, level, format, arguments, line,
+                        sizeof(line), &print_prefix);
+    redact_urls(line, redacted, sizeof(redacted));
+    fputs(redacted, stderr);
+    pthread_mutex_unlock(&mutex);
+}
+
 int media_demux_open(struct media_demux **result, const char *path,
                      char *error, size_t error_size)
 {
@@ -206,6 +249,7 @@ int media_demux_open(struct media_demux **result, const char *path,
         set_error(error, error_size, "invalid media_demux_open arguments");
         return -1;
     }
+    av_log_set_callback(log_redacted);
     *result = NULL;
     struct media_demux *demux = calloc(1, sizeof(*demux));
     if (!demux) {
