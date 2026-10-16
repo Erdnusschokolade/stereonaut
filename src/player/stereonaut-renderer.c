@@ -28,6 +28,7 @@
 
 #include "browser-ui.h"
 #include "controller-bindings.h"
+#include "decoded-video.h"
 #include "gltf-model.h"
 #include "i18n.h"
 #include "render-models.h"
@@ -378,6 +379,9 @@ struct app {
     /* One swapchain per eye: SteamVR showed the first array layer of a
      * second projection layer to both eyes. */
     XrSwapchain overlay_swapchains[2];
+    /* On a PC the overlay is drawn into the eye images (overlay_in_eye_
+     * images): no swapchains of its own, framebuffers on the eye images. */
+    bool overlay_in_eye_images;
     uint32_t overlay_image_counts[2];
     XrSwapchainImageVulkan2KHR overlay_images[2][MAX_IMAGES];
     VkImageView overlay_views[2][MAX_IMAGES];
@@ -5323,6 +5327,15 @@ static VkPipeline overlay_pipeline(struct app *app, const char *vertex_path,
     return pipeline;
 }
 
+/* SteamVR on a PC shows nothing of a second projection layer (the screen
+ * stayed black): there the overlay is drawn into the eye images, at their
+ * resolution, after the video. The Frame (with the Iris decoder) composites
+ * the sharper overlay layer. */
+static bool overlay_in_eye_images(void)
+{
+    return access(DECODED_VIDEO_IRIS_DEVICE, F_OK) != 0;
+}
+
 static void create_overlay(struct app *app)
 {
     float scale = OVERLAY_SCALE;
@@ -5339,13 +5352,18 @@ static void create_overlay(struct app *app)
                 app->xr, app->system,
                 XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 2, &limit_count,
                 limits));
+    app->overlay_in_eye_images = overlay_in_eye_images();
+    if (app->overlay_in_eye_images)
+        scale = 1.0f;
     app->overlay_width = (uint32_t)((float)app->width * scale + 0.5f);
     app->overlay_height = (uint32_t)((float)app->height * scale + 0.5f);
     if (app->overlay_width > limits[0].maxImageRectWidth)
         app->overlay_width = limits[0].maxImageRectWidth;
     if (app->overlay_height > limits[0].maxImageRectHeight)
         app->overlay_height = limits[0].maxImageRectHeight;
-    for (uint32_t eye = 0; eye < 2; ++eye) {
+    for (uint32_t eye = 0; eye < 2 && app->overlay_in_eye_images; ++eye)
+        app->overlay_image_counts[eye] = app->image_count;
+    for (uint32_t eye = 0; eye < 2 && !app->overlay_in_eye_images; ++eye) {
         XrSwapchainCreateInfo swapchain = {
             .type = XR_TYPE_SWAPCHAIN_CREATE_INFO,
             .usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT,
@@ -5400,13 +5418,17 @@ static void create_overlay(struct app *app)
             vkBindImageMemory(app->device, app->overlay_depth,
                               app->overlay_depth_memory, 0));
 
+    /* Into the eye images the video drawn before stays (load). */
     VkAttachmentDescription attachments[2] = {
         {.format = app->color_format, .samples = VK_SAMPLE_COUNT_1_BIT,
-         .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
+         .loadOp = app->overlay_in_eye_images ? VK_ATTACHMENT_LOAD_OP_LOAD
+                                              : VK_ATTACHMENT_LOAD_OP_CLEAR,
          .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
          .stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE,
          .stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE,
-         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+         .initialLayout = app->overlay_in_eye_images
+                              ? VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
+                              : VK_IMAGE_LAYOUT_UNDEFINED,
          .finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL},
         {.format = OVERLAY_DEPTH_FORMAT, .samples = VK_SAMPLE_COUNT_1_BIT,
          .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR,
@@ -5440,6 +5462,7 @@ static void create_overlay(struct app *app)
                          VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
         .dstAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
                          VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                         VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
                          VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
     };
     VkRenderPassCreateInfo pass = {
@@ -5466,6 +5489,21 @@ static void create_overlay(struct app *app)
     for (uint32_t eye = 0; eye < 2; ++eye)
         for (uint32_t image = 0; image < app->overlay_image_counts[eye];
              ++image) {
+            if (app->overlay_in_eye_images) {
+                VkImageView views[2] = {app->image_views[image][eye],
+                                        app->overlay_depth_views[eye]};
+                VkFramebufferCreateInfo framebuffer = {
+                    .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
+                    .renderPass = app->overlay_pass, .attachmentCount = 2,
+                    .pAttachments = views, .width = app->overlay_width,
+                    .height = app->overlay_height, .layers = 1,
+                };
+                need_vk("vkCreateFramebuffer(overlay in eye image)",
+                        vkCreateFramebuffer(
+                            app->device, &framebuffer, NULL,
+                            &app->overlay_framebuffers[eye][image]));
+                continue;
+            }
             VkImageViewCreateInfo view = {
                 .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
                 .image = app->overlay_images[eye][image].image,
@@ -5556,11 +5594,13 @@ static void create_overlay(struct app *app)
     app->beam_pipeline = overlay_pipeline(app, "laser.vert.spv",
                                           "laser.frag.spv",
                                           app->beam_pipeline_layout, false);
-    printf("overlay images=%u+%u dimensions=%ux%u maximum=%ux%u depth=%d\n",
+    printf("overlay images=%u+%u dimensions=%ux%u maximum=%ux%u depth=%d"
+           " drawn_into=%s\n",
            app->overlay_image_counts[0], app->overlay_image_counts[1],
            app->overlay_width, app->overlay_height,
            limits[0].maxImageRectWidth, limits[0].maxImageRectHeight,
-           OVERLAY_DEPTH_FORMAT);
+           OVERLAY_DEPTH_FORMAT,
+           app->overlay_in_eye_images ? "eye_images" : "layer");
 }
 
 static void destroy_gpu_model(struct app *app, struct gpu_model *model)
@@ -6542,7 +6582,10 @@ static void render_frame(struct app *app)
                 beam_dots[hand] = app->key_picking;
             }
         }
-        for (uint32_t eye = 0; eye < 2; ++eye) {
+        for (uint32_t eye = 0; eye < 2 && app->overlay_in_eye_images; ++eye)
+            overlay_indices[eye] = image_index;
+        for (uint32_t eye = 0; eye < 2 && !app->overlay_in_eye_images;
+             ++eye) {
             XrSwapchainImageAcquireInfo overlay_acquire = {
                 .type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO,
             };
@@ -6597,7 +6640,8 @@ static void render_frame(struct app *app)
     need_vk("vkWaitForFences(render completion)", vkWaitForFences(app->device, 1, &app->fence, VK_TRUE, UINT64_C(5000000000)));
     XrSwapchainImageReleaseInfo release = {.type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
     need_xr("xrReleaseSwapchainImage", xrReleaseSwapchainImage(app->swapchain, &release));
-    for (uint32_t eye = 0; overlay && eye < 2; ++eye)
+    for (uint32_t eye = 0;
+         overlay && !app->overlay_in_eye_images && eye < 2; ++eye)
         need_xr("xrReleaseSwapchainImage(overlay)",
                 xrReleaseSwapchainImage(app->overlay_swapchains[eye],
                                         &release));
@@ -6639,7 +6683,7 @@ static void render_frame(struct app *app)
             layers[layer_count++] =
                 (const XrCompositionLayerBaseHeader *)&ui_layer;
     }
-    if (overlay)
+    if (overlay && !app->overlay_in_eye_images)
         layers[layer_count++] =
             (const XrCompositionLayerBaseHeader *)&overlay_layer;
     if (show_ui && app->pointer_layer_visible && !app->panels_in_eye_images)
