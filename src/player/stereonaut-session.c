@@ -3026,7 +3026,12 @@ open_decoder:
             last_progress = now;
             continue;
         }
-        if (transport.requested)
+        /* A seek waits until the renderer has this decoder's buffers:
+         * before that it could not be held, was stopped instead, and the
+         * restart lost it (seeking again while the decoder reopened ended
+         * playback). Further presses move the target meanwhile. */
+        if (transport.requested &&
+            (capture_started || transport.requested == NV12_ACTION_BACK))
             break;
         if (transport.paused)
             last_progress = now;
