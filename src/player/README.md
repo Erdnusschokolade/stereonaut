@@ -108,7 +108,8 @@ seeks on release (`NV12_ACTION_SEEK_TO`). The renderer reports the panel pose
 to the session (`NV12_IPC_PANEL`), which forwards it through a decoder
 reopen or the seek re-exec (`--panel x,y,z,yaw,visible`).
 
-The seek bindings (stick left/right by default) send absolute
+The seek bindings (stick left/right by default) and the panel's -10/+10
+buttons send absolute
 `NV12_ACTION_SEEK_TO` targets that continue from a pending one. Up to the
 fourth press less than 0.5 s after the previous one each press seeks at
 once; from the fifth, or once a held input repeats, the renderer pauses
@@ -124,6 +125,21 @@ earlier seeks do not make the time jump back. The session keeps pause and
 seek in separate slots, so a pause cannot replace a seek queued in the same
 batch of messages, and a seek that arrives before the renderer has the new
 decoder's buffers waits for them.
+
+Seeks by binding or button show a trickplay strip (`trickplay.c`): the
+target large in the middle, two pictures before and two after it, as far
+apart as the seek steps. Hovering or dragging the seek bar shows only the
+middle picture, since the CPU-drawn panel is redrawn for every new position
+(7 ms without the preview, about 13 ms with the strip). There the position
+follows the pointer only after 5 panel pixels and preview changes redraw at
+most 30 times a second, which the hand's jitter otherwise turned into a
+redraw per frame. The trickplay worker fetches every tile of the title in
+the background a few seconds after the start (about 30 MB of JPEG for
+85 minutes at 5 s intervals), keeps three decoded tiles (20 MB each for
+3200x1600) and the last sixteen pictures, and hands a strip over whole
+unless it takes longer than 20 ms; straightened 180/360 degree previews use
+a mapping computed once per size and field of view. A strip then takes
+about 3 ms, 7 ms straightened, on the Frame.
 
 When a seek sets up a new decoder the renderer stays alive: the session
 sends `NV12_IPC_HOLD`, the renderer retains only the frame on screen and

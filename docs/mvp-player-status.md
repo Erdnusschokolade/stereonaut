@@ -35,7 +35,12 @@ dav1d AV1 bis 4K auf der CPU (Standard an, siehe unten).
   sich (gehalten mit wachsenden Schritten: 10 s, nach 2,5 s 30 s, nach 5 s
   60 s); 0,5 s nach dem letzten Druck folgt der Sprung, danach läuft die
   Wiedergabe weiter, wenn sie vorher lief. Die Zeitanzeige bleibt bis zur
-  Landung auf dem Ziel.
+  Landung auf dem Ziel. Die Knöpfe −10/+10 im Panel verhalten sich gleich.
+- Beim Spulen mit Stick oder Knöpfen zeigt das Panel eine Trickplay-Leiste
+  (Ziel groß in der Mitte, je zwei Bilder davor und danach im Abstand der
+  Sprünge); beim Zeigen auf die Seek-Leiste ein einzelnes Bild, entprellt
+  gegen das Zittern des Controllers. Die Kacheln eines Titels lädt der
+  Player nach dem Start im Hintergrund vor.
 - Spulen ohne Neustart der Session auf den Keyframe in Spulrichtung (siehe
   Grenzen), das letzte Bild bleibt bis zum neuen stehen. Bis zum ersten
   Bild über Jellyfin: H.264 4K meist 0,15–0,2 s, HEVC 8K um 0,25 s,
