@@ -83,6 +83,13 @@
 #define SEEK_BURST_SCRUB 5
 #define SEEK_SCRUB_SETTLE 0.5
 
+/* Hovering or dragging the seek bar: the position follows the pointer only
+ * once it moved BAR_HYSTERESIS_PX (panel pixels) away, and the preview
+ * redraws the panel at most every PREVIEW_REDRAW_INTERVAL seconds. The
+ * hand's jitter otherwise redrew it (several ms on the CPU) every frame. */
+#define BAR_HYSTERESIS_PX 5.0f
+#define PREVIEW_REDRAW_INTERVAL 0.033
+
 /* Buttons beyond trigger and grip, for the controller bindings. Only
  * valve/frame_controller has them all (paths checked on the Frame with
  * tools/openxr-playback/xr-input-profile-probe.c: the right controller has
@@ -504,6 +511,9 @@ struct app {
      * hovered or dragged seek bar it was redrawn every frame (frame drops). */
     bool preview_strip;
     bool seek_by_binding; /* the pending seek came from seek_binding */
+    float bar_u;          /* steady pointer position on the bar, -1 none */
+    bool preview_redraw_pending;
+    double preview_redraw_time; /* monotonic seconds */
     bool preview_perspective; /* straighten 180/360 degree previews */
     int preview_fov;          /* degrees, one of player_ui_preview_fovs */
     VkCommandBuffer ui_command;
@@ -3228,9 +3238,20 @@ static void show_panel(struct app *app, const XrSpaceLocation *head,
 static void update_preview(struct app *app, int64_t position_us, bool strip)
 {
     bool visible = position_us >= 0 && app->duration_us > 0;
-    if (visible != app->preview_visible || strip != app->preview_strip ||
-        (visible && position_us / 1000000 != app->preview_us / 1000000))
+    if (visible != app->preview_visible || strip != app->preview_strip)
         app->ui_dirty = true;
+    else if (visible && position_us / 1000000 != app->preview_us / 1000000)
+        app->preview_redraw_pending = true;
+    double now = monotonic_seconds();
+    if (app->ui_dirty) {
+        app->preview_redraw_pending = false;
+        app->preview_redraw_time = now;
+    } else if (app->preview_redraw_pending &&
+               now - app->preview_redraw_time >= PREVIEW_REDRAW_INTERVAL) {
+        app->preview_redraw_pending = false;
+        app->preview_redraw_time = now;
+        app->ui_dirty = true;
+    }
     app->preview_visible = visible;
     app->preview_strip = strip;
     if (!visible)
@@ -3243,6 +3264,16 @@ static void update_preview(struct app *app, int64_t position_us, bool strip)
     trickplay_request(app->trickplay, position_us, spacing,
                       app->stereo_layout, app->projection_mode,
                       app->preview_perspective ? app->preview_fov : 0);
+}
+
+/* Seek bar position `u` (0..1 across the panel) with hysteresis, see
+ * BAR_HYSTERESIS_PX. */
+static float steady_bar_u(struct app *app, float u)
+{
+    if (app->bar_u < 0.0f ||
+        fabsf(u - app->bar_u) * UI_WIDTH >= BAR_HYSTERESIS_PX)
+        app->bar_u = u;
+    return app->bar_u;
 }
 
 /* ---- controller bindings ---------------------------------------------- */
@@ -3849,7 +3880,8 @@ static void sync_player_input(struct app *app, XrTime time)
     if (app->scrub_hand >= 0) {
         struct hand_input *input = &hands[app->scrub_hand];
         if (input->aim_valid && input->hit.plane) {
-            int64_t target = scrub_target_us(app, input->hit.u);
+            int64_t target =
+                scrub_target_us(app, steady_bar_u(app, input->hit.u));
             if (target != app->scrub_us) {
                 app->scrub_us = target;
                 app->ui_dirty = true;
@@ -3886,7 +3918,9 @@ static void sync_player_input(struct app *app, XrTime time)
                                         hands[hand].hit.v);
         if (action == PLAYER_UI_SEEK_BAR) {
             app->scrub_hand = (int)hand;
-            app->scrub_us = scrub_target_us(app, hands[hand].hit.u);
+            app->bar_u = -1.0f; /* starts where the trigger was pulled */
+            app->scrub_us =
+                scrub_target_us(app, steady_bar_u(app, hands[hand].hit.u));
             app->ui_dirty = true;
         } else if (action == PLAYER_UI_VIEW_POPUP) {
             app->popup_open = !app->popup_open;
@@ -3947,7 +3981,8 @@ static void sync_player_input(struct app *app, XrTime time)
             hover = player_ui_hit_test(&state, hands[hand].hit.u,
                                        hands[hand].hit.v);
             if (hover == PLAYER_UI_SEEK_BAR)
-                hover_us = scrub_target_us(app, hands[hand].hit.u);
+                hover_us = scrub_target_us(
+                    app, steady_bar_u(app, hands[hand].hit.u));
             place_pointer(app,
                           (XrVector3f){app->panel_x, app->panel_y,
                                        app->panel_z},
@@ -3957,6 +3992,8 @@ static void sync_player_input(struct app *app, XrTime time)
         if (app->scrub_hand >= 0)
             hover = PLAYER_UI_SEEK_BAR;
     }
+    if (hover_us < 0 && app->scrub_hand < 0)
+        app->bar_u = -1.0f;
     if (hover != app->ui_hover) {
         app->ui_hover = hover;
         app->ui_dirty = true;
@@ -6646,6 +6683,7 @@ int main(int argc, char **argv)
     app.panel_z = -1.3f;
     app.grab_hand = -1;
     app.scrub_hand = -1;
+    app.bar_u = -1.0f;
     app.learn_action = -1;
     app.home_pending = true;
     app.settings_tab = PLAYER_UI_TAB_PLAYBACK;
@@ -6716,7 +6754,7 @@ int main(int argc, char **argv)
                     app.preview[i] = strip[i];
                 }
                 if (app.preview_visible)
-                    app.ui_dirty = true;
+                    app.preview_redraw_pending = true; /* update_preview */
             }
             if (trickplay_details(app.trickplay, &app.details)) {
                 app.details_valid = true;
