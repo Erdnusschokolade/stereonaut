@@ -213,6 +213,23 @@ struct button {
     bool suppressed; /* ignore the current press until a genuine release */
 };
 
+/* Frame timing, logged every FRAME_TIMING_INTERVAL seconds (frame_timing):
+ * frames SteamVR waited for (missed: the predicted display time skipped a
+ * period), the wait in xrWaitFrame, the CPU time of a frame and the GPU
+ * time (the frame waits for its commands), split into frames that copied a
+ * new video picture from system memory (PC) and frames that did not, and
+ * the panel redraws. */
+#define FRAME_TIMING_INTERVAL 5.0
+struct frame_timing {
+    double window_start; /* monotonic seconds */
+    XrTime last_display;
+    uint32_t frames, rendered, missed, ui_redraws;
+    double wait_ms, cpu_ms, cpu_max_ms, ui_ms, ui_max_ms;
+    double gpu_ms[2], gpu_max_ms[2]; /* [1]: with a video copy */
+    uint32_t gpu_frames[2];
+    double period_ms;
+};
+
 /* A controller model on the GPU (record_overlay). */
 struct gpu_model {
     struct gltf_model mesh;
@@ -525,6 +542,7 @@ struct app {
     uint64_t xr_frames, rendered_frames, session_changes;
     uint64_t received_frames, released_frames;
     uint64_t unique_video_frames, repeated_video_frames;
+    struct frame_timing timing;
     uint64_t hidden_video_frames, pipeline_skipped_frames;
 };
 
@@ -6186,6 +6204,60 @@ static void update_home(struct app *app, XrTime time)
     }
 }
 
+static void note_max(double *max, double value)
+{
+    if (value > *max)
+        *max = value;
+}
+
+/* After xrWaitFrame: counts the frame and missed display periods and logs
+ * the window when it is over. */
+static void timing_frame(struct app *app, const XrFrameState *state,
+                         double waited_ms)
+{
+    struct frame_timing *timing = &app->timing;
+    double now = monotonic_seconds();
+    if (timing->window_start == 0.0)
+        timing->window_start = now;
+    XrDuration period = state->predictedDisplayPeriod;
+    if (timing->last_display && period > 0) {
+        XrDuration delta = state->predictedDisplayTime - timing->last_display;
+        if (delta > period * 3 / 2)
+            timing->missed += (uint32_t)((delta + period / 2) / period) - 1U;
+    }
+    timing->last_display = state->predictedDisplayTime;
+    timing->period_ms = period / 1e6;
+    timing->frames++;
+    timing->wait_ms += waited_ms;
+    if (now - timing->window_start < FRAME_TIMING_INTERVAL)
+        return;
+    uint32_t rendered = timing->rendered ? timing->rendered : 1U;
+    uint32_t still = timing->gpu_frames[0] ? timing->gpu_frames[0] : 1U;
+    uint32_t copied = timing->gpu_frames[1] ? timing->gpu_frames[1] : 1U;
+    uint32_t frames = timing->frames;
+    printf("frame_timing frames=%u rendered=%u missed=%u period_ms=%.1f"
+           " wait_ms=%.1f cpu_ms=%.1f/%.1f gpu_ms=%.1f/%.1f"
+           " copy_frames=%u copy_gpu_ms=%.1f/%.1f ui=%u ui_ms=%.1f/%.1f\n",
+           frames, timing->rendered, timing->missed, timing->period_ms,
+           timing->wait_ms / frames, timing->cpu_ms / rendered,
+           timing->cpu_max_ms, timing->gpu_ms[0] / still,
+           timing->gpu_max_ms[0], timing->gpu_frames[1],
+           timing->gpu_ms[1] / copied, timing->gpu_max_ms[1],
+           timing->ui_redraws,
+           timing->ui_redraws ? timing->ui_ms / timing->ui_redraws : 0.0,
+           timing->ui_max_ms);
+    *timing = (struct frame_timing){.window_start = now,
+                                    .last_display = timing->last_display};
+}
+
+static void timing_ui(struct app *app, double started)
+{
+    double ms = (monotonic_seconds() - started) * 1e3;
+    app->timing.ui_redraws++;
+    app->timing.ui_ms += ms;
+    note_max(&app->timing.ui_max_ms, ms);
+}
+
 static void render_frame(struct app *app)
 {
     if (app->render_models_dirty) {
@@ -6196,7 +6268,11 @@ static void render_frame(struct app *app)
     }
     XrFrameState frame_state = {.type = XR_TYPE_FRAME_STATE};
     XrFrameWaitInfo wait = {.type = XR_TYPE_FRAME_WAIT_INFO};
+    double waiting = monotonic_seconds();
     need_xr("xrWaitFrame", xrWaitFrame(app->session, &wait, &frame_state));
+    double frame_started = monotonic_seconds();
+    timing_frame(app, &frame_state, (frame_started - waiting) * 1e3);
+    bool copied_video = false;
     XrFrameBeginInfo begin = {.type = XR_TYPE_FRAME_BEGIN_INFO};
     need_xr("xrBeginFrame", xrBeginFrame(app->session, &begin));
     ++app->xr_frames;
@@ -6204,12 +6280,18 @@ static void render_frame(struct app *app)
     update_home(app, frame_state.predictedDisplayTime);
     if (app->playing) {
         sync_player_input(app, frame_state.predictedDisplayTime);
-        if (app->ui_dirty)
+        if (app->ui_dirty) {
+            double drawing = monotonic_seconds();
             upload_ui(app);
+            timing_ui(app, drawing);
+        }
     } else {
         sync_browser_input(app, frame_state.predictedDisplayTime);
-        if (app->browser.dirty)
+        if (app->browser.dirty) {
+            double drawing = monotonic_seconds();
             upload_browser(app);
+            timing_ui(app, drawing);
+        }
     }
     if (!frame_state.shouldRender) {
         XrFrameEndInfo end = {.type = XR_TYPE_FRAME_END_INFO, .displayTime = frame_state.predictedDisplayTime,
@@ -6479,6 +6561,7 @@ static void render_frame(struct app *app)
         if (video->producer_wait_pending) {
             record_host_upload(app, video);
             video->producer_wait_pending = false;
+            copied_video = true;
         }
     }
     VkImageMemoryBarrier video_acquires[2] = {video_acquire, video_acquire};
@@ -6637,7 +6720,12 @@ static void render_frame(struct app *app)
         video->producer_wait_pending = false;
     }
     need_vk("vkQueueSubmit(render)", vkQueueSubmit(app->queue, 1, &submit, app->fence));
+    double submitted = monotonic_seconds();
     need_vk("vkWaitForFences(render completion)", vkWaitForFences(app->device, 1, &app->fence, VK_TRUE, UINT64_C(5000000000)));
+    double gpu_ms = (monotonic_seconds() - submitted) * 1e3;
+    app->timing.gpu_ms[copied_video] += gpu_ms;
+    app->timing.gpu_frames[copied_video]++;
+    note_max(&app->timing.gpu_max_ms[copied_video], gpu_ms);
     XrSwapchainImageReleaseInfo release = {.type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
     need_xr("xrReleaseSwapchainImage", xrReleaseSwapchainImage(app->swapchain, &release));
     for (uint32_t eye = 0;
@@ -6695,6 +6783,10 @@ static void render_frame(struct app *app)
         .layers = layers};
     need_xr("xrEndFrame", xrEndFrame(app->session, &end));
     ++app->rendered_frames;
+    double cpu_ms = (monotonic_seconds() - frame_started) * 1e3;
+    app->timing.rendered++;
+    app->timing.cpu_ms += cpu_ms;
+    note_max(&app->timing.cpu_max_ms, cpu_ms);
     if (!video)
         return;
     if (app->current_video_presented)

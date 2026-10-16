@@ -66,6 +66,45 @@ struct decoded_video {
     uint64_t preroll_drops;
 };
 
+/* Where the decoder thread spends its time, logged every
+ * DECODE_TIMING_INTERVAL seconds (decode_timing): downloading frames from
+ * the GPU, waiting for packets (demuxer, network) and for a free buffer
+ * (the renderer still holds them). Decoder thread only. */
+#define DECODE_TIMING_INTERVAL 5.0
+struct decode_timing {
+    double window_start;
+    unsigned frames;
+    double download_ms, download_max_ms;
+    double receive_ms;
+    double packet_wait_ms, buffer_wait_ms;
+};
+
+static double monotonic_ms(void)
+{
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return now.tv_sec * 1e3 + now.tv_nsec / 1e6;
+}
+
+static void log_decode_timing(struct decode_timing *timing, double now)
+{
+    if (timing->window_start == 0.0) {
+        timing->window_start = now;
+        return;
+    }
+    double window = now - timing->window_start;
+    if (window < DECODE_TIMING_INTERVAL * 1e3)
+        return;
+    unsigned frames = timing->frames ? timing->frames : 1;
+    printf("decode_timing frames=%u fps=%.1f download_ms=%.1f/%.1f"
+           " receive_ms=%.1f packet_wait_ms=%.0f buffer_wait_ms=%.0f\n",
+           timing->frames, timing->frames * 1e3 / window,
+           timing->download_ms / frames, timing->download_max_ms,
+           timing->receive_ms / frames, timing->packet_wait_ms,
+           timing->buffer_wait_ms);
+    *timing = (struct decode_timing){.window_start = now};
+}
+
 static void set_error(char *error, size_t size, const char *format, ...)
 {
     if (!error || !size)
@@ -473,7 +512,10 @@ static void *decode_worker(void *argument)
         return NULL;
     }
     bool draining = false;
+    struct decode_timing timing = {0};
     for (;;) {
+        double waited = monotonic_ms();
+        log_decode_timing(&timing, waited);
         pthread_mutex_lock(&video->mutex);
         int index = -1;
         while (!video->stopping && (index = free_buffer(video)) < 0)
@@ -482,13 +524,18 @@ static void *decode_worker(void *argument)
         pthread_mutex_unlock(&video->mutex);
         if (stopping)
             break;
+        double received = monotonic_ms();
+        timing.buffer_wait_ms += received - waited;
 
         int result = avcodec_receive_frame(video->codec, frame);
+        timing.receive_ms += monotonic_ms() - received;
         if (result == AVERROR(EAGAIN) && !draining) {
             struct media_packet packet;
             error[0] = '\0';
+            double popping = monotonic_ms();
             int popped = media_pipeline_pop_video(video->pipeline, &packet,
                                                   50, error, sizeof(error));
+            timing.packet_wait_ms += monotonic_ms() - popping;
             if (popped == 0)
                 continue;
             if (popped < 0) {
@@ -543,15 +590,21 @@ static void *decode_worker(void *argument)
             break;
         }
         if (hardware) {
+            double downloading = monotonic_ms();
             if (download_frame(video, (unsigned)index, frame, error,
                                sizeof(error)) < 0) {
                 fail(video, error);
                 break;
             }
+            double download = monotonic_ms() - downloading;
+            timing.download_ms += download;
+            if (download > timing.download_max_ms)
+                timing.download_max_ms = download;
         } else {
             copy_frame(video, (unsigned)index, frame);
         }
         av_frame_unref(frame);
+        timing.frames++;
         pthread_mutex_lock(&video->mutex);
         video->states[index] = BUFFER_READY;
         unsigned slot = (video->ready_first + video->ready_count) %
