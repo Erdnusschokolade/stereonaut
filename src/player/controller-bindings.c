@@ -8,9 +8,9 @@
 #define COMBO(modifier, input) {(input), (modifier)}
 
 const struct binding_action_info binding_action_info[BINDING_ACTION_COUNT] = {
-    [BINDING_SEEK_BACK] = {"−10 s", "seek_back", false,
+    [BINDING_SEEK_BACK] = {"−10 s", "seek_back", true,
                            BIND(BINDING_ANY_STICK_LEFT)},
-    [BINDING_SEEK_FORWARD] = {"+10 s", "seek_forward", false,
+    [BINDING_SEEK_FORWARD] = {"+10 s", "seek_forward", true,
                               BIND(BINDING_ANY_STICK_RIGHT)},
     [BINDING_VOLUME_DOWN] = {N_("Volume down"), "volume_down", true,
                              BIND(BINDING_ANY_STICK_DOWN)},

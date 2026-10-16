@@ -73,6 +73,16 @@
 #define BINDING_REPEAT_DELAY 0.5
 #define BINDING_REPEAT_INTERVAL 0.15
 
+/* Seeking with the bindings (seek_binding): presses less than
+ * SEEK_BURST_GAP apart form a burst. Up to its fourth press each one
+ * seeks at once; from the fifth, or once a held input repeats, playback
+ * pauses and only the seek bar (with the trickplay preview) moves until
+ * the input rests for SEEK_SCRUB_SETTLE. Held, the steps grow. */
+#define SEEK_STEP_US INT64_C(10000000)
+#define SEEK_BURST_GAP 0.5
+#define SEEK_BURST_SCRUB 5
+#define SEEK_SCRUB_SETTLE 0.5
+
 /* Buttons beyond trigger and grip, for the controller bindings. Only
  * valve/frame_controller has them all (paths checked on the Frame with
  * tools/openxr-playback/xr-input-profile-probe.c: the right controller has
@@ -412,6 +422,15 @@ struct app {
     int scrub_hand;
     int64_t scrub_us;
     bool seek_pending;
+    /* Seeking with the bindings (seek_binding). */
+    int seek_burst;          /* quick presses in a row */
+    double seek_press_time;  /* last press, monotonic seconds */
+    double seek_step_time;   /* last press or repeat */
+    bool seek_scrubbing;     /* paused, only scrub_us moves */
+    bool seek_resume;        /* played before: play on after the seek */
+    bool seek_show_panel;    /* show the panel in the next input pass */
+    uint64_t seek_serial;    /* number of the last SEEK_TO sent */
+    uint64_t seek_landing;   /* the one the session carries out (HOLD) */
     uint32_t player_state;
     int64_t position_us;
     int64_t duration_us;
@@ -894,11 +913,13 @@ static void change_volume(struct app *app, int direction)
     app->ui_dirty = true;
 }
 
-static void send_seek_to(struct app *app, int64_t target_us)
+/* `state`: NV12_PLAYER_PLAYING or _PAUSED after the seek, 0 keeps it. */
+static void send_seek_to(struct app *app, int64_t target_us, uint32_t state)
 {
     struct nv12_ipc_message message = {
         .type = NV12_IPC_ACTION, .index = NV12_ACTION_SEEK_TO,
-        .position_us = target_us,
+        .position_us = target_us, .player_state = state,
+        .frame_index = ++app->seek_serial,
     };
     send_message(app, &message);
 }
@@ -1154,7 +1175,15 @@ static void receive_frame_messages(struct app *app)
             app->video_buffers[message.index].producer_wait_pending = true;
             if (app->awaiting_frame) {
                 app->awaiting_frame = false;
-                app->seek_pending = false;
+                /* The picture of an earlier seek keeps showing the target
+                 * of the last one (else the time jumps back and forth). */
+                if (app->seek_landing == app->seek_serial &&
+                    app->seek_pending) {
+                    /* Until the next STATUS: the last one predates the
+                     * seek. */
+                    app->position_us = app->scrub_us;
+                    app->seek_pending = false;
+                }
                 app->ui_dirty = true;
             }
             /* The held frame is superseded by the new stream. */
@@ -1164,9 +1193,11 @@ static void receive_frame_messages(struct app *app)
             release_current_video(app);
             send_ipc(app, NV12_IPC_FLUSHED, 0);
         } else if (message.type == NV12_IPC_HOLD) {
+            app->seek_landing = message.frame_index;
             hold_current_frame(app);
             send_ipc(app, NV12_IPC_HELD, 0);
         } else if (message.type == NV12_IPC_SEEKING) {
+            app->seek_landing = message.frame_index;
             app->awaiting_frame = true;
             app->ui_dirty = true;
             printf("video_seeking\n");
@@ -2347,7 +2378,8 @@ static struct player_ui_state player_state(const struct app *app)
         .position_us = app->position_us,
         .duration_us = app->duration_us,
         .scrub_us = app->scrub_us,
-        .scrubbing = app->scrub_hand >= 0 || app->seek_pending,
+        .scrubbing = app->scrub_hand >= 0 || app->seek_pending ||
+                     app->seek_scrubbing,
         .loading = app->awaiting_frame,
         .paused = app->player_state == NV12_PLAYER_PAUSED,
         .grabbed = app->grab_hand >= 0,
@@ -3249,16 +3281,69 @@ static void skip_title(struct app *app, int direction)
         send_control(app, PLAYER_UI_STOP_REQUESTED, NULL, 0);
 }
 
-static void run_binding(struct app *app, int action)
+/* One step of seeking with the bindings, see SEEK_BURST_GAP. Targets are
+ * absolute and continue from a pending one, so the session lands where
+ * the seek bar shows. */
+static void seek_binding(struct app *app, int direction, bool repeated)
+{
+    if (app->scrub_hand >= 0)
+        return;
+    if (app->duration_us <= 0) {
+        /* No status yet (loading): only the session knows the position. */
+        send_ipc(app, NV12_IPC_ACTION,
+                 direction > 0 ? NV12_ACTION_SEEK_FORWARD
+                               : NV12_ACTION_SEEK_BACK);
+        return;
+    }
+    double now = monotonic_seconds();
+    int64_t step = SEEK_STEP_US;
+    if (repeated) {
+        double held_for = now - app->seek_press_time;
+        step *= held_for > 5.0 ? 6 : held_for > 2.5 ? 3 : 1;
+    } else {
+        app->seek_burst = now - app->seek_press_time < SEEK_BURST_GAP
+                              ? app->seek_burst + 1
+                              : 1;
+        app->seek_press_time = now;
+    }
+    app->seek_step_time = now;
+    int64_t target = app->seek_pending || app->seek_scrubbing
+                         ? app->scrub_us
+                         : app->position_us;
+    target += direction * step;
+    if (target >= app->duration_us)
+        target = app->duration_us - 1;
+    if (target < 0)
+        target = 0;
+    app->scrub_us = target;
+    app->ui_dirty = true;
+    if (!app->seek_scrubbing &&
+        (repeated || app->seek_burst >= SEEK_BURST_SCRUB)) {
+        app->seek_scrubbing = true;
+        app->seek_resume = app->player_state == NV12_PLAYER_PLAYING;
+        struct nv12_ipc_message pause = {
+            .type = NV12_IPC_ACTION, .index = NV12_ACTION_TOGGLE_PAUSE,
+            .player_state = NV12_PLAYER_PAUSED,
+        };
+        send_message(app, &pause);
+        app->seek_show_panel = true;
+        printf("seek_scrub=start target_us=%" PRId64 "\n", target);
+    }
+    if (app->seek_scrubbing) {
+        app->last_input_time = now;
+        return;
+    }
+    app->seek_pending = true;
+    send_seek_to(app, target, 0);
+}
+
+static void run_binding(struct app *app, int action, bool repeated)
 {
     printf("binding_action %s\n", binding_action_info[action].key);
     switch (action) {
     case BINDING_SEEK_BACK:
     case BINDING_SEEK_FORWARD:
-        if (app->scrub_hand < 0 && !app->seek_pending)
-            send_ipc(app, NV12_IPC_ACTION,
-                     action == BINDING_SEEK_FORWARD ? NV12_ACTION_SEEK_FORWARD
-                                                    : NV12_ACTION_SEEK_BACK);
+        seek_binding(app, action == BINDING_SEEK_FORWARD ? 1 : -1, repeated);
         break;
     case BINDING_VOLUME_DOWN:
     case BINDING_VOLUME_UP:
@@ -3333,7 +3418,7 @@ static void press_input(struct app *app, int input, double now)
             return; /* acts on release unless used as a modifier */
         if (action < 0)
             return;
-        run_binding(app, action);
+        run_binding(app, action, false);
         if (binding_action_info[action].repeat) {
             app->input_repeat[input] = action + 1;
             app->input_repeat_time[input] = now + BINDING_REPEAT_DELAY;
@@ -3362,7 +3447,7 @@ static void release_input(struct app *app, int input)
     int modifier;
     int action = binding_match(app->bindings, input, none, &modifier);
     if (action >= 0)
-        run_binding(app, action);
+        run_binding(app, action, false);
 }
 
 /* Turns stick directions and buttons into actions; while an action waits
@@ -3389,7 +3474,7 @@ static void process_bindings(struct app *app, const bool grip[2])
             release_input(app, input);
         } else if (down[input] && app->input_repeat[input] &&
                    now >= app->input_repeat_time[input]) {
-            run_binding(app, app->input_repeat[input] - 1);
+            run_binding(app, app->input_repeat[input] - 1, true);
             app->input_repeat_time[input] = now + BINDING_REPEAT_INTERVAL;
         }
     }
@@ -3628,6 +3713,25 @@ static void sync_player_input(struct app *app, XrTime time)
     bool grips[2];
     read_grips(app, hands, grips);
     process_bindings(app, grips);
+    if (app->seek_show_panel) {
+        app->seek_show_panel = false;
+        if (!app->ui_visible) {
+            show_panel(app, &head, head_valid);
+            app->auto_hidden = false;
+        }
+    }
+    /* Seeking with the bindings: seek once the input rests, and play on
+     * from there if it played before. */
+    if (app->seek_scrubbing &&
+        monotonic_seconds() - app->seek_step_time >= SEEK_SCRUB_SETTLE) {
+        app->seek_scrubbing = false;
+        app->seek_pending = true;
+        send_seek_to(app, app->scrub_us,
+                     app->seek_resume ? NV12_PLAYER_PLAYING : 0);
+        printf("seek_scrub=done target_us=%" PRId64 " resume=%d\n",
+               app->scrub_us, app->seek_resume);
+        app->seek_resume = false;
+    }
     for (unsigned hand = 0; hand < 2; ++hand)
         app->lasers[hand] = (struct laser){
             .valid = hands[hand].aim_valid,
@@ -3660,7 +3764,7 @@ static void sync_player_input(struct app *app, XrTime time)
     if (app->ui_visible && app->autohide > 0 &&
         app->player_state == NV12_PLAYER_PLAYING && !app->popup_open &&
         !app->awaiting_frame && app->grab_hand < 0 && app->scrub_hand < 0 &&
-        now - app->last_input_time > app->autohide) {
+        !app->seek_scrubbing && now - app->last_input_time > app->autohide) {
         app->ui_visible = false;
         app->auto_hidden = true;
         send_panel_state(app);
@@ -3735,7 +3839,7 @@ static void sync_player_input(struct app *app, XrTime time)
             app->scrub_hand = -1;
             app->seek_pending = true;
             app->ui_dirty = true;
-            send_seek_to(app, app->scrub_us);
+            send_seek_to(app, app->scrub_us, 0);
         }
     }
     /* Key colour picker: the trigger aimed at the video, not the panel;
@@ -3831,7 +3935,12 @@ static void sync_player_input(struct app *app, XrTime time)
         app->ui_hover = hover;
         app->ui_dirty = true;
     }
-    update_preview(app, app->scrub_hand >= 0 ? app->scrub_us : hover_us);
+    /* While a seek is pending or the bindings scrub, the preview shows
+     * the target (only with the panel visible: it is part of it). */
+    if (app->scrub_hand >= 0 ||
+        (app->ui_visible && (app->seek_pending || app->seek_scrubbing)))
+        hover_us = app->scrub_us;
+    update_preview(app, hover_us);
     if (pointer_visible != app->ui_pointer_visible ||
         (pointer_visible &&
          (pointer_x != app->ui_pointer_x ||
@@ -4395,6 +4504,10 @@ static void end_playback(struct app *app)
     app->current_video_presented = false;
     app->awaiting_frame = true;
     app->seek_pending = false;
+    app->seek_scrubbing = false;
+    app->seek_resume = false;
+    app->seek_show_panel = false;
+    app->seek_burst = 0;
     app->grab_hand = -1;
     app->scrub_hand = -1;
     app->learn_action = -1;

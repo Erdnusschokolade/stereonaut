@@ -52,7 +52,8 @@ enum nv12_ipc_type {
     NV12_IPC_PANEL = 10,
     /* Session -> renderer before a seek restart: keep showing the current
      * frame, drop every other buffer and wait for a new INIT. The renderer
-     * process survives the session re-exec. */
+     * process survives the session re-exec. frame_index: the number of the
+     * SEEK_TO being carried out (see nv12_player_action), 0 if none. */
     NV12_IPC_HOLD = 11,
     NV12_IPC_HELD = 12,
     /* Renderer -> session: the viewer changed projection, stereo layout,
@@ -67,7 +68,7 @@ enum nv12_ipc_type {
     NV12_IPC_VOLUME = 15,
     /* Session -> renderer: a seek within the running session started; keep
      * showing the current frame (released with the next FRAME as usual)
-     * and show the loading state until then. */
+     * and show the loading state until then. frame_index as for HOLD. */
     NV12_IPC_SEEKING = 16,
 };
 
@@ -97,6 +98,10 @@ enum nv12_player_state {
     NV12_PLAYER_PAUSED = 2,
 };
 
+/* ACTION messages may set player_state: TOGGLE_PAUSE then sets that state
+ * instead of toggling, SEEK_TO plays or pauses after the seek. 0 keeps the
+ * plain meaning. SEEK_TO carries a number in frame_index that HOLD or
+ * SEEKING repeat, so the renderer knows which of several seeks landed. */
 enum nv12_player_action {
     NV12_ACTION_TOGGLE_PAUSE = 1,
     NV12_ACTION_SEEK_BACK = 2,

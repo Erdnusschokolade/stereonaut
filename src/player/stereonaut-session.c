@@ -182,8 +182,14 @@ static int video_fd = -1;
 static int renderer_fd = -1;
 static pid_t renderer_pid = -1;
 static bool renderer_outstanding[MAX_CAPTURE_BUFFERS];
-static uint32_t renderer_action;
+static uint32_t renderer_action; /* seek or back, 0 = none */
 static int64_t renderer_action_position_us;
+static uint32_t renderer_action_state; /* enum nv12_player_state or 0 */
+static uint64_t renderer_action_serial; /* SEEK_TO number, see HOLD */
+/* Pause has its own slot: in one batch of messages it must not replace a
+ * seek (whose HOLD the renderer waits for). */
+static bool renderer_pause_action;
+static uint32_t renderer_pause_state;
 static struct panel_state panel_state;
 /* Per-title viewing settings: the key identifies the title in titles.json;
  * the renderer reports changes made on the panel. */
@@ -819,8 +825,15 @@ static bool process_renderer_messages(
             if (message.index < NV12_ACTION_TOGGLE_PAUSE ||
                 message.index > NV12_ACTION_SEEK_TO)
                 fail_message("invalid renderer player action");
-            renderer_action = message.index;
-            renderer_action_position_us = message.position_us;
+            if (message.index == NV12_ACTION_TOGGLE_PAUSE) {
+                renderer_pause_action = true;
+                renderer_pause_state = message.player_state;
+            } else {
+                renderer_action = message.index;
+                renderer_action_position_us = message.position_us;
+                renderer_action_state = message.player_state;
+                renderer_action_serial = message.frame_index;
+            }
         } else if (message.type == NV12_IPC_VIEW) {
             if (message.projection_mode > NV12_PROJECTION_FISHEYE ||
                 message.fisheye_fov < 120 || message.fisheye_fov > 240 ||
@@ -895,10 +908,10 @@ static void flush_renderer(
  * dropped every other import, so this process may close the decoder. The
  * renderer stays alive and is adopted by the re-executed session. */
 static void hold_renderer(struct capture_buffer buffers[MAX_CAPTURE_BUFFERS],
-                          unsigned count)
+                          unsigned count, uint64_t seek_serial)
 {
     renderer_held = false;
-    send_renderer_message(NV12_IPC_HOLD, 0, 0);
+    send_renderer_message(NV12_IPC_HOLD, 0, seek_serial);
     double deadline = monotonic_seconds() + 5.0;
     while (!renderer_held) {
         process_renderer_messages(buffers, count);
@@ -2257,6 +2270,7 @@ struct transport {
     int64_t requested_start_us; /* its seek target */
     int64_t from_us;            /* and the position it was requested at */
     double requested_at;        /* monotonic_seconds */
+    uint64_t requested_serial;  /* the renderer's SEEK_TO number */
     double last_status_sent;
 };
 
@@ -2269,6 +2283,8 @@ static void run_test_seek(struct playback_options *options, uint64_t frames)
         return;
     renderer_action = NV12_ACTION_SEEK_TO;
     renderer_action_position_us = options->test_seek_us[next];
+    renderer_action_state = 0;
+    renderer_action_serial = 0;
     options->test_seek_next++;
     printf("seek_test frames=%" PRIu64 " target_us=%" PRId64 "\n", frames,
            options->test_seek_us[next]);
@@ -2284,9 +2300,12 @@ static double update_transport(struct transport *transport,
                                double now)
 {
     double resumed_after = 0.0;
-    if (renderer_action == NV12_ACTION_TOGGLE_PAUSE) {
+    bool paused = renderer_pause_state == NV12_PLAYER_PAUSED ||
+                  (renderer_pause_state != NV12_PLAYER_PLAYING &&
+                   !transport->paused);
+    if (renderer_pause_action && paused != transport->paused) {
         char error[512] = {0};
-        transport->paused = !transport->paused;
+        transport->paused = paused;
         if (media_pipeline_pause(pipeline, transport->paused, error,
                                  sizeof(error)) < 0) {
             fprintf(stderr, "change playback pause state: %s\n", error);
@@ -2308,9 +2327,11 @@ static double update_transport(struct transport *transport,
                                status_position_us(pipeline, start_us),
                                transport->paused, audio_started);
         transport->last_status_sent = now;
-    } else if (renderer_action == NV12_ACTION_SEEK_BACK ||
-               renderer_action == NV12_ACTION_SEEK_FORWARD ||
-               renderer_action == NV12_ACTION_SEEK_TO) {
+    }
+    renderer_pause_action = false;
+    if (renderer_action == NV12_ACTION_SEEK_BACK ||
+        renderer_action == NV12_ACTION_SEEK_FORWARD ||
+        renderer_action == NV12_ACTION_SEEK_TO) {
         int64_t position = media_pipeline_clock_us(pipeline);
         if (position == AV_NOPTS_VALUE)
             position = start_us;
@@ -2330,6 +2351,12 @@ static double update_transport(struct transport *transport,
         transport->from_us = position;
         transport->requested_at = now;
         transport->requested = renderer_action;
+        transport->requested_serial = renderer_action_serial;
+        /* Taken over as the start state after the seek. */
+        if (renderer_action_state == NV12_PLAYER_PLAYING)
+            transport->paused = false;
+        else if (renderer_action_state == NV12_PLAYER_PAUSED)
+            transport->paused = true;
         printf("player_action=%u position_us=%" PRId64 " target_us=%" PRId64
                "\n",
                renderer_action, position, target);
@@ -2551,7 +2578,8 @@ static int play_decoded(char **argv, struct playback_options *options,
         if (transport.requested && transport.requested != NV12_ACTION_BACK) {
             /* Seek within the session; a failure falls back to the
              * restart below. */
-            send_renderer_message(NV12_IPC_SEEKING, 0, 0);
+            send_renderer_message(NV12_IPC_SEEKING, 0,
+                                  transport.requested_serial);
             decoded_video_stop(decoded_video);
             if (media_pipeline_seek(pipeline, transport.requested_start_us,
                                     transport.from_us,
@@ -2604,7 +2632,7 @@ static int play_decoded(char **argv, struct playback_options *options,
             seek_started = 0.0;
             seek_requested_at = 0.0;
         }
-        if (!audio_started && options->start_paused) {
+        if (!audio_started && (options->start_paused || transport.paused)) {
             /* The audio clock starts with the next "play". */
             transport.paused = true;
             transport.pause_started = last_progress;
@@ -2659,7 +2687,8 @@ static int play_decoded(char **argv, struct playback_options *options,
         if (transport.requested == NV12_ACTION_BACK)
             wait_renderer(false);
         else
-            hold_renderer(buffers, frames->count);
+            hold_renderer(buffers, frames->count,
+                          transport.requested_serial);
         decoded_video_close(&decoded_video);
         volume_pipeline = NULL;
         media_pipeline_close(&pipeline);
@@ -2967,7 +2996,8 @@ open_decoder:
              * failure falls back to reopening the decoder below. Not with
              * Main10 (TP10): Iris refused STREAMON every time, also with
              * only the OUTPUT queue stopped and restarted. */
-            send_renderer_message(NV12_IPC_SEEKING, 0, 0);
+            send_renderer_message(NV12_IPC_SEEKING, 0,
+                                  transport.requested_serial);
             enum v4l2_buf_type output_type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
             enum v4l2_buf_type capture_type =
                 V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
@@ -3268,7 +3298,8 @@ open_decoder:
                         seek_started = 0.0;
                         seek_requested_at = 0.0;
                     }
-                    if (!audio_started && options.start_paused) {
+                    if (!audio_started &&
+                        (options.start_paused || transport.paused)) {
                         /* The audio clock starts with the next "play". */
                         transport.paused = true;
                         transport.pause_started = monotonic_seconds();
@@ -3419,7 +3450,8 @@ open_decoder:
         if (transport.requested == NV12_ACTION_BACK || !capture_started)
             wait_renderer(false);
         else
-            hold_renderer(captures, capture_count);
+            hold_renderer(captures, capture_count,
+                          transport.requested_serial);
         /* After a failed seek in place the queues are already off, and
          * Iris may reject STREAMOFF (EINVAL after a refused STREAMON);
          * closing the device below cleans up either way. */
