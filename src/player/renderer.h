@@ -58,6 +58,7 @@
 #include "session-ipc.h"
 #include "xr-input.h"
 #include "input-bindings.h"
+#include "ui-control.h"
 
 #define ARRAY_COUNT(a) (sizeof(a) / sizeof((a)[0]))
 #define UBO_STRIDE 512U
@@ -68,13 +69,6 @@
 #define UI_PANEL_WIDTH_METERS PLAYER_UI_PANEL_WIDTH_METERS
 #define PC_RENDER_SCALE 1.3f
 #define UI_PANEL_HEIGHT_METERS PLAYER_UI_PANEL_HEIGHT_METERS
-#define GRAB_RECENTER_COS 0.5f
-/* Hovering or dragging the seek bar: the position follows the pointer only
- * once it moved BAR_HYSTERESIS_PX (panel pixels) away, and the preview
- * redraws the panel at most every PREVIEW_REDRAW_INTERVAL seconds. The
- * hand's jitter otherwise redrew it (several ms on the CPU) every frame. */
-#define BAR_HYSTERESIS_PX 5.0f
-#define PREVIEW_REDRAW_INTERVAL 0.033
 
 struct view_uniform {
     struct mat4 mvp;
@@ -248,12 +242,8 @@ struct app {
 void send_control(struct app *app, uint32_t type, const char *path,
                   int64_t start_us);
 
-/* Still in stereonaut-renderer.c, used by the modules split off so far. */
-void save_adjust(const struct app *app, int index);
-void change_volume(struct app *app, int direction);
-void change_adjust(struct app *app, int control);
-struct player_ui_state player_state(const struct app *app);
-struct player_ui_state settings_state(const struct app *app);
+/* stereonaut-renderer.c: counts a panel redraw that began at `started`
+ * (monotonic seconds) in the frame timing. */
 void timing_ui(struct app *app, double started);
 
 #endif
