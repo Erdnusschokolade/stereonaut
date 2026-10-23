@@ -138,8 +138,8 @@ static VkPipeline overlay_pipeline(struct app *app, const char *vertex_path,
     };
     VkPipeline pipeline = VK_NULL_HANDLE;
     need_vk("vkCreateGraphicsPipelines(overlay)",
-            vkCreateGraphicsPipelines(app->gpu.device, VK_NULL_HANDLE, 1, &info,
-                                      NULL, &pipeline));
+            vkCreateGraphicsPipelines(app->gpu.device, VK_NULL_HANDLE, 1,
+                                      &info, NULL, &pipeline));
     vkDestroyShaderModule(app->gpu.device, vert, NULL);
     vkDestroyShaderModule(app->gpu.device, frag, NULL);
     return pipeline;
@@ -289,8 +289,9 @@ void create_overlay(struct app *app)
         .subpassCount = 1, .pSubpasses = &subpass,
         .dependencyCount = 1, .pDependencies = &dependency,
     };
-    need_vk("vkCreateRenderPass(overlay)",
-            vkCreateRenderPass(app->gpu.device, &pass, NULL, &app->overlay.pass));
+    need_vk(
+        "vkCreateRenderPass(overlay)",
+        vkCreateRenderPass(app->gpu.device, &pass, NULL, &app->overlay.pass));
     for (uint32_t eye = 0; eye < 2; ++eye) {
         VkImageViewCreateInfo view = {
             .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
@@ -368,9 +369,10 @@ void create_overlay(struct app *app)
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .bindingCount = 1, .pBindings = &binding,
     };
-    need_vk("vkCreateDescriptorSetLayout(model)",
-            vkCreateDescriptorSetLayout(app->gpu.device, &layout, NULL,
-                                        &app->overlay.model_descriptor_layout));
+    need_vk(
+        "vkCreateDescriptorSetLayout(model)",
+        vkCreateDescriptorSetLayout(app->gpu.device, &layout, NULL,
+                                    &app->overlay.model_descriptor_layout));
     VkDescriptorPoolSize size = {
         .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
         .descriptorCount = RENDER_MODELS_MAX,
@@ -389,8 +391,10 @@ void create_overlay(struct app *app)
     };
     VkPipelineLayoutCreateInfo model_layout = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-        .setLayoutCount = 1, .pSetLayouts = &app->overlay.model_descriptor_layout,
-        .pushConstantRangeCount = 1, .pPushConstantRanges = &model_push,
+        .setLayoutCount = 1,
+        .pSetLayouts = &app->overlay.model_descriptor_layout,
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &model_push,
     };
     need_vk("vkCreatePipelineLayout(model)",
             vkCreatePipelineLayout(app->gpu.device, &model_layout, NULL,
@@ -409,9 +413,9 @@ void create_overlay(struct app *app)
     app->overlay.model_pipeline = overlay_pipeline(
         app, "controller-model.vert.spv", "controller-model.frag.spv",
         app->overlay.model_pipeline_layout, true);
-    app->overlay.beam_pipeline = overlay_pipeline(app, "laser.vert.spv",
-                                          "laser.frag.spv",
-                                          app->overlay.beam_pipeline_layout, false);
+    app->overlay.beam_pipeline =
+        overlay_pipeline(app, "laser.vert.spv", "laser.frag.spv",
+                         app->overlay.beam_pipeline_layout, false);
     printf("overlay images=%u+%u dimensions=%ux%u maximum=%ux%u depth=%d"
            " drawn_into=%s\n",
            app->overlay.image_counts[0], app->overlay.image_counts[1],
@@ -465,7 +469,8 @@ static bool upload_model_texture(struct app *app, struct gpu_model *model)
     need_vk("vkCreateImage(model texture)",
             vkCreateImage(app->gpu.device, &image, NULL, &model->texture));
     VkMemoryRequirements requirements;
-    vkGetImageMemoryRequirements(app->gpu.device, model->texture, &requirements);
+    vkGetImageMemoryRequirements(app->gpu.device, model->texture,
+                                 &requirements);
     VkMemoryAllocateInfo allocation = {
         .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
         .allocationSize = requirements.size,
@@ -520,7 +525,8 @@ static bool upload_model_texture(struct app *app, struct gpu_model *model)
             vkWaitForFences(app->gpu.device, 1, &fence, VK_TRUE,
                             UINT64_C(5000000000)));
     vkDestroyFence(app->gpu.device, fence, NULL);
-    vkFreeCommandBuffers(app->gpu.device, app->render.command_pool, 1, &command);
+    vkFreeCommandBuffers(app->gpu.device, app->render.command_pool, 1,
+                         &command);
     vkDestroyBuffer(app->gpu.device, staging, NULL);
     vkFreeMemory(app->gpu.device, staging_memory, NULL);
     VkImageViewCreateInfo view = {
@@ -564,10 +570,13 @@ void upload_render_models(struct app *app)
         destroy_gpu_model(app, &app->overlay.gpu_models[i]);
     app->overlay.gpu_model_count = 0;
     need_vk("vkResetDescriptorPool(models)",
-            vkResetDescriptorPool(app->gpu.device, app->overlay.model_descriptor_pool, 0));
+            vkResetDescriptorPool(app->gpu.device,
+                                  app->overlay.model_descriptor_pool, 0));
     for (uint32_t i = 0; i < app->overlay.render_models.count; ++i) {
-        const struct render_model *source = &app->overlay.render_models.models[i];
-        struct gpu_model *model = &app->overlay.gpu_models[app->overlay.gpu_model_count];
+        const struct render_model *source =
+            &app->overlay.render_models.models[i];
+        struct gpu_model *model =
+            &app->overlay.gpu_models[app->overlay.gpu_model_count];
         char error[128] = "";
         if (gltf_model_load(source->glb, source->glb_size, &model->mesh,
                             error, sizeof(error)) < 0 ||
@@ -623,7 +632,8 @@ void record_overlay(struct app *app, VkCommandBuffer command,
     render_models_update(&app->overlay.render_models, time);
     for (uint32_t i = 0; i < app->overlay.gpu_model_count; ++i) {
         const struct render_model *source =
-            &app->overlay.render_models.models[app->overlay.gpu_models[i].source];
+            &app->overlay.render_models
+                 .models[app->overlay.gpu_models[i].source];
         XrSpaceLocation location = {.type = XR_TYPE_SPACE_LOCATION};
         const XrSpaceLocationFlags valid =
             XR_SPACE_LOCATION_POSITION_VALID_BIT |
@@ -709,7 +719,8 @@ void record_overlay(struct app *app, VkCommandBuffer command,
                     const struct gltf_primitive *primitive =
                         &model->mesh.primitives[node->first_primitive + p];
                     memcpy(push.color, primitive->color, sizeof(push.color));
-                    vkCmdPushConstants(command, app->overlay.model_pipeline_layout,
+                    vkCmdPushConstants(command,
+                                       app->overlay.model_pipeline_layout,
                                        VK_SHADER_STAGE_VERTEX_BIT |
                                            VK_SHADER_STAGE_FRAGMENT_BIT,
                                        0, sizeof(push), &push);
@@ -757,5 +768,59 @@ void record_overlay(struct app *app, VkCommandBuffer command,
             }
         }
         vkCmdEndRenderPass(command);
+    }
+}
+
+void record_frame_overlay(struct app *app, struct frame *f)
+{
+    /* Beams end at the panel they hit, else at the video (with a dot
+     * while a key colour is picked), else after a fixed length. */
+    f->overlay = app->overlay.wanted;
+    f->overlay_indices[0] = f->overlay_indices[1] = 0;
+    if (f->overlay) {
+        float beam_lengths[2];
+        bool beam_dots[2] = {false, false};
+        for (unsigned hand = 0; hand < 2; ++hand) {
+            const struct laser *laser = &app->overlay.lasers[hand];
+            beam_lengths[hand] = BEAM_DEFAULT_LENGTH;
+            float uv[2], distance;
+            XrVector3f direction = rotate_vector(laser->aim.orientation,
+                                                 (XrVector3f){0, 0, -1});
+            if (laser->panel_length > 0.0f) {
+                beam_lengths[hand] = laser->panel_length;
+                beam_dots[hand] = app->panels.panels_in_eye_images;
+            } else if (laser->valid && f->video &&
+                       video_uv_at_ray(app, laser->aim.position, direction,
+                                       f->center.pose.position,
+                                       f->world_to_dome, f->eye_position,
+                                       f->screen_model, uv, &distance)) {
+                beam_lengths[hand] = distance;
+                beam_dots[hand] = app->key_picking;
+            }
+        }
+        for (uint32_t eye = 0; eye < 2 && app->overlay.in_eye_images; ++eye)
+            f->overlay_indices[eye] = f->image_index;
+        for (uint32_t eye = 0; eye < 2 && !app->overlay.in_eye_images;
+             ++eye) {
+            XrSwapchainImageAcquireInfo overlay_acquire = {
+                .type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO,
+            };
+            need_xr("xrAcquireSwapchainImage(overlay)",
+                    xrAcquireSwapchainImage(app->overlay.swapchains[eye],
+                                            &overlay_acquire,
+                                            &f->overlay_indices[eye]));
+            XrSwapchainImageWaitInfo overlay_wait = {
+                .type = XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO,
+                .timeout = XR_INFINITE_DURATION,
+            };
+            need_xr("xrWaitSwapchainImage(overlay)",
+                    xrWaitSwapchainImage(app->overlay.swapchains[eye],
+                                         &overlay_wait));
+            need(f->overlay_indices[eye] < app->overlay.image_counts[eye],
+                 "invalid overlay swapchain index");
+        }
+        record_overlay(app, app->render.command, f->overlay_indices, f->views,
+                       f->state.predictedDisplayTime, f->panel,
+                       f->panel_matrix, beam_lengths, beam_dots);
     }
 }

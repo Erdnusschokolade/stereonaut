@@ -174,4 +174,7 @@ struct panel_hit panel_ray_at(XrVector3f center, float yaw,
  * panel texture coordinates and may lie outside [0,1). */
 struct panel_hit panel_ray(const struct app *app, XrPosef aim);
 
+struct frame;
+void place_panels(struct app *app, struct frame *f);
+
 #endif

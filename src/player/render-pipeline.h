@@ -89,4 +89,14 @@ bool video_uv_at_ray(const struct app *app, XrVector3f origin,
                      XrVector3f eye_position, struct mat4 screen_model,
                      float uv[2], float *distance);
 
+/* Phases of a frame (render_frame), in this order with the autofocus,
+ * panel and overlay phases between them. */
+struct frame;
+void place_video(struct app *app, struct frame *f);
+void write_view_uniforms(struct app *app, struct frame *f);
+void wait_render_fence(struct app *app, struct frame *f);
+void record_video_start(struct app *app, struct frame *f);
+void record_video_passes(struct app *app, struct frame *f);
+void submit_frame(struct app *app, struct frame *f);
+
 #endif

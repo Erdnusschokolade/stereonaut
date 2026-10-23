@@ -88,4 +88,8 @@ void record_overlay(struct app *app, VkCommandBuffer command,
                     struct mat4 panel_matrix, const float beam_lengths[2],
                     const bool beam_dots[2]);
 
+struct frame;
+/* Beam lengths, overlay images and record_overlay for the frame. */
+void record_frame_overlay(struct app *app, struct frame *f);
+
 #endif

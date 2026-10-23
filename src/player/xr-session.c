@@ -119,8 +119,9 @@ void poll_events(struct app *app)
                         app->xr.session, app->input.hands[hand], &profile)) &&
                     profile.interactionProfile != XR_NULL_PATH) {
                     uint32_t length = 0;
-                    xrPathToString(app->xr.instance, profile.interactionProfile,
-                                   sizeof(text), &length, text);
+                    xrPathToString(app->xr.instance,
+                                   profile.interactionProfile, sizeof(text),
+                                   &length, text);
                 }
                 printf("interaction_profile hand=%s profile=%s\n",
                        hand_names[hand], text);
@@ -256,7 +257,8 @@ void initialize_xr_vulkan(struct app *app)
     need_xr("xrCreateInstance", xrCreateInstance(&info, &app->xr.instance));
     XrSystemGetInfo system_info = {.type = XR_TYPE_SYSTEM_GET_INFO,
                                    .formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY};
-    need_xr("xrGetSystem", xrGetSystem(app->xr.instance, &system_info, &app->xr.system));
+    need_xr("xrGetSystem",
+            xrGetSystem(app->xr.instance, &system_info, &app->xr.system));
     if (app->xr.has_eye_gaze_extension) {
         XrSystemEyeGazeInteractionPropertiesEXT eye_gaze = {
             .type = XR_TYPE_SYSTEM_EYE_GAZE_INTERACTION_PROPERTIES_EXT,
@@ -264,8 +266,8 @@ void initialize_xr_vulkan(struct app *app)
         XrSystemProperties properties = {
             .type = XR_TYPE_SYSTEM_PROPERTIES, .next = &eye_gaze,
         };
-        if (XR_SUCCEEDED(xrGetSystemProperties(app->xr.instance, app->xr.system,
-                                               &properties)))
+        if (XR_SUCCEEDED(xrGetSystemProperties(app->xr.instance,
+                                               app->xr.system, &properties)))
             app->xr.has_eye_gaze = eye_gaze.supportsEyeGazeInteraction;
     }
     printf("eye_gaze extension=%d supported=%d\n",
@@ -273,8 +275,9 @@ void initialize_xr_vulkan(struct app *app)
     XrEnvironmentBlendMode blend_modes[8];
     uint32_t blend_mode_count = 0;
     if (XR_SUCCEEDED(xrEnumerateEnvironmentBlendModes(
-            app->xr.instance, app->xr.system, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
-            8, &blend_mode_count, blend_modes)))
+            app->xr.instance, app->xr.system,
+            XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 8, &blend_mode_count,
+            blend_modes)))
         for (uint32_t i = 0; i < blend_mode_count; ++i)
             if (blend_modes[i] == XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND)
                 app->xr.alpha_blend_supported = true;
@@ -317,7 +320,8 @@ void initialize_xr_vulkan(struct app *app)
     vkGetPhysicalDeviceQueueFamilyProperties(app->gpu.physical, &count, NULL);
     VkQueueFamilyProperties *families = calloc(count, sizeof(*families));
     need(families != NULL, "allocate queue families");
-    vkGetPhysicalDeviceQueueFamilyProperties(app->gpu.physical, &count, families);
+    vkGetPhysicalDeviceQueueFamilyProperties(app->gpu.physical, &count,
+                                             families);
     bool found = false;
     for (uint32_t i = 0; i < count; ++i)
         if (families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
@@ -358,12 +362,15 @@ void initialize_xr_vulkan(struct app *app)
         .ppEnabledExtensionNames = enabled_extensions,
         .pEnabledFeatures = &features};
     XrVulkanDeviceCreateInfoKHR xr_device_info = {
-        .type = XR_TYPE_VULKAN_DEVICE_CREATE_INFO_KHR, .systemId = app->xr.system,
-        .pfnGetInstanceProcAddr = vkGetInstanceProcAddr, .vulkanPhysicalDevice = app->gpu.physical,
+        .type = XR_TYPE_VULKAN_DEVICE_CREATE_INFO_KHR,
+        .systemId = app->xr.system,
+        .pfnGetInstanceProcAddr = vkGetInstanceProcAddr,
+        .vulkanPhysicalDevice = app->gpu.physical,
         .vulkanCreateInfo = &vk_device_info};
     need_xr("xrCreateVulkanDeviceKHR", create_device(app->xr.instance, &xr_device_info, &app->gpu.device, &vk_result));
     need_vk("xrCreateVulkanDeviceKHR Vulkan", vk_result);
-    vkGetDeviceQueue(app->gpu.device, app->gpu.queue_family, 0, &app->gpu.queue);
+    vkGetDeviceQueue(app->gpu.device, app->gpu.queue_family, 0,
+                     &app->gpu.queue);
     need(app->gpu.queue != VK_NULL_HANDLE, "vkGetDeviceQueue returned null");
     VkPhysicalDeviceProperties properties;
     vkGetPhysicalDeviceProperties(app->gpu.physical, &properties);
@@ -425,9 +432,15 @@ void initialize_swapchain(struct app *app)
             app->xr.height = views[0].maxImageRectHeight;
     }
     XrSwapchainCreateInfo info = {.type = XR_TYPE_SWAPCHAIN_CREATE_INFO,
-        .usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT,
-        .format = app->xr.color_format, .sampleCount = 1, .width = app->xr.width,
-        .height = app->xr.height, .faceCount = 1, .arraySize = 2, .mipCount = 1};
+                                  .usageFlags =
+                                      XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT,
+                                  .format = app->xr.color_format,
+                                  .sampleCount = 1,
+                                  .width = app->xr.width,
+                                  .height = app->xr.height,
+                                  .faceCount = 1,
+                                  .arraySize = 2,
+                                  .mipCount = 1};
     need_xr("xrCreateSwapchain", xrCreateSwapchain(app->xr.session, &info, &app->xr.swapchain));
     need_xr("xrEnumerateSwapchainImages(count)", xrEnumerateSwapchainImages(app->xr.swapchain, 0, &app->xr.image_count, NULL));
     need(app->xr.image_count > 0 && app->xr.image_count <= MAX_IMAGES, "unexpected OpenXR swapchain image count");
@@ -441,4 +454,58 @@ double monotonic_seconds(void)
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
     return (double)now.tv_sec + (double)now.tv_nsec / 1e9;
+}
+
+/* The eyes' views and the head for the display time, and the eye image
+ * to draw into. */
+void locate_views(struct app *app, struct frame *f)
+{
+    f->views[0] = f->views[1] = (XrView){.type = XR_TYPE_VIEW};
+    XrViewState view_state = {.type = XR_TYPE_VIEW_STATE};
+    uint32_t count = 0;
+    XrViewLocateInfo locate = {.type = XR_TYPE_VIEW_LOCATE_INFO,
+        .viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
+        .displayTime = f->state.predictedDisplayTime, .space = app->xr.space};
+    need_xr("xrLocateViews", xrLocateViews(app->xr.session, &locate, &view_state, 2, &count, f->views));
+    need(count == 2 && (view_state.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT) &&
+             (view_state.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT), "OpenXR returned no valid stereo pose");
+    f->center = (XrSpaceLocation){.type = XR_TYPE_SPACE_LOCATION};
+    need_xr("xrLocateSpace(VIEW)",
+            xrLocateSpace(app->xr.view_space, app->xr.space,
+                          f->state.predictedDisplayTime, &f->center));
+    need((f->center.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) !=
+             0,
+         "OpenXR returned no valid VIEW orientation");
+    if (!app->xr.view_geometry_logged) {
+        printf("openxr_view_geometry"
+               " left_pose=(%.9f,%.9f,%.9f;%.9f,%.9f,%.9f,%.9f)"
+               " left_fov=(%.9f,%.9f,%.9f,%.9f)"
+               " right_pose=(%.9f,%.9f,%.9f;%.9f,%.9f,%.9f,%.9f)"
+               " right_fov=(%.9f,%.9f,%.9f,%.9f)"
+               " center_pose=(%.9f,%.9f,%.9f;%.9f,%.9f,%.9f,%.9f)\n",
+               f->views[0].pose.position.x, f->views[0].pose.position.y,
+               f->views[0].pose.position.z, f->views[0].pose.orientation.x,
+               f->views[0].pose.orientation.y, f->views[0].pose.orientation.z,
+               f->views[0].pose.orientation.w, f->views[0].fov.angleLeft,
+               f->views[0].fov.angleRight, f->views[0].fov.angleDown,
+               f->views[0].fov.angleUp, f->views[1].pose.position.x,
+               f->views[1].pose.position.y, f->views[1].pose.position.z,
+               f->views[1].pose.orientation.x, f->views[1].pose.orientation.y,
+               f->views[1].pose.orientation.z, f->views[1].pose.orientation.w,
+               f->views[1].fov.angleLeft, f->views[1].fov.angleRight,
+               f->views[1].fov.angleDown, f->views[1].fov.angleUp,
+               f->center.pose.position.x, f->center.pose.position.y,
+               f->center.pose.position.z, f->center.pose.orientation.x,
+               f->center.pose.orientation.y, f->center.pose.orientation.z,
+               f->center.pose.orientation.w);
+        app->xr.view_geometry_logged = true;
+    }
+    XrSwapchainImageAcquireInfo acquire = {.type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+    f->image_index = 0;
+    need_xr("xrAcquireSwapchainImage", xrAcquireSwapchainImage(app->xr.swapchain, &acquire, &f->image_index));
+    XrSwapchainImageWaitInfo image_wait = {.type = XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, .timeout = XR_INFINITE_DURATION};
+    need_xr("xrWaitSwapchainImage", xrWaitSwapchainImage(app->xr.swapchain, &image_wait));
+    need(f->image_index < app->xr.image_count,
+         "invalid OpenXR swapchain index");
+    f->acquired = monotonic_seconds();
 }

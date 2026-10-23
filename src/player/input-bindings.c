@@ -134,12 +134,14 @@ static void learn_binding(struct app *app, int input, int modifier)
     printf("binding_learn input=%d modifier=%d grip_value=%.2f/%.2f\n", input,
            modifier, app->input.grip_value[0], app->input.grip_value[1]);
     for (int i = 0; i < BINDING_ACTION_COUNT; ++i)
-        if (i != app->controls.learn_action && app->controls.bindings[i].input == input &&
+        if (i != app->controls.learn_action &&
+            app->controls.bindings[i].input == input &&
             app->controls.bindings[i].modifier == modifier) {
             app->controls.bindings[i] = (struct binding){-1, -1};
             save_binding(app, i);
         }
-    app->controls.bindings[app->controls.learn_action] = (struct binding){input, modifier};
+    app->controls.bindings[app->controls.learn_action] =
+        (struct binding){input, modifier};
     save_binding(app, app->controls.learn_action);
     app->controls.learn_action = -1;
     app->ui_dirty = true;
@@ -167,8 +169,8 @@ static void press_input(struct app *app, int input, double now)
         /* A button alone is assigned on release: it may still become the
          * first button of a combination. */
     } else {
-        int action = binding_match(app->controls.bindings, input, app->controls.held,
-                                   &modifier);
+        int action = binding_match(app->controls.bindings, input,
+                                   app->controls.held, &modifier);
         if (modifier >= 0)
             app->controls.combined[modifier] = true;
         else if (binding_is_button(input) &&

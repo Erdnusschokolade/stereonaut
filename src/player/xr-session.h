@@ -84,4 +84,9 @@ void initialize_swapchain(struct app *app);
 void poll_events(struct app *app);
 void hide_dashboard_at_startup(const struct app *app);
 
+struct frame;
+/* The eyes' views and the head for the display time, and the eye image
+ * to draw into. */
+void locate_views(struct app *app, struct frame *f);
+
 #endif

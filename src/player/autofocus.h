@@ -96,4 +96,10 @@ XrCompositionLayerQuad make_gaze_marker_layer(const struct app *app);
 /* Debug line on the panel, refreshed four times a second. */
 void update_debug_text(struct app *app);
 
+/* Phases of a frame (render_frame). */
+struct frame;
+void plan_measurement(struct app *app, struct frame *f);
+void collect_measurement(struct app *app);
+void record_measurement(struct app *app, struct frame *f);
+
 #endif

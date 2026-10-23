@@ -15,8 +15,8 @@ static void compose_settings(struct app *app)
     }
     struct player_ui_state state = settings_state(app);
     pthread_mutex_lock(&app->panels.player_ui_mutex);
-    player_ui_render_settings(&app->panels.player_ui, &state, app->panels.settings_cpu,
-                              app->panels.ui_bgra);
+    player_ui_render_settings(&app->panels.player_ui, &state,
+                              app->panels.settings_cpu, app->panels.ui_bgra);
     pthread_mutex_unlock(&app->panels.player_ui_mutex);
     uint8_t *browser = (uint8_t *)app->panels.browser_cpu;
     for (size_t i = 0; i < (size_t)BROWSER_UI_WIDTH * BROWSER_UI_HEIGHT;
@@ -99,7 +99,8 @@ static XrSwapchain create_ui_texture(struct app *app,
     need_vk("vkCreateImage(panel)",
             vkCreateImage(app->gpu.device, &image, NULL, &texture->image));
     VkMemoryRequirements requirements;
-    vkGetImageMemoryRequirements(app->gpu.device, texture->image, &requirements);
+    vkGetImageMemoryRequirements(app->gpu.device, texture->image,
+                                 &requirements);
     VkMemoryAllocateInfo allocation = {
         .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
         .allocationSize = requirements.size,
@@ -222,8 +223,9 @@ void create_ui_swapchain(struct app *app)
             xrEnumerateSwapchainFormats(app->xr.session, 0, &count, NULL));
     int64_t *formats = calloc(count, sizeof(*formats));
     need(formats != NULL, "allocate UI swapchain formats");
-    need_xr("xrEnumerateSwapchainFormats(UI list)",
-            xrEnumerateSwapchainFormats(app->xr.session, count, &count, formats));
+    need_xr(
+        "xrEnumerateSwapchainFormats(UI list)",
+        xrEnumerateSwapchainFormats(app->xr.session, count, &count, formats));
     VkFormat preferred[] = {
         VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_B8G8R8A8_SRGB,
         VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM,
@@ -237,8 +239,9 @@ void create_ui_swapchain(struct app *app)
          "no supported UI swapchain format");
     app->panels.ui_bgra = app->panels.ui_format == VK_FORMAT_B8G8R8A8_SRGB ||
                    app->panels.ui_format == VK_FORMAT_B8G8R8A8_UNORM;
-    app->panels.ui_swapchain = create_ui_texture(app, &app->panels.ui_texture, UI_WIDTH,
-                                          UI_HEIGHT, "xrCreateSwapchain(UI)");
+    app->panels.ui_swapchain =
+        create_ui_texture(app, &app->panels.ui_texture, UI_WIDTH, UI_HEIGHT,
+                          "xrCreateSwapchain(UI)");
     printf("ui_panel format=%d dimensions=%ux%u drawn_into=%s mips=%u\n",
            app->panels.ui_format, UI_WIDTH, UI_HEIGHT,
            app->panels.panels_in_eye_images ? "eye_images" : "quad_layer",
@@ -248,7 +251,8 @@ void create_ui_swapchain(struct app *app)
     need_xr("xrEnumerateSwapchainImages(UI count)",
             xrEnumerateSwapchainImages(app->panels.ui_swapchain, 0,
                                        &app->panels.ui_image_count, NULL));
-    need(app->panels.ui_image_count > 0 && app->panels.ui_image_count <= MAX_IMAGES,
+    need(app->panels.ui_image_count > 0 &&
+             app->panels.ui_image_count <= MAX_IMAGES,
          "unexpected UI swapchain image count");
     for (uint32_t i = 0; i < app->panels.ui_image_count; ++i)
         app->panels.ui_images[i].type = XR_TYPE_SWAPCHAIN_IMAGE_VULKAN2_KHR;
@@ -274,8 +278,8 @@ void create_ui_resources(struct app *app)
         .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
         .flags = VK_FENCE_CREATE_SIGNALED_BIT,
     };
-    need_vk("vkCreateFence(UI)",
-            vkCreateFence(app->gpu.device, &fence, NULL, &app->panels.ui_fence));
+    need_vk("vkCreateFence(UI)", vkCreateFence(app->gpu.device, &fence, NULL,
+                                               &app->panels.ui_fence));
     VkBufferCreateInfo buffer = {
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .size = UI_BYTES,
@@ -321,7 +325,8 @@ static void upload_ui(struct app *app, const uint32_t *pixels)
     };
     if (app->panels.ui_swapchain) {
         need_xr("xrAcquireSwapchainImage(UI)",
-                xrAcquireSwapchainImage(app->panels.ui_swapchain, &acquire, &index));
+                xrAcquireSwapchainImage(app->panels.ui_swapchain, &acquire,
+                                        &index));
         need_xr("xrWaitSwapchainImage(UI)",
                 xrWaitSwapchainImage(app->panels.ui_swapchain, &wait));
         need(index < app->panels.ui_image_count, "invalid UI swapchain index");
@@ -341,7 +346,8 @@ static void upload_ui(struct app *app, const uint32_t *pixels)
     need_vk("vkBeginCommandBuffer(UI)",
             vkBeginCommandBuffer(app->panels.ui_command, &begin));
     record_ui_upload(app->panels.ui_command, &app->panels.ui_texture,
-                     app->panels.ui_images[index].image, app->panels.ui_staging_buffer,
+                     app->panels.ui_images[index].image,
+                     app->panels.ui_staging_buffer,
                      app->panels.ui_image_initialized[index]);
     need_vk("vkEndCommandBuffer(UI)",
             vkEndCommandBuffer(app->panels.ui_command));
@@ -378,8 +384,8 @@ static void *panel_worker(void *argument)
         panel->busy = true;
         pthread_mutex_unlock(&panel->mutex);
         pthread_mutex_lock(&app->panels.player_ui_mutex);
-        player_ui_render(&app->panels.player_ui, &panel->job.state, panel->pixels,
-                         app->panels.ui_bgra);
+        player_ui_render(&app->panels.player_ui, &panel->job.state,
+                         panel->pixels, app->panels.ui_bgra);
         pthread_mutex_unlock(&app->panels.player_ui_mutex);
         pthread_mutex_lock(&panel->mutex);
         panel->busy = false;
@@ -545,15 +551,18 @@ void create_browser_texture(struct app *app)
     if (app->panels.browser_swapchain) {
         need_xr("xrEnumerateSwapchainImages(browser count)",
                 xrEnumerateSwapchainImages(app->panels.browser_swapchain, 0,
-                                           &app->panels.browser_image_count, NULL));
+                                           &app->panels.browser_image_count,
+                                           NULL));
         need(app->panels.browser_image_count > 0 &&
                  app->panels.browser_image_count <= MAX_IMAGES,
              "unexpected browser swapchain image count");
         for (uint32_t i = 0; i < app->panels.browser_image_count; ++i)
-            app->panels.browser_images[i].type = XR_TYPE_SWAPCHAIN_IMAGE_VULKAN2_KHR;
+            app->panels.browser_images[i].type =
+                XR_TYPE_SWAPCHAIN_IMAGE_VULKAN2_KHR;
         need_xr("xrEnumerateSwapchainImages(browser list)",
                 xrEnumerateSwapchainImages(
-                    app->panels.browser_swapchain, app->panels.browser_image_count,
+                    app->panels.browser_swapchain,
+                    app->panels.browser_image_count,
                     &app->panels.browser_image_count,
                     (XrSwapchainImageBaseHeader *)app->panels.browser_images));
     }
@@ -571,7 +580,8 @@ void create_browser_texture(struct app *app)
         .flags = VK_FENCE_CREATE_SIGNALED_BIT,
     };
     need_vk("vkCreateFence(browser)",
-            vkCreateFence(app->gpu.device, &fence, NULL, &app->panels.browser_fence));
+            vkCreateFence(app->gpu.device, &fence, NULL,
+                          &app->panels.browser_fence));
     const VkDeviceSize bytes = (VkDeviceSize)BROWSER_UI_WIDTH *
                                BROWSER_UI_HEIGHT * 4U;
     VkBufferCreateInfo buffer = {
@@ -584,8 +594,8 @@ void create_browser_texture(struct app *app)
             vkCreateBuffer(app->gpu.device, &buffer, NULL,
                            &app->panels.browser_staging_buffer));
     VkMemoryRequirements memory;
-    vkGetBufferMemoryRequirements(app->gpu.device, app->panels.browser_staging_buffer,
-                                  &memory);
+    vkGetBufferMemoryRequirements(app->gpu.device,
+                                  app->panels.browser_staging_buffer, &memory);
     VkMemoryAllocateInfo allocation = {
         .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
         .allocationSize = memory.size,
@@ -598,11 +608,12 @@ void create_browser_texture(struct app *app)
             vkAllocateMemory(app->gpu.device, &allocation, NULL,
                              &app->panels.browser_staging_memory));
     need_vk("vkBindBufferMemory(browser staging)",
-            vkBindBufferMemory(app->gpu.device, app->panels.browser_staging_buffer,
+            vkBindBufferMemory(app->gpu.device,
+                               app->panels.browser_staging_buffer,
                                app->panels.browser_staging_memory, 0));
     need_vk("vkMapMemory(browser staging)",
-            vkMapMemory(app->gpu.device, app->panels.browser_staging_memory, 0, bytes, 0,
-                        (void **)&app->panels.browser_pixels));
+            vkMapMemory(app->gpu.device, app->panels.browser_staging_memory, 0,
+                        bytes, 0, (void **)&app->panels.browser_pixels));
     app->panels.browser_cpu = calloc(1, (size_t)bytes);
     need(app->panels.browser_cpu != NULL, "allocate browser pixels");
     app->browser.dirty = true;
@@ -729,7 +740,8 @@ void fill_static_swapchain(struct app *app, XrSwapchain swapchain,
                 xrReleaseSwapchainImage(swapchain, &release));
     }
     vkDestroyFence(app->gpu.device, fence, NULL);
-    vkFreeCommandBuffers(app->gpu.device, app->render.command_pool, 1, &command);
+    vkFreeCommandBuffers(app->gpu.device, app->render.command_pool, 1,
+                         &command);
     vkUnmapMemory(app->gpu.device, memory);
     vkDestroyBuffer(app->gpu.device, buffer, NULL);
     vkFreeMemory(app->gpu.device, memory, NULL);
@@ -774,8 +786,10 @@ void create_panel_pipeline(struct app *app)
     };
     VkPipelineLayoutCreateInfo pipeline_layout = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
-        .setLayoutCount = 1, .pSetLayouts = &app->panels.panel_descriptor_layout,
-        .pushConstantRangeCount = 1, .pPushConstantRanges = &push,
+        .setLayoutCount = 1,
+        .pSetLayouts = &app->panels.panel_descriptor_layout,
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &push,
     };
     need_vk("vkCreatePipelineLayout(panel)",
             vkCreatePipelineLayout(app->gpu.device, &pipeline_layout, NULL,
@@ -791,7 +805,8 @@ void create_panel_pipeline(struct app *app)
     need_vk("vkCreateDescriptorPool(panel)",
             vkCreateDescriptorPool(app->gpu.device, &pool, NULL,
                                    &app->panels.panel_descriptor_pool));
-    struct ui_texture *textures[2] = {&app->panels.ui_texture, &app->panels.browser_texture};
+    struct ui_texture *textures[2] = {&app->panels.ui_texture,
+                                      &app->panels.browser_texture};
     for (size_t i = 0; i < ARRAY_COUNT(textures); ++i) {
         VkDescriptorSetAllocateInfo allocate = {
             .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
@@ -879,7 +894,8 @@ void create_panel_pipeline(struct app *app)
     };
     need_vk("vkCreateGraphicsPipelines(panel)",
             vkCreateGraphicsPipelines(app->gpu.device, VK_NULL_HANDLE, 1,
-                                      &pipeline, NULL, &app->panels.panel_pipeline));
+                                      &pipeline, NULL,
+                                      &app->panels.panel_pipeline));
     vkDestroyShaderModule(app->gpu.device, vert, NULL);
     vkDestroyShaderModule(app->gpu.device, frag, NULL);
 }
@@ -914,7 +930,8 @@ void create_pointer_texture(struct app *app)
         .mipCount = 1,
     };
     need_xr("xrCreateSwapchain(pointer)",
-            xrCreateSwapchain(app->xr.session, &info, &app->panels.pointer_swapchain));
+            xrCreateSwapchain(app->xr.session, &info,
+                              &app->panels.pointer_swapchain));
     uint8_t pixels[POINTER_PIXELS * POINTER_PIXELS * 4] = {0};
     struct ui_canvas canvas = {pixels, POINTER_PIXELS, POINTER_PIXELS,
                                app->panels.ui_bgra};
@@ -946,7 +963,8 @@ void upload_browser(struct app *app)
 {
     /* Draw in cached memory: blending reads pixels back, which is very slow
      * on the uncached staging mapping. */
-    browser_ui_render(&app->browser, app->panels.browser_cpu, app->panels.ui_bgra);
+    browser_ui_render(&app->browser, app->panels.browser_cpu,
+                      app->panels.ui_bgra);
     if (app->settings_open)
         compose_settings(app);
     XrSwapchainImageAcquireInfo acquire = {
@@ -965,8 +983,8 @@ void upload_browser(struct app *app)
         need(index < app->panels.browser_image_count, "invalid browser swapchain index");
     }
     need_vk("vkWaitForFences(browser)",
-            vkWaitForFences(app->gpu.device, 1, &app->panels.browser_fence, VK_TRUE,
-                            UINT64_C(5000000000)));
+            vkWaitForFences(app->gpu.device, 1, &app->panels.browser_fence,
+                            VK_TRUE, UINT64_C(5000000000)));
     need_vk("vkResetFences(browser)",
             vkResetFences(app->gpu.device, 1, &app->panels.browser_fence));
     memcpy(app->panels.browser_pixels, app->panels.browser_cpu,
@@ -992,18 +1010,20 @@ void upload_browser(struct app *app)
     };
     /* SteamVR samples the image as soon as it is released, so the copy must
      * be complete by then (otherwise it shows stale or empty content). */
-    need_vk("vkQueueSubmit(browser)",
-            vkQueueSubmit(app->gpu.queue, 1, &submit, app->panels.browser_fence));
+    need_vk(
+        "vkQueueSubmit(browser)",
+        vkQueueSubmit(app->gpu.queue, 1, &submit, app->panels.browser_fence));
     need_vk("vkWaitForFences(browser completion)",
-            vkWaitForFences(app->gpu.device, 1, &app->panels.browser_fence, VK_TRUE,
-                            UINT64_C(5000000000)));
+            vkWaitForFences(app->gpu.device, 1, &app->panels.browser_fence,
+                            VK_TRUE, UINT64_C(5000000000)));
     app->panels.browser_image_initialized[index] = true;
     XrSwapchainImageReleaseInfo release = {
         .type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO,
     };
     if (app->panels.browser_swapchain)
-        need_xr("xrReleaseSwapchainImage(browser)",
-                xrReleaseSwapchainImage(app->panels.browser_swapchain, &release));
+        need_xr(
+            "xrReleaseSwapchainImage(browser)",
+            xrReleaseSwapchainImage(app->panels.browser_swapchain, &release));
 }
 
 XrCompositionLayerQuad make_browser_layer(const struct app *app)
@@ -1067,4 +1087,19 @@ struct panel_hit panel_ray(const struct app *app, XrPosef aim)
     return panel_ray_at((XrVector3f){app->panel_x, app->panel_y, app->panel_z},
                         app->panel_yaw, UI_PANEL_WIDTH_METERS,
                         UI_PANEL_HEIGHT_METERS, aim);
+}
+
+/* The visible panel of this frame: its quad layer and, drawn into the
+ * eye images, its texture and model matrix. */
+void place_panels(struct app *app, struct frame *f)
+{
+    f->ui_layer = app->playing
+                                          ? make_ui_layer(app)
+                                          : make_browser_layer(app);
+    f->show_ui = app->playing ? app->ui_visible : true;
+    f->panel = NULL;
+    if (app->panels.panels_in_eye_images && f->show_ui)
+        f->panel = app->playing ? &app->panels.ui_texture
+                                : &app->panels.browser_texture;
+    f->panel_matrix = panel_model(&f->ui_layer);
 }

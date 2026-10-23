@@ -155,7 +155,9 @@ void receive_frame_messages(struct app *app)
              * seek bar knob (whole pixels) or the play state. */
             int64_t old_second = app->link.position_us / 1000000;
             int old_knob = app->link.duration_us > 0
-                ? (int)(1000.0 * app->link.position_us / app->link.duration_us) : -1;
+                               ? (int)(1000.0 * app->link.position_us /
+                                       app->link.duration_us)
+                               : -1;
             bool changed = app->link.player_state != message.player_state ||
                            app->link.duration_us != message.duration_us;
             app->link.player_state = message.player_state;
@@ -163,7 +165,9 @@ void receive_frame_messages(struct app *app)
                 app->link.position_us = message.position_us;
             app->link.duration_us = message.duration_us;
             int knob = app->link.duration_us > 0
-                ? (int)(1000.0 * app->link.position_us / app->link.duration_us) : -1;
+                           ? (int)(1000.0 * app->link.position_us /
+                                   app->link.duration_us)
+                           : -1;
             if (changed || old_second != app->link.position_us / 1000000 ||
                 old_knob != knob)
                 app->ui_dirty = true;

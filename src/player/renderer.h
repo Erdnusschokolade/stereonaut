@@ -202,9 +202,43 @@ struct app {
     uint64_t hidden_video_frames, pipeline_skipped_frames;
 };
 
+/* One rendered frame (render_frame), handed from phase to phase. */
+struct frame {
+    XrFrameState state;
+    struct video_buffer *video; /* NULL: only the clear colour and panels */
+    XrView views[2];
+    XrSpaceLocation center; /* the head */
+    uint32_t image_index;   /* eye swapchain image */
+    /* Where the video lies (place_video). */
+    struct mat4 world_to_dome, dome_to_world, screen_model;
+    XrVector3f eye_position;
+    /* This frame measures the disparity or samples the key colour. */
+    bool measure, key_sample;
+    struct disparity_push disparity_push;
+    /* The video images' barrier and count (2 for plane images). */
+    VkImageMemoryBarrier video_acquire;
+    uint32_t video_images;
+    bool copied_video; /* a host-memory picture was copied */
+    /* The visible panel (place_panels). */
+    XrCompositionLayerQuad ui_layer;
+    bool show_ui;
+    const struct ui_texture *panel;
+    struct mat4 panel_matrix;
+    bool overlay; /* the overlay is drawn */
+    uint32_t overlay_indices[2];
+    /* Monotonic seconds of the phases (slow_frame) and the GPU time. */
+    double frame_started, inputs_done, acquired, fenced, recorded,
+        submitted;
+    double gpu_ms;
+};
+
 /* stereonaut-renderer.c: a message to the launcher (PLAYER_UI_*). */
 void send_control(struct app *app, uint32_t type, const char *path,
                   int64_t start_us);
+
+/* stereonaut-renderer.c: takes the head pose as home (its position and
+ * heading); with `panel` the player panel moves in front of it. */
+void set_home(struct app *app, XrPosef head, bool panel);
 
 /* stereonaut-renderer.c: counts a panel redraw that began at `started`
  * (monotonic seconds) in the frame timing. */

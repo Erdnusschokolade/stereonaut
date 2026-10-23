@@ -60,7 +60,8 @@ static void end_playback(struct app *app)
 {
     app->popup_open = false;
     video_import_pending(app, true);
-    need_vk("vkDeviceWaitIdle(end playback)", vkDeviceWaitIdle(app->gpu.device));
+    need_vk("vkDeviceWaitIdle(end playback)",
+            vkDeviceWaitIdle(app->gpu.device));
     discard_held_frame(app);
     for (uint32_t i = 0; i < app->video.buffer_count; ++i)
         destroy_video_buffer(app, &app->video.buffers[i]);
@@ -244,7 +245,7 @@ static void handle_control(struct app *app)
 
 /* Takes the head pose as home: its position and the direction the face
  * points in. With `panel` the player panel moves in front of it. */
-static void set_home(struct app *app, XrPosef head, bool panel)
+void set_home(struct app *app, XrPosef head, bool panel)
 {
     XrVector3f forward = rotate_vector(head.orientation,
                                        (XrVector3f){0, 0, -1});
@@ -345,478 +346,16 @@ void timing_ui(struct app *app, double started)
     note_max(&app->timing.ui_max_ms, ms);
 }
 
-static void render_frame(struct app *app)
+/* Frame statistics, the layers of the frame and xrEndFrame. */
+static void end_frame(struct app *app, struct frame *f)
 {
-    if (app->overlay.render_models_dirty) {
-        app->overlay.render_models_dirty = false;
-        render_models_load(&app->overlay.render_models, app->xr.instance, app->xr.session,
-                           app->input.hands);
-        upload_render_models(app);
-    }
-    XrFrameState frame_state = {.type = XR_TYPE_FRAME_STATE};
-    XrFrameWaitInfo wait = {.type = XR_TYPE_FRAME_WAIT_INFO};
-    double waiting = monotonic_seconds();
-    need_xr("xrWaitFrame", xrWaitFrame(app->xr.session, &wait, &frame_state));
-    double frame_started = monotonic_seconds();
-    timing_frame(app, &frame_state, (frame_started - waiting) * 1e3);
-    bool copied_video = false;
-    XrFrameBeginInfo begin = {.type = XR_TYPE_FRAME_BEGIN_INFO};
-    need_xr("xrBeginFrame", xrBeginFrame(app->xr.session, &begin));
-    ++app->xr_frames;
-    app->xr.should_render = frame_state.shouldRender;
-    update_home(app, frame_state.predictedDisplayTime);
-    if (app->playing) {
-        sync_player_input(app, frame_state.predictedDisplayTime);
-        sync_player_panel(app);
-    } else {
-        sync_browser_input(app, frame_state.predictedDisplayTime);
-        if (app->browser.dirty) {
-            double drawing = monotonic_seconds();
-            upload_browser(app);
-            timing_ui(app, drawing);
-        }
-    }
-    double inputs_done = monotonic_seconds();
-    if (!frame_state.shouldRender) {
-        XrFrameEndInfo end = {.type = XR_TYPE_FRAME_END_INFO, .displayTime = frame_state.predictedDisplayTime,
-            .environmentBlendMode = environment_blend_mode(app)};
-        need_xr("xrEndFrame(empty)", xrEndFrame(app->xr.session, &end));
-        return;
-    }
-    /* Without a decoded frame (browser, start, seek preroll) only the clear
-     * colour and the panel are shown, so the headset never falls back to the
-     * Steam environment. */
-    struct video_buffer *video = NULL;
-    if (app->playing && app->video.current >= 0)
-        video = &app->video.buffers[app->video.current];
-    else if (app->playing && app->video.has_held)
-        video = &app->video.held;
-    XrView views[2] = {{.type = XR_TYPE_VIEW}, {.type = XR_TYPE_VIEW}};
-    XrViewState view_state = {.type = XR_TYPE_VIEW_STATE};
-    uint32_t count = 0;
-    XrViewLocateInfo locate = {.type = XR_TYPE_VIEW_LOCATE_INFO,
-        .viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
-        .displayTime = frame_state.predictedDisplayTime, .space = app->xr.space};
-    need_xr("xrLocateViews", xrLocateViews(app->xr.session, &locate, &view_state, 2, &count, views));
-    need(count == 2 && (view_state.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT) &&
-             (view_state.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT), "OpenXR returned no valid stereo pose");
-    XrSpaceLocation center = {.type = XR_TYPE_SPACE_LOCATION};
-    need_xr("xrLocateSpace(VIEW)",
-            xrLocateSpace(app->xr.view_space, app->xr.space,
-                          frame_state.predictedDisplayTime, &center));
-    need((center.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0,
-         "OpenXR returned no valid VIEW orientation");
-    if (!app->xr.view_geometry_logged) {
-        printf("openxr_view_geometry"
-               " left_pose=(%.9f,%.9f,%.9f;%.9f,%.9f,%.9f,%.9f)"
-               " left_fov=(%.9f,%.9f,%.9f,%.9f)"
-               " right_pose=(%.9f,%.9f,%.9f;%.9f,%.9f,%.9f,%.9f)"
-               " right_fov=(%.9f,%.9f,%.9f,%.9f)"
-               " center_pose=(%.9f,%.9f,%.9f;%.9f,%.9f,%.9f,%.9f)\n",
-               views[0].pose.position.x, views[0].pose.position.y,
-               views[0].pose.position.z, views[0].pose.orientation.x,
-               views[0].pose.orientation.y, views[0].pose.orientation.z,
-               views[0].pose.orientation.w, views[0].fov.angleLeft,
-               views[0].fov.angleRight, views[0].fov.angleDown,
-               views[0].fov.angleUp, views[1].pose.position.x,
-               views[1].pose.position.y, views[1].pose.position.z,
-               views[1].pose.orientation.x, views[1].pose.orientation.y,
-               views[1].pose.orientation.z, views[1].pose.orientation.w,
-               views[1].fov.angleLeft, views[1].fov.angleRight,
-               views[1].fov.angleDown, views[1].fov.angleUp,
-               center.pose.position.x, center.pose.position.y,
-               center.pose.position.z, center.pose.orientation.x,
-               center.pose.orientation.y, center.pose.orientation.z,
-               center.pose.orientation.w);
-        app->xr.view_geometry_logged = true;
-    }
-    XrSwapchainImageAcquireInfo acquire = {.type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
-    uint32_t image_index = 0;
-    need_xr("xrAcquireSwapchainImage", xrAcquireSwapchainImage(app->xr.swapchain, &acquire, &image_index));
-    XrSwapchainImageWaitInfo image_wait = {.type = XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, .timeout = XR_INFINITE_DURATION};
-    need_xr("xrWaitSwapchainImage", xrWaitSwapchainImage(app->xr.swapchain, &image_wait));
-    need(image_index < app->xr.image_count, "invalid OpenXR swapchain index");
-    double acquired = monotonic_seconds();
-    /* Dome placement: centred on the head of the first frame (or of
-     * "zentrieren"), turned by the gaze yaw and the viewer's rotation.
-     * world_to_dome undoes yaw, then tilt, then roll. */
-    if (app->recenter_pending &&
-        (center.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT)) {
-        app->dome_center = center.pose.position;
-        if (app->recenter_yaw) {
-            set_home(app, center.pose, false);
-            app->dome_yaw = -app->home_yaw;
-        }
-        app->recenter_pending = false;
-        printf("player_recenter x=%.3f y=%.3f z=%.3f yaw=%.1f\n",
-               app->dome_center.x, app->dome_center.y, app->dome_center.z,
-               app->dome_yaw * 180.0f / PI_F);
-    }
-    const float degrees = PI_F / 180.0f;
-    float yaw = app->dome_yaw + app->adjust[PLAYER_ADJUST_YAW] * degrees;
-    float tilt = app->adjust[PLAYER_ADJUST_TILT] * degrees;
-    float roll = app->adjust[PLAYER_ADJUST_ROLL] * degrees;
-    struct mat4 world_to_dome = multiply(
-        rotation_axis(2, roll),
-        multiply(rotation_axis(0, -tilt), rotation_axis(1, yaw)));
-    struct mat4 dome_to_world = multiply(
-        rotation_axis(1, -yaw),
-        multiply(rotation_axis(0, tilt), rotation_axis(2, -roll)));
-    /* Eye inside the dome (radius 1 m): head motion, then zoom, height and
-     * slide along the dome axes. */
-    float motion = app->adjust[PLAYER_ADJUST_HEAD_MOTION];
-    XrVector3f head = {
-        (center.pose.position.x - app->dome_center.x) * motion,
-        (center.pose.position.y - app->dome_center.y) * motion,
-        (center.pose.position.z - app->dome_center.z) * motion,
-    };
-    XrVector3f eye_position = transform_direction(world_to_dome, head);
-    eye_position.x -= app->adjust[PLAYER_ADJUST_SLIDE];
-    eye_position.y -= app->adjust[PLAYER_ADJUST_HEIGHT];
-    eye_position.z -= app->adjust[PLAYER_ADJUST_ZOOM];
-    float eye_distance = sqrtf(vector_dot(eye_position, eye_position));
-    if (eye_distance > 0.9f) {
-        eye_position.x *= 0.9f / eye_distance;
-        eye_position.y *= 0.9f / eye_distance;
-        eye_position.z *= 0.9f / eye_distance;
-    }
-    /* Flat screen: 2 m wide, 2 m ahead of the dome centre, moved and
-     * turned like the dome. */
-    float eye_width = (float)app->video.width /
-                      (app->stereo_layout == NV12_STEREO_SBS ? 2.0f : 1.0f);
-    float eye_height = (float)app->video.height /
-                       (app->stereo_layout == NV12_STEREO_TB ? 2.0f : 1.0f);
-    float screen_height = eye_width > 0.0f && eye_height > 0.0f
-                              ? 2.0f * eye_height / eye_width : 1.0f;
-    XrVector3f screen = transform_direction(
-        dome_to_world,
-        (XrVector3f){app->adjust[PLAYER_ADJUST_SLIDE],
-                     app->adjust[PLAYER_ADJUST_HEIGHT],
-                     -(2.0f - app->adjust[PLAYER_ADJUST_ZOOM])});
-    struct mat4 screen_model = dome_to_world;
-    screen_model.v[12] = app->dome_center.x + screen.x;
-    screen_model.v[13] = app->dome_center.y + screen.y;
-    screen_model.v[14] = app->dome_center.z + screen.z;
-    struct mat4 screen_scale = {{2.0f, 0, 0, 0, 0, screen_height, 0, 0,
-                                 0, 0, 1, 0, 0, 0, 0, 1}};
-    screen_model = multiply(screen_model, screen_scale);
-    /* Autofocus: measure every few frames where the viewer looks. */
-    advance_autofocus(app);
-    bool gaze = false;
-    XrVector3f look = view_direction(app, center.pose,
-                                     frame_state.predictedDisplayTime, &gaze);
-    app->autofocus.gaze = gaze;
-    app->autofocus.gaze_marker_visible = app->gaze_debug && video;
-    if (app->autofocus.gaze_marker_visible) {
-        app->autofocus.gaze_marker_pose = (XrPosef){
-            center.pose.orientation,
-            {center.pose.position.x + look.x * GAZE_MARKER_DISTANCE,
-             center.pose.position.y + look.y * GAZE_MARKER_DISTANCE,
-             center.pose.position.z + look.z * GAZE_MARKER_DISTANCE}};
-    }
-    update_debug_text(app);
-    struct disparity_push disparity_push;
-    bool measure =
-        video &&
-        (app->adjust[PLAYER_ADJUST_AUTOFOCUS] > 0.0f || app->gaze_debug) &&
-        ++app->autofocus.disparity_frames % AUTOFOCUS_EVERY_FRAMES == 0U &&
-        disparity_window(app, look, world_to_dome, eye_position,
-                         app->adjust[PLAYER_ADJUST_STEREO_X] +
-                             app->autofocus.offset,
-                         &disparity_push);
-    /* A key colour pick takes the measurement's turn. */
-    bool key_sample = false;
-    if (app->autofocus.key_pick_request && video) {
-        app->autofocus.key_pick_request = false;
-        float uv[2];
-        XrVector3f aim = rotate_vector(app->autofocus.key_pick_aim.orientation,
-                                       (XrVector3f){0, 0, -1});
-        if (video_uv_at_ray(app, app->autofocus.key_pick_aim.position, aim,
-                            center.pose.position, world_to_dome,
-                            eye_position, screen_model, uv, NULL)) {
-            float step_u = app->video.width ? 1.5f / (float)app->video.width
-                                            : 0.0f;
-            float step_v = app->video.height
-                               ? 1.5f / (float)app->video.height
-                               : 0.0f;
-            disparity_push = (struct disparity_push){
-                .left = {uv[0], uv[1], step_u, step_v},
-                .bounds = {0.0f, 1.0f,
-                           app->video.coded_width ? (float)app->video.width /
-                                                  (float)app->video.coded_width
-                                            : 1.0f,
-                           app->video.coded_height ? (float)app->video.height /
-                                                   (float)app->video.coded_height
-                                             : 1.0f},
-                .sample_mode = {1.0f, 0.0f, 0.0f, 0.0f},
-            };
-            key_sample = measure = true;
-            printf("key_pick u=%.4f v=%.4f\n", uv[0], uv[1]);
-        } else {
-            printf("key_pick missed the picture\n");
-        }
-    }
-    for (uint32_t eye = 0; eye < 2; ++eye) {
-        struct mat4 projection = projection_from_fov(views[eye].fov);
-        struct mat4 view = view_from_pose(views[eye].pose);
-        float side = eye == 0 ? -1.0f : 1.0f;
-        float stereo_x = (app->adjust[PLAYER_ADJUST_STEREO_X] +
-                          app->autofocus.offset) * 0.5f;
-        float stereo_y = app->adjust[PLAYER_ADJUST_STEREO_Y] * 0.5f;
-        struct view_uniform uniform = {
-            .mvp = multiply(projection, multiply(view, screen_model)),
-            .camera_to_world = multiply(world_to_dome,
-                                        rotation_from_pose(views[eye].pose)),
-            /* w: half the fisheye lens angle (radians). */
-            .eye_offset = {eye_position.x, eye_position.y, eye_position.z,
-                           0.5f * (float)app->fisheye_fov * degrees},
-            .stereo_offset = {-side * stereo_x * degrees,
-                              -side * stereo_y * degrees,
-                              -side * stereo_x / 60.0f,
-                              side * stereo_y / 60.0f},
-            .picture = {app->adjust[PLAYER_ADJUST_BRIGHTNESS],
-                        app->adjust[PLAYER_ADJUST_CONTRAST],
-                        app->adjust[PLAYER_ADJUST_SATURATION],
-                        app->adjust[PLAYER_ADJUST_GAMMA]},
-            .fov_tangents = {
-                tanf(views[eye].fov.angleLeft),
-                tanf(views[eye].fov.angleRight),
-                tanf(views[eye].fov.angleDown),
-                tanf(views[eye].fov.angleUp),
-            },
-            .modes = {
-                (int32_t)app->projection_mode,
-                (int32_t)app->stereo_layout,
-                (int32_t)eye,
-                app->swap_eyes,
-            },
-            .source_info = {
-                (float)app->video.width,
-                (float)app->video.height,
-                app->video.width ? 1.0f / (float)app->video.width : 0.0f,
-                app->video.height ? 1.0f / (float)app->video.height : 0.0f,
-            },
-            .video_scale = {
-                app->video.coded_width ? (float)app->video.width /
-                                       (float)app->video.coded_width : 1.0f,
-                app->video.coded_height ? (float)app->video.height /
-                                        (float)app->video.coded_height : 1.0f,
-                0.0f, 0.0f,
-            },
-        };
-        video_levels_uniform(app->video_levels, uniform.levels);
-        background_color(app, uniform.background);
-        chroma_key_uniform(app, uniform.chroma_key, uniform.chroma_spill);
-        memcpy((uint8_t *)app->render.uniform_mapping + eye * UBO_STRIDE,
-               &uniform, sizeof(uniform));
-    }
-    need_vk("vkWaitForFences(render)", vkWaitForFences(app->gpu.device, 1, &app->render.fence, VK_TRUE, UINT64_C(5000000000)));
-    need_vk("vkResetFences(render)", vkResetFences(app->gpu.device, 1, &app->render.fence));
-    double fenced = monotonic_seconds();
-    if (app->autofocus.key_sample_pending) {
-        app->autofocus.key_sample_pending = false;
-        finish_key_pick(app);
-    } else if (app->autofocus.disparity_pending) {
-        app->autofocus.disparity_pending = false;
-        update_autofocus(app);
-    }
-    need_vk("vkResetCommandPool(render)", vkResetCommandPool(app->gpu.device, app->render.command_pool, 0));
-    VkCommandBufferBeginInfo command_begin = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-    need_vk("vkBeginCommandBuffer(render)", vkBeginCommandBuffer(app->render.command, &command_begin));
-    VkImageMemoryBarrier barrier = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-        .srcAccessMask = 0, .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
-        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED, .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-        .image = app->xr.images[image_index].image, .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .levelCount = 1, .layerCount = 2}};
-    vkCmdPipelineBarrier(app->render.command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, NULL, 0, NULL, 1, &barrier);
-    VkImageMemoryBarrier video_acquire = {
-        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-        .srcAccessMask = 0,
-        .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
-        .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
-        .newLayout = VK_IMAGE_LAYOUT_GENERAL,
-        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT,
-        .dstQueueFamilyIndex = app->gpu.queue_family,
-        .image = video ? video->image : VK_NULL_HANDLE,
-        .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
-                             .levelCount = 1, .layerCount = 1},
-    };
-    if (video && video->host) {
-        /* Own images, not shared with a foreign producer. */
-        video_acquire.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        video_acquire.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-        if (video->producer_wait_pending) {
-            record_host_upload(app, video);
-            video->producer_wait_pending = false;
-            copied_video = true;
-        }
-    }
-    VkImageMemoryBarrier video_acquires[2] = {video_acquire, video_acquire};
-    uint32_t video_images = video && video->tp10 ? 2U : 1U;
-    if (video_images == 2U)
-        video_acquires[1].image = video->image_uv;
-    if (video)
-        vkCmdPipelineBarrier(app->render.command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                             0, 0, NULL, 0, NULL, video_images,
-                             video_acquires);
-    if (measure) {
-        vkCmdBindPipeline(app->render.command, VK_PIPELINE_BIND_POINT_COMPUTE,
-                          video->tp10 ? app->autofocus.disparity_pipeline_tp10
-                                      : app->autofocus.disparity_pipeline);
-        uint32_t offset = 0;
-        vkCmdBindDescriptorSets(app->render.command, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                app->render.pipeline_layout, 0, 1,
-                                &video->descriptor_set, 1, &offset);
-        vkCmdPushConstants(app->render.command, app->render.pipeline_layout,
-                           VK_SHADER_STAGE_COMPUTE_BIT, 0,
-                           sizeof(disparity_push), &disparity_push);
-        vkCmdDispatch(app->render.command, 1, 1, 1);
-        app->autofocus.key_sample_pending = key_sample;
-        VkMemoryBarrier to_host = {
-            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
-            .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
-            .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
-        };
-        vkCmdPipelineBarrier(app->render.command,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                             VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &to_host, 0,
-                             NULL, 0, NULL);
-        app->autofocus.disparity_pending = !key_sample;
-    }
-    XrCompositionLayerQuad ui_layer = app->playing
-                                          ? make_ui_layer(app)
-                                          : make_browser_layer(app);
-    bool show_ui = app->playing ? app->ui_visible : true;
-    const struct ui_texture *panel = NULL;
-    if (app->panels.panels_in_eye_images && show_ui)
-        panel = app->playing ? &app->panels.ui_texture : &app->panels.browser_texture;
-    struct mat4 panel_matrix = panel_model(&ui_layer);
-    for (uint32_t eye = 0; eye < 2; ++eye) {
-        VkClearValue clear;
-        background_color(app, clear.color.float32);
-        VkRenderPassBeginInfo pass = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
-            .renderPass = app->render.render_pass, .framebuffer = app->render.framebuffers[image_index][eye],
-            .renderArea = {.extent = {app->xr.width, app->xr.height}}, .clearValueCount = 1, .pClearValues = &clear};
-        vkCmdBeginRenderPass(app->render.command, &pass, VK_SUBPASS_CONTENTS_INLINE);
-        if (video) {
-            vkCmdBindPipeline(app->render.command, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                              video->tp10 ? app->render.pipeline_tp10 : app->render.pipeline);
-            uint32_t offset = eye * UBO_STRIDE;
-            vkCmdBindDescriptorSets(app->render.command, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                    app->render.pipeline_layout, 0, 1,
-                                    &video->descriptor_set, 1, &offset);
-            vkCmdDraw(app->render.command, 4, 1, 0, 0);
-        }
-        vkCmdEndRenderPass(app->render.command);
-    }
-    VkImageMemoryBarrier video_release = video_acquire;
-    video_release.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    video_release.dstAccessMask = 0;
-    if (!video || !video->host) {
-        video_release.srcQueueFamilyIndex = app->gpu.queue_family;
-        video_release.dstQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
-    }
-    VkImageMemoryBarrier video_releases[2] = {video_release, video_release};
-    if (video_images == 2U)
-        video_releases[1].image = video->image_uv;
-    if (video)
-        vkCmdPipelineBarrier(app->render.command,
-                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                             VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, NULL,
-                             0, NULL, video_images, video_releases);
-    /* Beams end at the panel they hit, else at the video (with a dot
-     * while a key colour is picked), else after a fixed length. */
-    bool overlay = app->overlay.wanted;
-    uint32_t overlay_indices[2] = {0, 0};
-    if (overlay) {
-        float beam_lengths[2];
-        bool beam_dots[2] = {false, false};
-        for (unsigned hand = 0; hand < 2; ++hand) {
-            const struct laser *laser = &app->overlay.lasers[hand];
-            beam_lengths[hand] = BEAM_DEFAULT_LENGTH;
-            float uv[2], distance;
-            XrVector3f direction = rotate_vector(laser->aim.orientation,
-                                                 (XrVector3f){0, 0, -1});
-            if (laser->panel_length > 0.0f) {
-                beam_lengths[hand] = laser->panel_length;
-                beam_dots[hand] = app->panels.panels_in_eye_images;
-            } else if (laser->valid && video &&
-                       video_uv_at_ray(app, laser->aim.position, direction,
-                                       center.pose.position, world_to_dome,
-                                       eye_position, screen_model, uv,
-                                       &distance)) {
-                beam_lengths[hand] = distance;
-                beam_dots[hand] = app->key_picking;
-            }
-        }
-        for (uint32_t eye = 0; eye < 2 && app->overlay.in_eye_images; ++eye)
-            overlay_indices[eye] = image_index;
-        for (uint32_t eye = 0; eye < 2 && !app->overlay.in_eye_images;
-             ++eye) {
-            XrSwapchainImageAcquireInfo overlay_acquire = {
-                .type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO,
-            };
-            need_xr("xrAcquireSwapchainImage(overlay)",
-                    xrAcquireSwapchainImage(app->overlay.swapchains[eye],
-                                            &overlay_acquire,
-                                            &overlay_indices[eye]));
-            XrSwapchainImageWaitInfo overlay_wait = {
-                .type = XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO,
-                .timeout = XR_INFINITE_DURATION,
-            };
-            need_xr("xrWaitSwapchainImage(overlay)",
-                    xrWaitSwapchainImage(app->overlay.swapchains[eye],
-                                         &overlay_wait));
-            need(overlay_indices[eye] < app->overlay.image_counts[eye],
-                 "invalid overlay swapchain index");
-        }
-        record_overlay(app, app->render.command, overlay_indices, views,
-                       frame_state.predictedDisplayTime, panel, panel_matrix,
-                       beam_lengths, beam_dots);
-    }
-    need_vk("vkEndCommandBuffer(render)", vkEndCommandBuffer(app->render.command));
-    VkPipelineStageFlags producer_stage =
-        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
-    VkSubmitInfo submit = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-        .commandBufferCount = 1, .pCommandBuffers = &app->render.command};
-    if (video && video->producer_wait_pending) {
-        struct dma_buf_export_sync_file sync_export = {
-            .flags = DMA_BUF_SYNC_READ, .fd = -1,
-        };
-        if (ioctl(video->dma_buf_fd, DMA_BUF_IOCTL_EXPORT_SYNC_FILE,
-                  &sync_export) < 0) {
-            perror("DMA_BUF_IOCTL_EXPORT_SYNC_FILE");
-            exit(2);
-        }
-        VkImportSemaphoreFdInfoKHR semaphore_import = {
-            .sType = VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_FD_INFO_KHR,
-            .semaphore = video->producer_semaphore,
-            .flags = VK_SEMAPHORE_IMPORT_TEMPORARY_BIT,
-            .handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT,
-            .fd = sync_export.fd,
-        };
-        need_vk("vkImportSemaphoreFdKHR(producer)",
-                app->gpu.import_semaphore_fd(app->gpu.device, &semaphore_import));
-        submit.waitSemaphoreCount = 1;
-        submit.pWaitSemaphores = &video->producer_semaphore;
-        submit.pWaitDstStageMask = &producer_stage;
-        video->producer_wait_pending = false;
-    }
-    double recorded = monotonic_seconds();
-    need_vk("vkQueueSubmit(render)", vkQueueSubmit(app->gpu.queue, 1, &submit, app->render.fence));
-    double submitted = monotonic_seconds();
-    need_vk("vkWaitForFences(render completion)", vkWaitForFences(app->gpu.device, 1, &app->render.fence, VK_TRUE, UINT64_C(5000000000)));
-    double gpu_ms = (monotonic_seconds() - submitted) * 1e3;
-    app->timing.gpu_ms[copied_video] += gpu_ms;
-    app->timing.gpu_frames[copied_video]++;
-    note_max(&app->timing.gpu_max_ms[copied_video], gpu_ms);
+    app->timing.gpu_ms[f->copied_video] += f->gpu_ms;
+    app->timing.gpu_frames[f->copied_video]++;
+    note_max(&app->timing.gpu_max_ms[f->copied_video], f->gpu_ms);
     XrSwapchainImageReleaseInfo release = {.type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
     need_xr("xrReleaseSwapchainImage", xrReleaseSwapchainImage(app->xr.swapchain, &release));
     for (uint32_t eye = 0;
-         overlay && !app->overlay.in_eye_images && eye < 2; ++eye)
+         f->overlay && !app->overlay.in_eye_images && eye < 2; ++eye)
         need_xr("xrReleaseSwapchainImage(overlay)",
                 xrReleaseSwapchainImage(app->overlay.swapchains[eye],
                                         &release));
@@ -824,7 +363,7 @@ static void render_frame(struct app *app)
     for (uint32_t eye = 0; eye < 2; ++eye)
         overlay_views[eye] = (XrCompositionLayerProjectionView){
             .type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW,
-            .pose = views[eye].pose, .fov = views[eye].fov,
+            .pose = f->views[eye].pose, .fov = f->views[eye].fov,
             .subImage = {.swapchain = app->overlay.swapchains[eye],
                          .imageRect = {.extent = {
                              (int32_t)app->overlay.width,
@@ -837,7 +376,7 @@ static void render_frame(struct app *app)
     };
     XrCompositionLayerProjectionView projection_views[2] = {{.type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}, {.type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}};
     for (uint32_t eye = 0; eye < 2; ++eye) {
-        projection_views[eye].pose = views[eye].pose; projection_views[eye].fov = views[eye].fov;
+        projection_views[eye].pose = f->views[eye].pose; projection_views[eye].fov = f->views[eye].fov;
         projection_views[eye].subImage = (XrSwapchainSubImage){.swapchain = app->xr.swapchain, .imageRect = {.extent = {(int32_t)app->xr.width, (int32_t)app->xr.height}}, .imageArrayIndex = eye};
     }
     XrCompositionLayerProjection layer = {.type = XR_TYPE_COMPOSITION_LAYER_PROJECTION,
@@ -853,36 +392,39 @@ static void render_frame(struct app *app)
     uint32_t layer_count = 1;
     if (app->playing && app->autofocus.gaze_marker_visible)
         layers[layer_count++] = (const XrCompositionLayerBaseHeader *)&gaze_layer;
-    if (show_ui) {
+    if (f->show_ui) {
         if (!app->panels.panels_in_eye_images)
             layers[layer_count++] =
-                (const XrCompositionLayerBaseHeader *)&ui_layer;
+                (const XrCompositionLayerBaseHeader *)&f->ui_layer;
     }
-    if (overlay && !app->overlay.in_eye_images)
+    if (f->overlay && !app->overlay.in_eye_images)
         layers[layer_count++] =
             (const XrCompositionLayerBaseHeader *)&overlay_layer;
-    if (show_ui && app->panels.pointer_layer_visible && !app->panels.panels_in_eye_images)
+    if (f->show_ui && app->panels.pointer_layer_visible &&
+        !app->panels.panels_in_eye_images)
         layers[layer_count++] =
             (const XrCompositionLayerBaseHeader *)&pointer_layer;
-    XrFrameEndInfo end = {.type = XR_TYPE_FRAME_END_INFO, .displayTime = frame_state.predictedDisplayTime,
+    XrFrameEndInfo end = {.type = XR_TYPE_FRAME_END_INFO, .displayTime = f->state.predictedDisplayTime,
         .environmentBlendMode = environment_blend_mode(app),
         .layerCount = layer_count,
         .layers = layers};
     double ending = monotonic_seconds();
     need_xr("xrEndFrame", xrEndFrame(app->xr.session, &end));
     ++app->rendered_frames;
-    double cpu_ms = (monotonic_seconds() - frame_started) * 1e3;
+    double cpu_ms = (monotonic_seconds() - f->frame_started) * 1e3;
     if (cpu_ms > 50.0)
         printf("slow_frame ms=%.0f inputs=%.0f acquire=%.0f fence=%.0f"
                " record=%.0f submit=%.0f gpu=%.0f end=%.0f copy=%d\n",
-               cpu_ms, (inputs_done - frame_started) * 1e3,
-               (acquired - inputs_done) * 1e3, (fenced - acquired) * 1e3,
-               (recorded - fenced) * 1e3, (submitted - recorded) * 1e3,
-               gpu_ms, (monotonic_seconds() - ending) * 1e3, copied_video);
+               cpu_ms, (f->inputs_done - f->frame_started) * 1e3,
+               (f->acquired - f->inputs_done) * 1e3,
+               (f->fenced - f->acquired) * 1e3,
+               (f->recorded - f->fenced) * 1e3,
+               (f->submitted - f->recorded) * 1e3, f->gpu_ms,
+               (monotonic_seconds() - ending) * 1e3, f->copied_video);
     app->timing.rendered++;
     app->timing.cpu_ms += cpu_ms;
     note_max(&app->timing.cpu_max_ms, cpu_ms);
-    if (!video)
+    if (!f->video)
         return;
     if (app->video.presented)
         ++app->repeated_video_frames;
@@ -890,6 +432,68 @@ static void render_frame(struct app *app)
         ++app->unique_video_frames;
         app->video.presented = true;
     }
+}
+
+/* One frame: inputs, then (if the runtime wants pictures) the video, the
+ * autofocus measurement, the panels and the overlay in one command
+ * buffer, and the layers. */
+static void render_frame(struct app *app)
+{
+    if (app->overlay.render_models_dirty) {
+        app->overlay.render_models_dirty = false;
+        render_models_load(&app->overlay.render_models, app->xr.instance,
+                           app->xr.session, app->input.hands);
+        upload_render_models(app);
+    }
+    struct frame f = {.state = {.type = XR_TYPE_FRAME_STATE}};
+    XrFrameWaitInfo wait = {.type = XR_TYPE_FRAME_WAIT_INFO};
+    double waiting = monotonic_seconds();
+    need_xr("xrWaitFrame", xrWaitFrame(app->xr.session, &wait, &f.state));
+    f.frame_started = monotonic_seconds();
+    timing_frame(app, &f.state, (f.frame_started - waiting) * 1e3);
+    XrFrameBeginInfo begin = {.type = XR_TYPE_FRAME_BEGIN_INFO};
+    need_xr("xrBeginFrame", xrBeginFrame(app->xr.session, &begin));
+    ++app->xr_frames;
+    app->xr.should_render = f.state.shouldRender;
+    update_home(app, f.state.predictedDisplayTime);
+    if (app->playing) {
+        sync_player_input(app, f.state.predictedDisplayTime);
+        sync_player_panel(app);
+    } else {
+        sync_browser_input(app, f.state.predictedDisplayTime);
+        if (app->browser.dirty) {
+            double drawing = monotonic_seconds();
+            upload_browser(app);
+            timing_ui(app, drawing);
+        }
+    }
+    f.inputs_done = monotonic_seconds();
+    if (!f.state.shouldRender) {
+        XrFrameEndInfo end = {.type = XR_TYPE_FRAME_END_INFO, .displayTime = f.state.predictedDisplayTime,
+            .environmentBlendMode = environment_blend_mode(app)};
+        need_xr("xrEndFrame(empty)", xrEndFrame(app->xr.session, &end));
+        return;
+    }
+    /* Without a decoded frame (browser, start, seek preroll) only the clear
+     * colour and the panel are shown, so the headset never falls back to the
+     * Steam environment. */
+    if (app->playing && app->video.current >= 0)
+        f.video = &app->video.buffers[app->video.current];
+    else if (app->playing && app->video.has_held)
+        f.video = &app->video.held;
+    locate_views(app, &f);
+    place_video(app, &f);
+    plan_measurement(app, &f);
+    write_view_uniforms(app, &f);
+    wait_render_fence(app, &f);
+    collect_measurement(app);
+    record_video_start(app, &f);
+    record_measurement(app, &f);
+    place_panels(app, &f);
+    record_video_passes(app, &f);
+    record_frame_overlay(app, &f);
+    submit_frame(app, &f);
+    end_frame(app, &f);
 }
 
 int main(int argc, char **argv)
@@ -961,7 +565,8 @@ int main(int argc, char **argv)
     need_xr("xrCreateReferenceSpace", xrCreateReferenceSpace(app.xr.session, &space_info, &app.xr.space));
     space_info.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW;
     need_xr("xrCreateReferenceSpace(VIEW)",
-            xrCreateReferenceSpace(app.xr.session, &space_info, &app.xr.view_space));
+            xrCreateReferenceSpace(app.xr.session, &space_info,
+                                   &app.xr.view_space));
     initialize_swapchain(&app);
     app.panels.panels_in_eye_images = panels_in_eye_images();
     create_ui_swapchain(&app);

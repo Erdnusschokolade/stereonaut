@@ -20,8 +20,8 @@ XrVector3f view_direction(struct app *app, XrPosef head, XrTime time,
         const XrSpaceLocationFlags tracked =
             XR_SPACE_LOCATION_ORIENTATION_VALID_BIT |
             XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
-        if (XR_SUCCEEDED(xrLocateSpace(app->input.gaze_space, app->xr.space, time,
-                                       &location)) &&
+        if (XR_SUCCEEDED(xrLocateSpace(app->input.gaze_space, app->xr.space,
+                                       time, &location)) &&
             (location.locationFlags & tracked) == tracked) {
             *gaze = true;
             if (!app->autofocus.gaze_logged) {
@@ -86,9 +86,11 @@ bool disparity_window(struct app *app, XrVector3f direction,
         .bounds = {sbs ? 0.5f * right_eye : 0.0f,
                    sbs ? 0.5f * right_eye + 0.5f : 1.0f,
                    app->video.coded_width ? (float)app->video.width /
-                                          (float)app->video.coded_width : 1.0f,
+                                                (float)app->video.coded_width
+                                          : 1.0f,
                    app->video.coded_height ? (float)app->video.height /
-                                           (float)app->video.coded_height : 1.0f},
+                                                 (float)app->video.coded_height
+                                           : 1.0f},
     };
     return true;
 }
@@ -234,10 +236,13 @@ XrCompositionLayerQuad make_gaze_marker_layer(const struct app *app)
         .layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT,
         .space = app->xr.space,
         .eyeVisibility = XR_EYE_VISIBILITY_BOTH,
-        .subImage = {
-            .swapchain = app->autofocus.gaze_marker[app->autofocus.gaze ? 0 : 1],
-            .imageRect = {.extent = {GAZE_MARKER_WIDTH, GAZE_MARKER_HEIGHT}},
-        },
+        .subImage =
+            {
+                .swapchain =
+                    app->autofocus.gaze_marker[app->autofocus.gaze ? 0 : 1],
+                .imageRect = {.extent = {GAZE_MARKER_WIDTH,
+                                         GAZE_MARKER_HEIGHT}},
+            },
         .pose = app->autofocus.gaze_marker_pose,
         .size = {2.0f * GAZE_MARKER_DISTANCE *
                      tanf(0.5f * DISPARITY_WINDOW_DEGREES_X * degrees),
@@ -276,7 +281,8 @@ void update_debug_text(struct app *app)
                  app->autofocus.valid ? tr("valid") : tr("rejected"), focus,
                  app->autofocus.offset);
     if (strcmp(text, app->autofocus.debug_text) != 0) {
-        snprintf(app->autofocus.debug_text, sizeof(app->autofocus.debug_text), "%s", text);
+        snprintf(app->autofocus.debug_text, sizeof(app->autofocus.debug_text),
+                 "%s", text);
         app->ui_dirty = true;
     }
 }
@@ -300,4 +306,109 @@ void finish_key_pick(struct app *app)
     app->ui_dirty = true;
     printf("key_picked y=%.1f cb=%.1f cr=%.1f\n", result->score[0],
            result->score[1], result->score[2]);
+}
+
+/* Per frame: the focus fade, the gaze (marker, debug line) and whether
+ * this frame measures the disparity or samples a picked key colour. */
+void plan_measurement(struct app *app, struct frame *f)
+{
+    /* Autofocus: measure every few frames where the viewer looks. */
+    advance_autofocus(app);
+    bool gaze = false;
+    XrVector3f look = view_direction(app, f->center.pose,
+                                     f->state.predictedDisplayTime, &gaze);
+    app->autofocus.gaze = gaze;
+    app->autofocus.gaze_marker_visible = app->gaze_debug && f->video;
+    if (app->autofocus.gaze_marker_visible) {
+        app->autofocus.gaze_marker_pose = (XrPosef){
+            f->center.pose.orientation,
+            {f->center.pose.position.x + look.x * GAZE_MARKER_DISTANCE,
+             f->center.pose.position.y + look.y * GAZE_MARKER_DISTANCE,
+             f->center.pose.position.z + look.z * GAZE_MARKER_DISTANCE}};
+    }
+    update_debug_text(app);
+    f->measure =
+        f->video &&
+        (app->adjust[PLAYER_ADJUST_AUTOFOCUS] > 0.0f || app->gaze_debug) &&
+        ++app->autofocus.disparity_frames % AUTOFOCUS_EVERY_FRAMES == 0U &&
+        disparity_window(app, look, f->world_to_dome, f->eye_position,
+                         app->adjust[PLAYER_ADJUST_STEREO_X] +
+                             app->autofocus.offset,
+                         &f->disparity_push);
+    /* A key colour pick takes the measurement's turn. */
+    f->key_sample = false;
+    if (app->autofocus.key_pick_request && f->video) {
+        app->autofocus.key_pick_request = false;
+        float uv[2];
+        XrVector3f aim = rotate_vector(app->autofocus.key_pick_aim.orientation,
+                                       (XrVector3f){0, 0, -1});
+        if (video_uv_at_ray(app, app->autofocus.key_pick_aim.position, aim,
+                            f->center.pose.position, f->world_to_dome,
+                            f->eye_position, f->screen_model, uv, NULL)) {
+            float step_u = app->video.width ? 1.5f / (float)app->video.width
+                                            : 0.0f;
+            float step_v = app->video.height
+                               ? 1.5f / (float)app->video.height
+                               : 0.0f;
+            f->disparity_push = (struct disparity_push){
+                .left = {uv[0], uv[1], step_u, step_v},
+                .bounds = {0.0f, 1.0f,
+                           app->video.coded_width
+                               ? (float)app->video.width /
+                                     (float)app->video.coded_width
+                               : 1.0f,
+                           app->video.coded_height
+                               ? (float)app->video.height /
+                                     (float)app->video.coded_height
+                               : 1.0f},
+                .sample_mode = {1.0f, 0.0f, 0.0f, 0.0f},
+            };
+            f->key_sample = f->measure = true;
+            printf("key_pick u=%.4f v=%.4f\n", uv[0], uv[1]);
+        } else {
+            printf("key_pick missed the picture\n");
+        }
+    }
+}
+
+/* Result of the last measurement or key colour sample. */
+void collect_measurement(struct app *app)
+{
+    if (app->autofocus.key_sample_pending) {
+        app->autofocus.key_sample_pending = false;
+        finish_key_pick(app);
+    } else if (app->autofocus.disparity_pending) {
+        app->autofocus.disparity_pending = false;
+        update_autofocus(app);
+    }
+}
+
+void record_measurement(struct app *app, struct frame *f)
+{
+    if (f->measure) {
+        vkCmdBindPipeline(app->render.command, VK_PIPELINE_BIND_POINT_COMPUTE,
+                          f->video->tp10
+                              ? app->autofocus.disparity_pipeline_tp10
+                              : app->autofocus.disparity_pipeline);
+        uint32_t offset = 0;
+        vkCmdBindDescriptorSets(app->render.command,
+                                VK_PIPELINE_BIND_POINT_COMPUTE,
+                                app->render.pipeline_layout, 0, 1,
+                                &f->video->descriptor_set, 1, &offset);
+        vkCmdPushConstants(app->render.command, app->render.pipeline_layout,
+                           VK_SHADER_STAGE_COMPUTE_BIT, 0,
+                           sizeof(f->disparity_push), &f->disparity_push);
+        vkCmdDispatch(app->render.command, 1, 1, 1);
+        app->autofocus.key_sample_pending = f->key_sample;
+        VkMemoryBarrier to_host = {
+            .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+            .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
+            .dstAccessMask = VK_ACCESS_HOST_READ_BIT,
+        };
+        vkCmdPipelineBarrier(app->render.command,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &to_host, 0,
+                             NULL, 0, NULL);
+        app->autofocus.disparity_pending = !f->key_sample;
+    }
 }

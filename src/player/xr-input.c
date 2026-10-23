@@ -83,7 +83,8 @@ void initialize_actions(struct app *app)
                   "select", "Auswaehlen", app->input.hands,
                   &app->input.select_action);
     create_action(app->input.action_set, XR_ACTION_TYPE_BOOLEAN_INPUT,
-                  "squeeze", "Greifen", app->input.hands, &app->input.squeeze_action);
+                  "squeeze", "Greifen", app->input.hands,
+                  &app->input.squeeze_action);
     create_action(app->input.action_set, XR_ACTION_TYPE_VECTOR2F_INPUT,
                   "stick", "Blaettern und Spulen", app->input.hands,
                   &app->input.stick_action);
@@ -103,36 +104,30 @@ void initialize_actions(struct app *app)
         int buttons; /* button_inputs: 0 none, 1 Index subset, 2 all */
         bool grip_value; /* has squeeze/value */
     } profiles[] = {
-        {"/interaction_profiles/valve/frame_controller",
-         "trigger/value", "squeeze/click", true,
-         app->xr.has_valve_frame_controller, 2, true},
-        {"/interaction_profiles/khr/generic_controller",
-         "trigger/value", "squeeze/value", true, app->xr.has_generic_controller,
-         0, true},
-        {"/interaction_profiles/valve/index_controller",
-         "trigger/value", "squeeze/value", true, true, 1, true},
+        {"/interaction_profiles/valve/frame_controller", "trigger/value",
+         "squeeze/click", true, app->xr.has_valve_frame_controller, 2, true},
+        {"/interaction_profiles/khr/generic_controller", "trigger/value",
+         "squeeze/value", true, app->xr.has_generic_controller, 0, true},
+        {"/interaction_profiles/valve/index_controller", "trigger/value",
+         "squeeze/value", true, true, 1, true},
         /* The common PCVR profiles use the same core affordances as Index:
          * trigger for pointing, squeeze for panel grab and a thumbstick for
          * seek/volume. Keep face-button suggestions to Index: their names
          * and hands differ between Touch, WMR and Vive. */
-        {"/interaction_profiles/oculus/touch_controller",
-         "trigger/value", "squeeze/value", true,
-         app->xr.has_pcvr_controller, 0, true},
-        {"/interaction_profiles/microsoft/motion_controller",
-         "trigger/value", "squeeze/value", true,
-         app->xr.has_pcvr_controller, 0, true},
-        {"/interaction_profiles/htc/vive_cosmos_controller",
-         "trigger/value", "squeeze/click", true,
-         app->xr.has_pcvr_controller, 0, false},
+        {"/interaction_profiles/oculus/touch_controller", "trigger/value",
+         "squeeze/value", true, app->xr.has_pcvr_controller, 0, true},
+        {"/interaction_profiles/microsoft/motion_controller", "trigger/value",
+         "squeeze/value", true, app->xr.has_pcvr_controller, 0, true},
+        {"/interaction_profiles/htc/vive_cosmos_controller", "trigger/value",
+         "squeeze/click", true, app->xr.has_pcvr_controller, 0, false},
         /* Original Vive wands expose a trackpad rather than a thumbstick;
          * it is still a Vector2f input and maps naturally to navigation. */
-        {"/interaction_profiles/htc/vive_controller",
-         "trigger/value", "squeeze/click", true,
-         app->xr.has_pcvr_controller, 0, false},
+        {"/interaction_profiles/htc/vive_controller", "trigger/value",
+         "squeeze/click", true, app->xr.has_pcvr_controller, 0, false},
         /* No squeeze button or stick: panel grab, show/hide, page flips and
          * stick seeking are unavailable. */
-        {"/interaction_profiles/khr/simple_controller",
-         "select/click", NULL, false, true, 0, false},
+        {"/interaction_profiles/khr/simple_controller", "select/click", NULL,
+         false, true, 0, false},
     };
     static const char *const hand_names[2] = {"left", "right"};
     unsigned accepted = 0;
@@ -222,7 +217,8 @@ void initialize_actions(struct app *app)
         snprintf(gaze.localizedActionName,
                  sizeof(gaze.localizedActionName), "Blickrichtung");
         need_xr("xrCreateAction(gaze)",
-                xrCreateAction(app->input.action_set, &gaze, &app->input.gaze_action));
+                xrCreateAction(app->input.action_set, &gaze,
+                               &app->input.gaze_action));
         XrActionSuggestedBinding binding = {
             app->input.gaze_action,
             xr_path(app, "/user/eyes_ext/input/gaze_ext/pose"),
@@ -330,9 +326,9 @@ void read_select(struct app *app, unsigned hand,
     XrActionStateFloat state = {.type = XR_TYPE_ACTION_STATE_FLOAT};
     need_xr("xrGetActionStateFloat",
             xrGetActionStateFloat(app->xr.session, &info, &state));
-    input->select_edge = button_update(&app->input.select[hand], state.isActive,
-                                       state.currentState,
-                                       &input->select_held);
+    input->select_edge =
+        button_update(&app->input.select[hand], state.isActive,
+                      state.currentState, &input->select_held);
 }
 
 bool pressed_edge(const XrActionStateBoolean *state)
@@ -398,6 +394,7 @@ void read_grips(struct app *app, const struct hand_input hands[2],
         app->input.grip_value_down[hand] =
             value >= (app->input.grip_value_down[hand] ? GRIP_RELEASE_THRESHOLD
                                                  : GRIP_PRESS_THRESHOLD);
-        grips[hand] = held(&hands[hand].squeeze) || app->input.grip_value_down[hand];
+        grips[hand] =
+            held(&hands[hand].squeeze) || app->input.grip_value_down[hand];
     }
 }

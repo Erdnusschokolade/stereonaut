@@ -86,7 +86,8 @@ static void create_pipeline(struct app *app)
     VkPipelineColorBlendStateCreateInfo blend = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, .attachmentCount = 1, .pAttachments = &blend_attachment};
     VkGraphicsPipelineCreateInfo pipeline = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, .stageCount = 2, .pStages = stages, .pVertexInputState = &vertex, .pInputAssemblyState = &assembly, .pViewportState = &view, .pRasterizationState = &raster, .pMultisampleState = &multisample, .pColorBlendState = &blend, .layout = app->render.pipeline_layout, .renderPass = app->render.render_pass};
     need_vk("vkCreateGraphicsPipelines", vkCreateGraphicsPipelines(app->gpu.device, VK_NULL_HANDLE, 1, &pipeline, NULL, &app->render.pipeline));
-    VkShaderModule tp10_frag = shader(app->gpu.device, "tp10-projection.frag.spv");
+    VkShaderModule tp10_frag =
+        shader(app->gpu.device, "tp10-projection.frag.spv");
     stages[1].module = tp10_frag;
     need_vk("vkCreateGraphicsPipelines(TP10)", vkCreateGraphicsPipelines(app->gpu.device, VK_NULL_HANDLE, 1, &pipeline, NULL, &app->render.pipeline_tp10));
     vkDestroyShaderModule(app->gpu.device, vert, NULL); vkDestroyShaderModule(app->gpu.device, frag, NULL);
@@ -95,7 +96,8 @@ static void create_pipeline(struct app *app)
         "stereo-disparity.comp.spv", "stereo-disparity-tp10.comp.spv",
     };
     VkPipeline *disparity_pipelines[2] = {
-        &app->autofocus.disparity_pipeline, &app->autofocus.disparity_pipeline_tp10,
+        &app->autofocus.disparity_pipeline,
+        &app->autofocus.disparity_pipeline_tp10,
     };
     for (int i = 0; i < 2; ++i) {
         VkShaderModule module = shader(app->gpu.device, disparity_shaders[i]);
@@ -341,4 +343,280 @@ XrEnvironmentBlendMode environment_blend_mode(const struct app *app)
 {
     return passthrough_active(app) ? XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND
                                    : XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+}
+
+/* Where the video lies: the dome around the head (moved by head motion,
+ * zoom, height and slide) and the flat screen. */
+void place_video(struct app *app, struct frame *f)
+{
+    /* Dome placement: centred on the head of the first frame (or of
+     * "zentrieren"), turned by the gaze yaw and the viewer's rotation.
+     * world_to_dome undoes yaw, then tilt, then roll. */
+    if (app->recenter_pending &&
+        (f->center.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT)) {
+        app->dome_center = f->center.pose.position;
+        if (app->recenter_yaw) {
+            set_home(app, f->center.pose, false);
+            app->dome_yaw = -app->home_yaw;
+        }
+        app->recenter_pending = false;
+        printf("player_recenter x=%.3f y=%.3f z=%.3f yaw=%.1f\n",
+               app->dome_center.x, app->dome_center.y, app->dome_center.z,
+               app->dome_yaw * 180.0f / PI_F);
+    }
+    const float degrees = PI_F / 180.0f;
+    float yaw = app->dome_yaw + app->adjust[PLAYER_ADJUST_YAW] * degrees;
+    float tilt = app->adjust[PLAYER_ADJUST_TILT] * degrees;
+    float roll = app->adjust[PLAYER_ADJUST_ROLL] * degrees;
+    f->world_to_dome = multiply(
+        rotation_axis(2, roll),
+        multiply(rotation_axis(0, -tilt), rotation_axis(1, yaw)));
+    f->dome_to_world = multiply(
+        rotation_axis(1, -yaw),
+        multiply(rotation_axis(0, tilt), rotation_axis(2, -roll)));
+    /* Eye inside the dome (radius 1 m): head motion, then zoom, height and
+     * slide along the dome axes. */
+    float motion = app->adjust[PLAYER_ADJUST_HEAD_MOTION];
+    XrVector3f head = {
+        (f->center.pose.position.x - app->dome_center.x) * motion,
+        (f->center.pose.position.y - app->dome_center.y) * motion,
+        (f->center.pose.position.z - app->dome_center.z) * motion,
+    };
+    f->eye_position = transform_direction(f->world_to_dome, head);
+    f->eye_position.x -= app->adjust[PLAYER_ADJUST_SLIDE];
+    f->eye_position.y -= app->adjust[PLAYER_ADJUST_HEIGHT];
+    f->eye_position.z -= app->adjust[PLAYER_ADJUST_ZOOM];
+    float eye_distance = sqrtf(vector_dot(f->eye_position, f->eye_position));
+    if (eye_distance > 0.9f) {
+        f->eye_position.x *= 0.9f / eye_distance;
+        f->eye_position.y *= 0.9f / eye_distance;
+        f->eye_position.z *= 0.9f / eye_distance;
+    }
+    /* Flat screen: 2 m wide, 2 m ahead of the dome centre, moved and
+     * turned like the dome. */
+    float eye_width = (float)app->video.width /
+                      (app->stereo_layout == NV12_STEREO_SBS ? 2.0f : 1.0f);
+    float eye_height = (float)app->video.height /
+                       (app->stereo_layout == NV12_STEREO_TB ? 2.0f : 1.0f);
+    float screen_height = eye_width > 0.0f && eye_height > 0.0f
+                              ? 2.0f * eye_height / eye_width : 1.0f;
+    XrVector3f screen = transform_direction(
+        f->dome_to_world,
+        (XrVector3f){app->adjust[PLAYER_ADJUST_SLIDE],
+                     app->adjust[PLAYER_ADJUST_HEIGHT],
+                     -(2.0f - app->adjust[PLAYER_ADJUST_ZOOM])});
+    f->screen_model = f->dome_to_world;
+    f->screen_model.v[12] = app->dome_center.x + screen.x;
+    f->screen_model.v[13] = app->dome_center.y + screen.y;
+    f->screen_model.v[14] = app->dome_center.z + screen.z;
+    struct mat4 screen_scale = {{2.0f, 0, 0, 0, 0, screen_height, 0, 0,
+                                 0, 0, 1, 0, 0, 0, 0, 1}};
+    f->screen_model = multiply(f->screen_model, screen_scale);
+}
+
+void write_view_uniforms(struct app *app, struct frame *f)
+{
+    const float degrees = PI_F / 180.0f;
+    for (uint32_t eye = 0; eye < 2; ++eye) {
+        struct mat4 projection = projection_from_fov(f->views[eye].fov);
+        struct mat4 view = view_from_pose(f->views[eye].pose);
+        float side = eye == 0 ? -1.0f : 1.0f;
+        float stereo_x = (app->adjust[PLAYER_ADJUST_STEREO_X] +
+                          app->autofocus.offset) * 0.5f;
+        float stereo_y = app->adjust[PLAYER_ADJUST_STEREO_Y] * 0.5f;
+        struct view_uniform uniform = {
+            .mvp = multiply(projection, multiply(view, f->screen_model)),
+            .camera_to_world = multiply(
+                f->world_to_dome, rotation_from_pose(f->views[eye].pose)),
+            /* w: half the fisheye lens angle (radians). */
+            .eye_offset = {f->eye_position.x, f->eye_position.y,
+                           f->eye_position.z,
+                           0.5f * (float)app->fisheye_fov * degrees},
+            .stereo_offset = {-side * stereo_x * degrees,
+                              -side * stereo_y * degrees,
+                              -side * stereo_x / 60.0f,
+                              side * stereo_y / 60.0f},
+            .picture = {app->adjust[PLAYER_ADJUST_BRIGHTNESS],
+                        app->adjust[PLAYER_ADJUST_CONTRAST],
+                        app->adjust[PLAYER_ADJUST_SATURATION],
+                        app->adjust[PLAYER_ADJUST_GAMMA]},
+            .fov_tangents =
+                {
+                    tanf(f->views[eye].fov.angleLeft),
+                    tanf(f->views[eye].fov.angleRight),
+                    tanf(f->views[eye].fov.angleDown),
+                    tanf(f->views[eye].fov.angleUp),
+                },
+            .modes =
+                {
+                    (int32_t)app->projection_mode,
+                    (int32_t)app->stereo_layout,
+                    (int32_t)eye,
+                    app->swap_eyes,
+                },
+            .source_info =
+                {
+                    (float)app->video.width,
+                    (float)app->video.height,
+                    app->video.width ? 1.0f / (float)app->video.width : 0.0f,
+                    app->video.height ? 1.0f / (float)app->video.height : 0.0f,
+                },
+            .video_scale =
+                {
+                    app->video.coded_width ? (float)app->video.width /
+                                                 (float)app->video.coded_width
+                                           : 1.0f,
+                    app->video.coded_height
+                        ? (float)app->video.height /
+                              (float)app->video.coded_height
+                        : 1.0f,
+                    0.0f,
+                    0.0f,
+                },
+        };
+        video_levels_uniform(app->video_levels, uniform.levels);
+        background_color(app, uniform.background);
+        chroma_key_uniform(app, uniform.chroma_key, uniform.chroma_spill);
+        memcpy((uint8_t *)app->render.uniform_mapping + eye * UBO_STRIDE,
+               &uniform, sizeof(uniform));
+    }
+}
+
+/* The previous frame's commands are done (with the measurement). */
+void wait_render_fence(struct app *app, struct frame *f)
+{
+    need_vk("vkWaitForFences(render)", vkWaitForFences(app->gpu.device, 1, &app->render.fence, VK_TRUE, UINT64_C(5000000000)));
+    need_vk("vkResetFences(render)", vkResetFences(app->gpu.device, 1, &app->render.fence));
+    f->fenced = monotonic_seconds();
+}
+
+/* Begins the frame's commands: the eye image and the video become
+ * usable (a new host-memory picture is copied first). */
+void record_video_start(struct app *app, struct frame *f)
+{
+    need_vk("vkResetCommandPool(render)", vkResetCommandPool(app->gpu.device, app->render.command_pool, 0));
+    VkCommandBufferBeginInfo command_begin = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    need_vk("vkBeginCommandBuffer(render)", vkBeginCommandBuffer(app->render.command, &command_begin));
+    VkImageMemoryBarrier barrier = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask = 0, .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED, .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        .image = app->xr.images[f->image_index].image, .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .levelCount = 1, .layerCount = 2}};
+    vkCmdPipelineBarrier(app->render.command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, NULL, 0, NULL, 1, &barrier);
+    f->video_acquire = (VkImageMemoryBarrier){
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .srcAccessMask = 0,
+        .dstAccessMask = VK_ACCESS_SHADER_READ_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
+        .newLayout = VK_IMAGE_LAYOUT_GENERAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT,
+        .dstQueueFamilyIndex = app->gpu.queue_family,
+        .image = f->video ? f->video->image : VK_NULL_HANDLE,
+        .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                             .levelCount = 1, .layerCount = 1},
+    };
+    if (f->video && f->video->host) {
+        /* Own images, not shared with a foreign producer. */
+        f->video_acquire.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        f->video_acquire.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        if (f->video->producer_wait_pending) {
+            record_host_upload(app, f->video);
+            f->video->producer_wait_pending = false;
+            f->copied_video = true;
+        }
+    }
+    VkImageMemoryBarrier video_acquires[2] = {f->video_acquire,
+                                              f->video_acquire};
+    f->video_images = f->video && f->video->tp10 ? 2U : 1U;
+    if (f->video_images == 2U)
+        video_acquires[1].image = f->video->image_uv;
+    if (f->video)
+        vkCmdPipelineBarrier(
+            app->render.command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+            VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            0, 0, NULL, 0, NULL, f->video_images, video_acquires);
+}
+
+/* The video into both eyes, then the video back to its producer. */
+void record_video_passes(struct app *app, struct frame *f)
+{
+    for (uint32_t eye = 0; eye < 2; ++eye) {
+        VkClearValue clear;
+        background_color(app, clear.color.float32);
+        VkRenderPassBeginInfo pass = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
+            .renderPass = app->render.render_pass, .framebuffer = app->render.framebuffers[f->image_index][eye],
+            .renderArea = {.extent = {app->xr.width, app->xr.height}}, .clearValueCount = 1, .pClearValues = &clear};
+        vkCmdBeginRenderPass(app->render.command, &pass,
+                             VK_SUBPASS_CONTENTS_INLINE);
+        if (f->video) {
+            vkCmdBindPipeline(app->render.command,
+                              VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              f->video->tp10 ? app->render.pipeline_tp10
+                                             : app->render.pipeline);
+            uint32_t offset = eye * UBO_STRIDE;
+            vkCmdBindDescriptorSets(app->render.command, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    app->render.pipeline_layout, 0, 1,
+                                    &f->video->descriptor_set, 1, &offset);
+            vkCmdDraw(app->render.command, 4, 1, 0, 0);
+        }
+        vkCmdEndRenderPass(app->render.command);
+    }
+    VkImageMemoryBarrier video_release = f->video_acquire;
+    video_release.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    video_release.dstAccessMask = 0;
+    if (!f->video || !f->video->host) {
+        video_release.srcQueueFamilyIndex = app->gpu.queue_family;
+        video_release.dstQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
+    }
+    VkImageMemoryBarrier video_releases[2] = {video_release, video_release};
+    if (f->video_images == 2U)
+        video_releases[1].image = f->video->image_uv;
+    if (f->video)
+        vkCmdPipelineBarrier(app->render.command,
+                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                             VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, NULL,
+                             0, NULL, f->video_images, video_releases);
+}
+
+/* Submits the frame's commands, after the decoder's fence for a new
+ * DMA-BUF picture, and waits for them. */
+void submit_frame(struct app *app, struct frame *f)
+{
+    need_vk("vkEndCommandBuffer(render)",
+            vkEndCommandBuffer(app->render.command));
+    VkPipelineStageFlags producer_stage =
+        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    VkSubmitInfo submit = {.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+        .commandBufferCount = 1, .pCommandBuffers = &app->render.command};
+    if (f->video && f->video->producer_wait_pending) {
+        struct dma_buf_export_sync_file sync_export = {
+            .flags = DMA_BUF_SYNC_READ, .fd = -1,
+        };
+        if (ioctl(f->video->dma_buf_fd, DMA_BUF_IOCTL_EXPORT_SYNC_FILE,
+                  &sync_export) < 0) {
+            perror("DMA_BUF_IOCTL_EXPORT_SYNC_FILE");
+            exit(2);
+        }
+        VkImportSemaphoreFdInfoKHR semaphore_import = {
+            .sType = VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_FD_INFO_KHR,
+            .semaphore = f->video->producer_semaphore,
+            .flags = VK_SEMAPHORE_IMPORT_TEMPORARY_BIT,
+            .handleType = VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT,
+            .fd = sync_export.fd,
+        };
+        need_vk(
+            "vkImportSemaphoreFdKHR(producer)",
+            app->gpu.import_semaphore_fd(app->gpu.device, &semaphore_import));
+        submit.waitSemaphoreCount = 1;
+        submit.pWaitSemaphores = &f->video->producer_semaphore;
+        submit.pWaitDstStageMask = &producer_stage;
+        f->video->producer_wait_pending = false;
+    }
+    f->recorded = monotonic_seconds();
+    need_vk("vkQueueSubmit(render)", vkQueueSubmit(app->gpu.queue, 1, &submit, app->render.fence));
+    f->submitted = monotonic_seconds();
+    need_vk("vkWaitForFences(render completion)", vkWaitForFences(app->gpu.device, 1, &app->render.fence, VK_TRUE, UINT64_C(5000000000)));
+    f->gpu_ms = (monotonic_seconds() - f->submitted) * 1e3;
 }

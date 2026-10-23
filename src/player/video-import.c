@@ -133,8 +133,9 @@ static void import_plane(struct app *app, struct video_buffer *buffer,
     VkImageDrmFormatModifierPropertiesEXT chosen = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_PROPERTIES_EXT,
     };
-    need_vk("vkGetImageDrmFormatModifierPropertiesEXT(plane)",
-            app->gpu.get_modifier_properties(app->gpu.device, *image, &chosen));
+    need_vk(
+        "vkGetImageDrmFormatModifierPropertiesEXT(plane)",
+        app->gpu.get_modifier_properties(app->gpu.device, *image, &chosen));
     need(chosen.drmFormatModifier == drm_modifier,
          "Vulkan substituted the video plane modifier");
     VkMemoryRequirements requirements;
@@ -146,7 +147,8 @@ static void import_plane(struct app *app, struct video_buffer *buffer,
     };
     need_vk("vkGetMemoryFdPropertiesKHR(plane)",
             app->gpu.get_memory_fd_properties(
-                app->gpu.device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+                app->gpu.device,
+                VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
                 buffer->dma_buf_fd, &fd_properties));
     uint32_t bits = requirements.memoryTypeBits & fd_properties.memoryTypeBits;
     need(bits != 0, "plane DMA-BUF memory-type intersection is empty");
@@ -247,8 +249,10 @@ static void import_host_buffer(struct app *app, uint32_t i)
         .handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
     };
     VkBufferCreateInfo buffer_info = {
-        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .pNext = &external,
-        .size = app->video.dma_buf_size, .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .pNext = &external,
+        .size = app->video.dma_buf_size,
+        .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
     };
     need_vk("vkCreateBuffer(host video)",
@@ -336,13 +340,15 @@ void record_host_upload(struct app *app,
             .imageExtent = {app->video.width, app->video.height, 1},
         };
         VkBufferImageCopy chroma = {
-            .bufferOffset = app->video.uv_offset, .bufferRowLength = stride / 4U,
+            .bufferOffset = app->video.uv_offset,
+            .bufferRowLength = stride / 4U,
             .imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                                  .layerCount = 1},
             .imageExtent = {app->video.width / 2U, app->video.height / 2U, 1},
         };
-        vkCmdCopyBufferToImage(app->render.command, video->host_buffer, video->image,
-                               VK_IMAGE_LAYOUT_GENERAL, 1, &luma);
+        vkCmdCopyBufferToImage(app->render.command, video->host_buffer,
+                               video->image, VK_IMAGE_LAYOUT_GENERAL, 1,
+                               &luma);
         vkCmdCopyBufferToImage(app->render.command, video->host_buffer,
                                video->image_uv, VK_IMAGE_LAYOUT_GENERAL, 1,
                                &chroma);
@@ -352,14 +358,16 @@ void record_host_upload(struct app *app,
              .imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_PLANE_0_BIT,
                                   .layerCount = 1},
              .imageExtent = {app->video.width, app->video.height, 1}},
-            {.bufferOffset = app->video.uv_offset, .bufferRowLength = stride / 2U,
+            {.bufferOffset = app->video.uv_offset,
+             .bufferRowLength = stride / 2U,
              .imageSubresource = {.aspectMask = VK_IMAGE_ASPECT_PLANE_1_BIT,
                                   .layerCount = 1},
              .imageExtent = {app->video.width / 2U, app->video.height / 2U,
                              1}},
         };
-        vkCmdCopyBufferToImage(app->render.command, video->host_buffer, video->image,
-                               VK_IMAGE_LAYOUT_GENERAL, 2, planes);
+        vkCmdCopyBufferToImage(app->render.command, video->host_buffer,
+                               video->image, VK_IMAGE_LAYOUT_GENERAL, 2,
+                               planes);
     }
     for (uint32_t i = 0; i < count; ++i) {
         barriers[i].srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
@@ -385,7 +393,8 @@ static void import_video_buffer(struct app *app, uint32_t i)
     if (tp10_buffer->tp10) {
         uint64_t modifier = p010 ? DRM_FORMAT_MOD_LINEAR
                                  : DRM_FORMAT_MOD_QCOM_COMPRESSED;
-        uint32_t width = p010 ? app->video.coded_width : app->video.coded_width / 3U;
+        uint32_t width =
+            p010 ? app->video.coded_width : app->video.coded_width / 3U;
         import_plane(app, tp10_buffer,
                      p010 ? VK_FORMAT_R16_UNORM : VK_FORMAT_R8G8B8A8_UNORM,
                      modifier, width, 0, app->video.coded_height,
@@ -454,7 +463,8 @@ static void import_video_buffer(struct app *app, uint32_t i)
     need(chosen.drmFormatModifier == DRM_FORMAT_MOD_LINEAR,
          "Vulkan substituted the NV12 modifier");
     VkMemoryRequirements requirements;
-    vkGetImageMemoryRequirements(app->gpu.device, buffer->image, &requirements);
+    vkGetImageMemoryRequirements(app->gpu.device, buffer->image,
+                                 &requirements);
     need(requirements.size <= app->video.dma_buf_size,
          "NV12 Vulkan memory requirement exceeds DMA-BUF");
     VkMemoryFdPropertiesKHR fd_properties = {
@@ -462,7 +472,8 @@ static void import_video_buffer(struct app *app, uint32_t i)
     };
     need_vk("vkGetMemoryFdPropertiesKHR",
             app->gpu.get_memory_fd_properties(
-                app->gpu.device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+                app->gpu.device,
+                VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
                 buffer->dma_buf_fd, &fd_properties));
     uint32_t bits =
         requirements.memoryTypeBits & fd_properties.memoryTypeBits;
@@ -709,7 +720,8 @@ void discard_held_frame(struct app *app)
 {
     if (!app->video.has_held)
         return;
-    need_vk("vkDeviceWaitIdle(discard held)", vkDeviceWaitIdle(app->gpu.device));
+    need_vk("vkDeviceWaitIdle(discard held)",
+            vkDeviceWaitIdle(app->gpu.device));
     VkDescriptorSet set = app->video.held.descriptor_set;
     destroy_video_buffer(app, &app->video.held);
     app->video.spare_set = set;

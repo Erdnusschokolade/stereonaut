@@ -413,10 +413,12 @@ static bool apply_setting(struct app *app, int action)
     if (action >= PLAYER_UI_BINDING &&
         action < PLAYER_UI_BINDING + BINDING_ACTION_COUNT) {
         int chosen = action - PLAYER_UI_BINDING;
-        app->controls.learn_action = app->controls.learn_action == chosen ? -1 : chosen;
+        app->controls.learn_action =
+            app->controls.learn_action == chosen ? -1 : chosen;
     } else if (action == PLAYER_UI_BINDING_CLEAR) {
         if (app->controls.learn_action >= 0) {
-            app->controls.bindings[app->controls.learn_action] = (struct binding){-1, -1};
+            app->controls.bindings[app->controls.learn_action] =
+                (struct binding){-1, -1};
             save_binding(app, app->controls.learn_action);
         }
         app->controls.learn_action = -1;
