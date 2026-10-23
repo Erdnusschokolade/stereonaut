@@ -815,6 +815,91 @@ static void layout_passthrough(const struct player_ui_state *state,
     }
 }
 
+/* Information tab: the description across two columns, facts in the
+ * third, as many as fit (two lines each while there is room). */
+#define FACT_LABEL_W 150
+#define FACT_LINE_H 30
+#define FACT_GAP 8
+#define INFO_BOTTOM (POPUP_Y + POPUP_H - 20)
+
+static void layout_info(const struct player_ui_state *state,
+                        struct ui_layout *layout)
+{
+    const struct jf_details *details = state->details;
+    char year[16] = "", rating[16] = "";
+    if (details && details->year > 0)
+        snprintf(year, sizeof(year), "%d", details->year);
+    if (details && details->community_rating > 0.0f)
+        snprintf(rating, sizeof(rating), "%.1f", details->community_rating);
+    COLUMNS {
+        CLAY({.layout = {.sizing = {CLAY_SIZING_FIXED(2 * COLUMN_W +
+                                                      COLUMN_GAP),
+                                    CLAY_SIZING_GROW(0)},
+                         .childGap = FACT_GAP,
+                         .layoutDirection = CLAY_TOP_TO_BOTTOM}}) {
+            if (!details) {
+                ui_layout_paragraph(layout,
+                                    tr("No information – only Jellyfin "
+                                       "titles have a description."),
+                                    UI_LAYOUT_REGULAR, 24, color_dim, 32, 3);
+            } else {
+                hint(layout, tr("Description"));
+                ui_layout_paragraph(
+                    layout,
+                    details->overview[0] ? details->overview
+                                         : tr("No description."),
+                    UI_LAYOUT_REGULAR, 23,
+                    details->overview[0] ? color_text : color_dim, 31, 6);
+            }
+        }
+        if (details) {
+            const struct {
+                const char *label, *value;
+            } rows[] = {
+                {tr("Year"), year},
+                {tr("Rating"), rating},
+                {tr("Studio"), details->studios},
+                {tr("People"), details->people},
+                {tr("Genres"), details->genres},
+                {tr("Tags"), details->tags},
+            };
+            CLAY({.layout = {.sizing = {CLAY_SIZING_GROW(0),
+                                        CLAY_SIZING_GROW(0)},
+                             .childGap = FACT_GAP,
+                             .layoutDirection = CLAY_TOP_TO_BOTTOM}}) {
+                int room = INFO_BOTTOM - CONTENT_Y;
+                for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]);
+                     ++i) {
+                    if (!rows[i].value[0])
+                        continue;
+                    if (room < FACT_LINE_H)
+                        break;
+                    int lines = ui_layout_line_count(
+                        rows[i].value, UI_LAYOUT_REGULAR, 23,
+                        COLUMN_W - FACT_LABEL_W,
+                        room / FACT_LINE_H >= 2 ? 2 : 1);
+                    room -= lines * FACT_LINE_H + FACT_GAP;
+                    CLAY({.layout = {.sizing = {CLAY_SIZING_GROW(0),
+                                                CLAY_SIZING_FIT(0)}}}) {
+                        CLAY({.layout = {.sizing = {CLAY_SIZING_FIXED(
+                                                        FACT_LABEL_W),
+                                                    CLAY_SIZING_FIT(0)},
+                                         .padding = {.top = 2}}}) {
+                            ui_layout_label(layout, rows[i].label,
+                                            UI_LAYOUT_REGULAR, 22, color_dim,
+                                            UI_ALIGN_LEFT,
+                                            CLAY_SIZING_GROW(0));
+                        }
+                        ui_layout_paragraph(layout, rows[i].value,
+                                            UI_LAYOUT_REGULAR, 23,
+                                            color_text, FACT_LINE_H, lines);
+                    }
+                }
+            }
+        }
+    }
+}
+
 /* Updates tab: versions and the check (first column), the status and the
  * update (second), the check at start (third). */
 static void layout_updates(const struct player_ui_state *state,
@@ -948,6 +1033,9 @@ static bool layout_tab(const struct player_ui_state *state,
     case PLAYER_UI_TAB_PASSTHROUGH:
         describe = layout_passthrough;
         break;
+    case PLAYER_UI_TAB_INFO:
+        describe = layout_info;
+        break;
     case PLAYER_UI_TAB_LANGUAGE:
         describe = layout_language;
         break;
@@ -1032,60 +1120,6 @@ static void draw_chip(struct player_ui *ui, struct ui_canvas *canvas, int x,
                  UI_ALIGN_CENTER, color_text, label);
 }
 
-/* Information tab: the description across two columns, facts in the
- * third. */
-static void draw_info(struct player_ui *ui, struct ui_canvas *canvas,
-                      const struct jf_details *details)
-{
-    const int left = COLUMN_X(0), top = ROW_LABEL_Y(0);
-    const int text_w = COLUMN_X(2) - 44 - left;
-    if (!details) {
-        ui_draw_text_wrapped(canvas, ui->font, 24, left, top, text_w, 32, 3,
-                             UI_ALIGN_LEFT, color_dim,
-                             tr("No information – only Jellyfin titles have "
-                                "a description."));
-        return;
-    }
-    ui_draw_text(canvas, ui->font, 22, left, top, 0, UI_ALIGN_LEFT,
-                 color_dim, tr("Description"));
-    ui_draw_text_wrapped(canvas, ui->font, 23, left, top + 34, text_w, 31, 6,
-                         UI_ALIGN_LEFT,
-                         details->overview[0] ? color_text : color_dim,
-                         details->overview[0] ? details->overview
-                                              : tr("No description."));
-    char year[16] = "", rating[16] = "";
-    if (details->year > 0)
-        snprintf(year, sizeof(year), "%d", details->year);
-    if (details->community_rating > 0.0f)
-        snprintf(rating, sizeof(rating), "%.1f", details->community_rating);
-    const struct {
-        const char *label, *value;
-    } rows[] = {
-        {tr("Year"), year},
-        {tr("Rating"), rating},
-        {tr("Studio"), details->studios},
-        {tr("People"), details->people},
-        {tr("Genres"), details->genres},
-        {tr("Tags"), details->tags},
-    };
-    const int x = COLUMN_X(2), label_w = 150, bottom = POPUP_Y + POPUP_H - 20;
-    int y = top;
-    for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]); ++i) {
-        if (!rows[i].value[0])
-            continue;
-        if (y + 30 > bottom)
-            break;
-        ui_draw_text(canvas, ui->font, 22, x, y + 2, label_w, UI_ALIGN_LEFT,
-                     color_dim, rows[i].label);
-        int lines = (bottom - y) / 30 >= 2 ? 2 : 1;
-        y += 30 * ui_draw_text_wrapped(canvas, ui->font, 23, x + label_w, y,
-                                       COLUMN_W - label_w, 30, lines,
-                                       UI_ALIGN_LEFT, color_text,
-                                       rows[i].value) +
-             8;
-    }
-}
-
 static void draw_popup(struct player_ui *ui, struct ui_canvas *canvas,
                        const struct player_ui_state *state)
 {
@@ -1101,8 +1135,6 @@ static void draw_popup(struct player_ui *ui, struct ui_canvas *canvas,
          column < 3; ++column)
         ui_fill_rect(canvas, COLUMN_X(column) - 22, TAB_Y + CHIP_H + 26, 2,
                      POPUP_H - CHIP_H - 64, color_border);
-    if (state->popup_tab == PLAYER_UI_TAB_INFO)
-        draw_info(ui, canvas, state->details);
     struct popup_layout layout;
     layout_popup(state, &layout);
     for (int i = 0; i < layout.count; ++i) {

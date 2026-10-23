@@ -961,10 +961,11 @@ static bool breakable_after(uint32_t code)
            code >= 0x2E80; /* CJK and later scripts break anywhere */
 }
 
-int ui_draw_text_wrapped(struct ui_canvas *canvas, struct ui_font *font,
-                         int pixel_size, int x, int y, int width,
-                         int line_height, int max_lines, enum ui_align align,
-                         struct ui_color color, const char *text)
+/* Word wrap shared by drawing and counting (canvas NULL: count only). */
+static int wrap_text(struct ui_canvas *canvas, struct ui_font *font,
+                     int pixel_size, int x, int y, int width, int line_height,
+                     int max_lines, enum ui_align align,
+                     struct ui_color color, const char *text)
 {
     if (!ui_font_ready(font) || !text)
         return 0;
@@ -977,8 +978,10 @@ int ui_draw_text_wrapped(struct ui_canvas *canvas, struct ui_font *font,
                      : align == UI_ALIGN_RIGHT ? x + width
                                                : x;
         if (lines == max_lines - 1) {
-            ui_draw_text(canvas, font, pixel_size, anchor,
-                         y + lines * line_height, width, align, color, line);
+            if (canvas)
+                ui_draw_text(canvas, font, pixel_size, anchor,
+                             y + lines * line_height, width, align, color,
+                             line);
             return lines + 1;
         }
         const char *cursor = line, *last_break = NULL;
@@ -1006,10 +1009,27 @@ int ui_draw_text_wrapped(struct ui_canvas *canvas, struct ui_font *font,
         int start = align == UI_ALIGN_CENTER ? anchor - line_width / 2
                     : align == UI_ALIGN_RIGHT ? anchor - line_width
                                               : x;
-        draw_run(canvas, font, pixel_size, start, baseline, color, line,
-                 length);
+        if (canvas)
+            draw_run(canvas, font, pixel_size, start, baseline, color, line,
+                     length);
         ++lines;
         line = end;
     }
     return lines;
+}
+
+int ui_draw_text_wrapped(struct ui_canvas *canvas, struct ui_font *font,
+                         int pixel_size, int x, int y, int width,
+                         int line_height, int max_lines, enum ui_align align,
+                         struct ui_color color, const char *text)
+{
+    return wrap_text(canvas, font, pixel_size, x, y, width, line_height,
+                     max_lines, align, color, text);
+}
+
+int ui_text_line_count(struct ui_font *font, int pixel_size, int width,
+                       int max_lines, const char *text)
+{
+    return wrap_text(NULL, font, pixel_size, 0, 0, width, 0, max_lines,
+                     UI_ALIGN_LEFT, UI_RGBA(0, 0, 0, 0), text);
 }

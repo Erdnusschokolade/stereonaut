@@ -130,5 +130,8 @@ int ui_draw_text_wrapped(struct ui_canvas *canvas, struct ui_font *font,
                          int pixel_size, int x, int y, int width,
                          int line_height, int max_lines, enum ui_align align,
                          struct ui_color color, const char *text);
+/* Lines ui_draw_text_wrapped would draw. */
+int ui_text_line_count(struct ui_font *font, int pixel_size, int width,
+                       int max_lines, const char *text);
 
 #endif

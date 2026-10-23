@@ -244,6 +244,13 @@ void ui_layout_paragraph(struct ui_layout *layout, const char *text,
           .custom = {.customData = item}}) {}
 }
 
+int ui_layout_line_count(const char *text, enum ui_layout_font font,
+                         int size, int width, int max_lines)
+{
+    return ui_text_line_count(measure_fonts[font], size, width, max_lines,
+                              text);
+}
+
 static void draw_item(const struct ui_layout_command *command,
                       struct ui_canvas *canvas,
                       struct ui_font *const fonts[UI_LAYOUT_FONT_COUNT])

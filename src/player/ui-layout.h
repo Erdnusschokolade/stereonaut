@@ -114,6 +114,11 @@ void ui_layout_paragraph(struct ui_layout *layout, const char *text,
                          struct ui_color color, int line_height,
                          int max_lines);
 
+/* Lines `text` wraps into across `width` (at most max_lines), measured as
+ * a paragraph draws it; only between ui_layout_begin and ui_layout_end. */
+int ui_layout_line_count(const char *text, enum ui_layout_font font,
+                         int size, int width, int max_lines);
+
 void ui_layout_draw(const struct ui_layout *layout, struct ui_canvas *canvas,
                     struct ui_font *const fonts[UI_LAYOUT_FONT_COUNT]);
 /* Control at canvas pixel x/y (the last laid out wins), or `none`. */
