@@ -128,7 +128,7 @@ void poll_events(struct app *app)
             continue;
         }
         if (event.type == RENDER_MODELS_CHANGED_EVENT) {
-            app->render_models_dirty = true;
+            app->overlay.render_models_dirty = true;
             continue;
         }
         if (event.type == XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING) {
@@ -239,7 +239,7 @@ void initialize_xr_vulkan(struct app *app)
         extensions[extension_count++] = valve_extension;
     if (app->xr.has_generic_controller)
         extensions[extension_count++] = generic_extension;
-    render_models_request_extensions(&app->render_models, available,
+    render_models_request_extensions(&app->overlay.render_models, available,
                                      available_count, extensions,
                                      &extension_count);
     free(available);

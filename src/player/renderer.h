@@ -51,6 +51,7 @@
 #include "player-ui-ipc.h"
 #include "xr-math.h"
 #include "xr-session.h"
+#include "overlay.h"
 
 #define ARRAY_COUNT(a) (sizeof(a) / sizeof((a)[0]))
 /* Entries of button_inputs (buttons beyond trigger and grip). */
@@ -233,19 +234,6 @@ struct panel_thread {
     uint32_t *pixels; /* UI_BYTES */
 };
 
-/* A controller model on the GPU (record_overlay). */
-struct gpu_model {
-    struct gltf_model mesh;
-    uint32_t source;          /* index in app->render_models */
-    int *animation;           /* per glTF node: animatable node or -1 */
-    VkBuffer vertices, indices;
-    VkDeviceMemory vertex_memory, index_memory;
-    VkImage texture;
-    VkDeviceMemory texture_memory;
-    VkImageView texture_view;
-    VkDescriptorSet set;
-};
-
 struct app {
     struct xr_state xr;
     struct gpu gpu;
@@ -374,42 +362,7 @@ struct app {
     /* "Next/previous video": the title to start once the session ended. */
     char skip_path[PLAYER_UI_PATH_MAX];
     char skip_title[256];
-    /* Controller models (render-models.h); reloaded when the runtime
-     * reports other devices. */
-    struct render_models render_models;
-    bool render_models_dirty;
-    /* Overlay layer above the panels: controller models and pointer
-     * beams with their own depth buffer (record_overlay). */
-    /* One swapchain per eye: SteamVR showed the first array layer of a
-     * second projection layer to both eyes. */
-    XrSwapchain overlay_swapchains[2];
-    /* On a PC the overlay is drawn into the eye images (overlay_in_eye_
-     * images): no swapchains of its own, framebuffers on the eye images. */
-    bool overlay_in_eye_images;
-    uint32_t overlay_image_counts[2];
-    XrSwapchainImageVulkan2KHR overlay_images[2][MAX_IMAGES];
-    VkImageView overlay_views[2][MAX_IMAGES];
-    VkFramebuffer overlay_framebuffers[2][MAX_IMAGES];
-    VkImage overlay_depth;
-    VkDeviceMemory overlay_depth_memory;
-    VkImageView overlay_depth_views[2];
-    VkRenderPass overlay_pass;
-    VkSampler model_sampler;
-    VkDescriptorSetLayout model_descriptor_layout;
-    VkDescriptorPool model_descriptor_pool;
-    VkPipelineLayout model_pipeline_layout, beam_pipeline_layout;
-    VkPipeline model_pipeline, beam_pipeline;
-    uint32_t overlay_width, overlay_height;
-    struct gpu_model gpu_models[RENDER_MODELS_MAX];
-    uint32_t gpu_model_count;
-    /* Pointer beam per hand from the last input sync: aim and the distance
-     * to the panel it hits (<= 0: none). */
-    struct laser {
-        bool valid;
-        XrPosef aim;
-        float panel_length;
-    } lasers[2];
-    bool overlay_wanted;
+    struct overlay overlay;
     XrAction gaze_action;
     XrSpace gaze_space;
     bool gaze_logged;
@@ -529,6 +482,8 @@ struct app {
 };
 
 /* Still in stereonaut-renderer.c, used by the modules split off so far. */
-bool overlay_in_eye_images(void);
+struct ui_texture;
+void record_ui_upload(VkCommandBuffer command, struct ui_texture *texture,
+                      VkImage target, VkBuffer staging, bool initialized);
 
 #endif
