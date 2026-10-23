@@ -654,11 +654,11 @@ void record_overlay(struct app *app, VkCommandBuffer command,
         if (panel && panel->ready) {
             struct mat4 mvp = multiply(view_projection, panel_matrix);
             vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                              app->panel_pipeline);
+                              app->panels.panel_pipeline);
             vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                    app->panel_pipeline_layout, 0, 1,
+                                    app->panels.panel_pipeline_layout, 0, 1,
                                     &panel->descriptor_set, 0, NULL);
-            vkCmdPushConstants(command, app->panel_pipeline_layout,
+            vkCmdPushConstants(command, app->panels.panel_pipeline_layout,
                                VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(mvp),
                                &mvp);
             vkCmdDraw(command, 4, 1, 0, 0);

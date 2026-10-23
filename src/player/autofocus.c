@@ -204,7 +204,7 @@ void create_gaze_markers(struct app *app)
             .type = XR_TYPE_SWAPCHAIN_CREATE_INFO,
             .usageFlags = XR_SWAPCHAIN_USAGE_SAMPLED_BIT |
                           XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT,
-            .format = app->ui_format, .sampleCount = 1,
+            .format = app->panels.ui_format, .sampleCount = 1,
             .width = GAZE_MARKER_WIDTH, .height = GAZE_MARKER_HEIGHT,
             .faceCount = 1, .arraySize = 1, .mipCount = 1,
         };
@@ -214,7 +214,7 @@ void create_gaze_markers(struct app *app)
         static uint8_t pixels[GAZE_MARKER_WIDTH * GAZE_MARKER_HEIGHT * 4];
         memset(pixels, 0, sizeof(pixels));
         struct ui_canvas canvas = {pixels, GAZE_MARKER_WIDTH,
-                                   GAZE_MARKER_HEIGHT, app->ui_bgra};
+                                   GAZE_MARKER_HEIGHT, app->panels.ui_bgra};
         ui_stroke_round_rect(&canvas, 3, 3, GAZE_MARKER_WIDTH - 6,
                              GAZE_MARKER_HEIGHT - 6, 8, 4, colors[i]);
         ui_fill_circle(&canvas, GAZE_MARKER_WIDTH / 2.0f,

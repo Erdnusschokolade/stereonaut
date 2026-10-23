@@ -53,6 +53,7 @@
 #include "xr-session.h"
 #include "overlay.h"
 #include "autofocus.h"
+#include "panel-compositor.h"
 
 #define ARRAY_COUNT(a) (sizeof(a) / sizeof((a)[0]))
 /* Entries of button_inputs (buttons beyond trigger and grip). */
@@ -151,19 +152,6 @@ struct video_buffer {
     VkDeviceMemory host_memory;
 };
 
-/* A UI panel drawn into the overlay layer (see panels_in_eye_images): a
- * mipmapped image the renderer samples itself. As a quad layer
- * (STEREONAUT_UI_LAYER=quad) only width and height are used. */
-struct ui_texture {
-    uint32_t width, height;
-    uint32_t mip_levels;
-    VkImage image;
-    VkDeviceMemory memory;
-    VkImageView view;
-    VkDescriptorSet descriptor_set;
-    bool ready;
-};
-
 /* Trigger state with hysteresis (button_update). */
 struct button {
     bool down;       /* debounced physical state */
@@ -185,35 +173,6 @@ struct frame_timing {
     double gpu_ms[2], gpu_max_ms[2]; /* [1]: with a video copy */
     uint32_t gpu_frames[2];
     double period_ms;
-};
-
-/* The player panel is drawn on the CPU in a thread of its own: in the
- * frame loop its several milliseconds pushed frames past their deadline
- * on a PC, where the video copy takes its share. The loop hands the thread
- * a snapshot of the panel's state (with its own copies of everything the
- * state points to) and uploads the finished pixels. */
-struct panel_job {
-    struct player_ui_state state;
-    char title[256];
-    struct jf_details details;
-    float adjust[PLAYER_ADJUST_COUNT];
-    char update_installed[64], update_latest[64], update_status[256];
-    struct binding bindings[BINDING_ACTION_COUNT];
-    char debug_text[192];
-    struct ui_image *preview[PLAYER_UI_PREVIEW_STRIP];
-};
-
-struct panel_thread {
-    pthread_t thread;
-    bool started;
-    pthread_mutex_t mutex;
-    pthread_cond_t changed;
-    bool stopping;
-    bool pending; /* the job waits for the thread */
-    bool busy;    /* the thread draws the job into pixels */
-    bool done;    /* pixels hold a finished panel */
-    struct panel_job job;
-    uint32_t *pixels; /* UI_BYTES */
 };
 
 struct app {
@@ -262,22 +221,7 @@ struct app {
     bool xr_exit;           /* the runtime ended the session */
     bool awaiting_command;  /* a selection was sent, wait for PLAY/BROWSE */
     struct browser_ui browser;
-    XrSwapchain browser_swapchain;
-    uint32_t browser_image_count;
-    XrSwapchainImageVulkan2KHR browser_images[MAX_IMAGES];
-    bool browser_image_initialized[MAX_IMAGES];
-    VkBuffer browser_staging_buffer;
-    VkDeviceMemory browser_staging_memory;
-    uint32_t *browser_pixels; /* mapped staging memory: write-only */
-    uint32_t *browser_cpu;    /* the browser draws here (cached memory) */
-    VkCommandBuffer browser_command;
-    /* Pointer dot as its own small quad layer, so moving the pointer does
-     * not require redrawing and uploading a panel texture. */
-    XrSwapchain pointer_swapchain;
-    bool pointer_layer_visible;
-    XrPosef pointer_pose;
-    float pointer_size;
-    VkFence browser_fence;
+    struct panel_compositor panels;
     int ipc_fd;
     bool eos_received;
     bool title_finished;  /* EOS after the last frame, not "back" */
@@ -359,35 +303,13 @@ struct app {
     void *uniform_mapping;
     VkImageView image_views[MAX_IMAGES][2];
     VkFramebuffer framebuffers[MAX_IMAGES][2];
-    XrSwapchain ui_swapchain;
-    uint32_t ui_image_count;
-    XrSwapchainImageVulkan2KHR ui_images[MAX_IMAGES];
-    bool ui_image_initialized[MAX_IMAGES];
-    VkFormat ui_format;
-    bool ui_bgra;
-    struct ui_texture ui_texture, browser_texture;
-    bool panels_in_eye_images;
-    VkSampler panel_sampler;
-    VkDescriptorSetLayout panel_descriptor_layout;
-    VkDescriptorPool panel_descriptor_pool;
-    VkPipelineLayout panel_pipeline_layout;
-    VkPipeline panel_pipeline;
-    VkBuffer ui_staging_buffer;
-    VkDeviceMemory ui_staging_memory;
-    uint32_t *ui_pixels; /* mapped staging memory: write-only */
-    struct player_ui player_ui;
-    /* The player panel's thread and the lock of player_ui (fonts), which
-     * the settings page shares with it. */
-    struct panel_thread panel_thread;
-    pthread_mutex_t player_ui_mutex;
     bool popup_open;
     int popup_tab;                       /* enum player_ui_tab */
     /* Settings page over the browser: the popup's settings tabs, drawn
-     * into settings_cpu and copied onto the browser panel. */
+     * into panels.settings_cpu and copied onto the browser panel. */
     bool settings_open;
     int settings_tab;
     int settings_hover;
-    uint32_t *settings_cpu;
     int system_language; /* what "automatic" finds, see i18n_detect */
     struct updater updater;
     bool update_auto;          /* check for a release at start */
@@ -426,8 +348,6 @@ struct app {
     double preview_redraw_time; /* monotonic seconds */
     bool preview_perspective; /* straighten 180/360 degree previews */
     int preview_fov;          /* degrees, one of player_ui_preview_fovs */
-    VkCommandBuffer ui_command;
-    VkFence ui_fence;
     uint64_t xr_frames, rendered_frames, session_changes;
     uint64_t received_frames, released_frames;
     uint64_t unique_video_frames, repeated_video_frames;
@@ -437,11 +357,8 @@ struct app {
 
 /* Still in stereonaut-renderer.c, used by the modules split off so far. */
 void save_adjust(const struct app *app, int index);
-void fill_static_swapchain(struct app *app, XrSwapchain swapchain,
-                           const uint8_t *pixels, uint32_t width,
-                           uint32_t height);
-struct ui_texture;
-void record_ui_upload(VkCommandBuffer command, struct ui_texture *texture,
-                      VkImage target, VkBuffer staging, bool initialized);
+struct player_ui_state player_state(const struct app *app);
+struct player_ui_state settings_state(const struct app *app);
+void timing_ui(struct app *app, double started);
 
 #endif
