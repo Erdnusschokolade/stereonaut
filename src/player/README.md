@@ -176,6 +176,27 @@ a playback session's NV12 socket, and the host answers `FILE_SELECTED` or
 lives in `browser-ui.c`. `stereonaut-launcher --play PATH --frames N` runs a
 bounded playback without browsing, which is what the hardware tests use.
 
+The host's state is one `struct app` (`renderer.h`); each module keeps its
+part in a struct of its own header:
+
+| File | Part (`app->…`) | Holds |
+| --- | --- | --- |
+| `stereonaut-renderer.c` | – | main loop, launcher commands, playback start and end, home, frame timing, `render_frame` as the sequence of its phases |
+| `xr-session.c` | `xr`, `gpu` | OpenXR instance and session, eye swapchain, events, the Vulkan device, shared helpers (`need*`, `shader`) |
+| `video-import.c` | `video` | DMA-BUF and host-memory import, samplers, holding the frame across a session restart |
+| `render-pipeline.c` | `render` | projection pipelines, per-eye uniforms, the frame's command buffer and submit |
+| `autofocus.c` | `autofocus` | disparity measurement, focus and fade, key colour pick, gaze markers |
+| `panel-compositor.c` | `panels` | panel textures and quad swapchains, the player panel's thread, browser and settings upload, pointer, panel pipeline, ray hits |
+| `overlay.c` | `overlay` | controller models, pointer beams, the overlay layer or its passes in the eye images |
+| `xr-input.c` | `input` | actions and suggested bindings, trigger, stick, grip and buttons |
+| `input-bindings.c` | `controls` | the controller bindings: combinations, repeat, learning, seeking by binding |
+| `session-ipc.c` | `link` | the NV12 socket to the playing session |
+| `ui-control.c` | – | what the viewer does with player panel, popup, settings page and browser |
+| `xr-math.c` | – | matrices and vectors |
+
+The player's own state (panel placement, seek, preview, settings, the
+title's format and picture values) stays in `struct app`.
+
 The OpenXR host also suggests the standardized SteamVR PC controller profiles
 (Valve Index, Meta/Oculus Touch, Windows Mixed Reality and HTC Vive/Cosmos).
 The ordinary Linux OpenXR loader is selected automatically at build time; the
