@@ -157,4 +157,6 @@ The panel layout can be checked on a desktop without a headset:
 ## License
 
 MIT, see `LICENSE`. The Mesa patch in `tools/mesa-tp10/` applies to Mesa,
-which is MIT-licensed as well.
+which is MIT-licensed as well. `src/player/third_party/clay/clay.h` is
+Clay by Nic Barker under the zlib licence (see the `LICENSE.md` next to
+it).
