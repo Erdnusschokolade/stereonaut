@@ -611,11 +611,11 @@ void upload_render_models(struct app *app)
 
 /* Records the overlay's two eye passes into `command`. */
 void record_overlay(struct app *app, VkCommandBuffer command,
-                           const uint32_t images[2], const XrView views[2],
-                           XrTime time, const struct ui_texture *panel,
-                           struct mat4 panel_matrix,
-                           const float beam_lengths[2],
-                           const bool beam_dots[2])
+                    const uint32_t images[2], const XrView views[2],
+                    XrTime time, const struct ui_texture *panel,
+                    struct mat4 panel_matrix,
+                    const float beam_lengths[2],
+                    const bool beam_dots[2])
 {
     struct mat4 node_world[64];
     struct mat4 model_world[RENDER_MODELS_MAX];

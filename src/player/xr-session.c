@@ -46,7 +46,7 @@ void need(bool condition, const char *what)
 }
 
 uint32_t memory_type(VkPhysicalDevice physical, uint32_t bits,
-                            VkMemoryPropertyFlags wanted)
+                     VkMemoryPropertyFlags wanted)
 {
     VkPhysicalDeviceMemoryProperties properties;
     vkGetPhysicalDeviceMemoryProperties(physical, &properties);

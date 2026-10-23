@@ -461,7 +461,7 @@ static void change_view(struct app *app, int control)
 
 /* Per-title values go to the title's entry in titles.json, tilt and head
  * motion to settings.json. */
-static void save_adjust(const struct app *app, int index)
+void save_adjust(const struct app *app, int index)
 {
     const struct player_adjust_info *info = &player_adjust_info[index];
     if (info->global) {
@@ -1338,7 +1338,7 @@ static void create_pipeline(struct app *app)
         "stereo-disparity.comp.spv", "stereo-disparity-tp10.comp.spv",
     };
     VkPipeline *disparity_pipelines[2] = {
-        &app->disparity_pipeline, &app->disparity_pipeline_tp10,
+        &app->autofocus.disparity_pipeline, &app->autofocus.disparity_pipeline_tp10,
     };
     for (int i = 0; i < 2; ++i) {
         VkShaderModule module = shader(app->gpu.device, disparity_shaders[i]);
@@ -1450,7 +1450,7 @@ static struct player_ui_state player_state(const struct app *app)
         .update_auto = app->update_auto,
         .bindings = app->bindings,
         .learn_action = app->learn_action,
-        .debug_text = app->gaze_debug ? app->debug_text : NULL,
+        .debug_text = app->gaze_debug ? app->autofocus.debug_text : NULL,
         .projection_mode = app->projection_mode,
         .stereo_layout = app->stereo_layout,
         .swap_eyes = app->swap_eyes,
@@ -1951,7 +1951,7 @@ static void write_video_descriptor(struct app *app, VkDescriptorSet set,
          .imageLayout = VK_IMAGE_LAYOUT_GENERAL},
     };
     VkDescriptorBufferInfo disparity = {
-        .buffer = app->disparity_buffer, .offset = 0,
+        .buffer = app->autofocus.disparity_buffer, .offset = 0,
         .range = sizeof(struct disparity_result),
     };
     VkWriteDescriptorSet writes[4] = {
@@ -2009,14 +2009,14 @@ static void create_render_resources(struct app *app)
         .size = sizeof(struct disparity_result),
         .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
-    need_vk("vkCreateBuffer(disparity)", vkCreateBuffer(app->gpu.device, &disparity, NULL, &app->disparity_buffer));
-    vkGetBufferMemoryRequirements(app->gpu.device, app->disparity_buffer, &requirements);
+    need_vk("vkCreateBuffer(disparity)", vkCreateBuffer(app->gpu.device, &disparity, NULL, &app->autofocus.disparity_buffer));
+    vkGetBufferMemoryRequirements(app->gpu.device, app->autofocus.disparity_buffer, &requirements);
     allocation.allocationSize = requirements.size;
     allocation.memoryTypeIndex = memory_type(app->gpu.physical, requirements.memoryTypeBits,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    need_vk("vkAllocateMemory(disparity)", vkAllocateMemory(app->gpu.device, &allocation, NULL, &app->disparity_memory));
-    need_vk("vkBindBufferMemory(disparity)", vkBindBufferMemory(app->gpu.device, app->disparity_buffer, app->disparity_memory, 0));
-    need_vk("vkMapMemory(disparity)", vkMapMemory(app->gpu.device, app->disparity_memory, 0, VK_WHOLE_SIZE, 0, &app->disparity_mapping));
+    need_vk("vkAllocateMemory(disparity)", vkAllocateMemory(app->gpu.device, &allocation, NULL, &app->autofocus.disparity_memory));
+    need_vk("vkBindBufferMemory(disparity)", vkBindBufferMemory(app->gpu.device, app->autofocus.disparity_buffer, app->autofocus.disparity_memory, 0));
+    need_vk("vkMapMemory(disparity)", vkMapMemory(app->gpu.device, app->autofocus.disparity_memory, 0, VK_WHOLE_SIZE, 0, &app->autofocus.disparity_mapping));
     /* A set for every possible buffer (the count varies per stream) plus
      * one extra, which keeps a frame on screen across a session restart
      * while the regular buffers are imported again. */
@@ -2821,7 +2821,7 @@ static bool apply_setting(struct app *app, int action)
                app->xr.alpha_blend_supported);
     } else if (action == PLAYER_UI_KEY_PICK) {
         app->key_picking = !app->key_picking;
-        app->key_pick_request = false;
+        app->autofocus.key_pick_request = false;
         printf("key_picking=%d\n", app->key_picking);
     } else if (action >= PLAYER_UI_KEY_COLOR &&
                action <= PLAYER_UI_KEY_COLOR + 3) {
@@ -3056,8 +3056,8 @@ static void sync_player_input(struct app *app, XrTime time)
             !hands[hand].aim_valid ||
             (app->ui_visible && on_player_panel(app, &hands[hand].hit)))
             continue;
-        app->key_pick_aim = hands[hand].aim;
-        app->key_pick_request = true;
+        app->autofocus.key_pick_aim = hands[hand].aim;
+        app->autofocus.key_pick_request = true;
         consumed_select = true;
     }
     for (unsigned hand = 0; hand < 2; ++hand) {
@@ -3090,7 +3090,7 @@ static void sync_player_input(struct app *app, XrTime time)
             change_volume(app, action == PLAYER_UI_VOLUME_UP ? 1 : -1);
         } else if (action == PLAYER_UI_GAZE_DEBUG) {
             app->gaze_debug = !app->gaze_debug;
-            app->debug_text[0] = '\0';
+            app->autofocus.debug_text[0] = '\0';
             app->ui_dirty = true;
             printf("gaze_debug=%d\n", app->gaze_debug);
         } else if (action == PLAYER_UI_RECENTER) {
@@ -3276,7 +3276,7 @@ static void create_browser_texture(struct app *app)
 
 /* Uploads `pixels` (width x height RGBA, canvas layout) into every image of
  * a swapchain whose content never changes. */
-static void fill_static_swapchain(struct app *app, XrSwapchain swapchain,
+void fill_static_swapchain(struct app *app, XrSwapchain swapchain,
                                   const uint8_t *pixels, uint32_t width,
                                   uint32_t height)
 {
@@ -3802,15 +3802,15 @@ static void begin_playback(struct app *app, int fd, const char *location)
     app->recenter_pending = true;
     app->recenter_yaw = false;
     app->dome_yaw = -app->home_yaw;
-    app->autofocus_offset = 0.0f;
-    app->autofocus_speed = 0.0f;
-    app->autofocus_time = 0.0;
-    app->autofocus_focused = false;
-    app->autofocus_focus_disparity = app->autofocus_distance = 0.0f;
+    app->autofocus.offset = 0.0f;
+    app->autofocus.speed = 0.0f;
+    app->autofocus.time = 0.0;
+    app->autofocus.focused = false;
+    app->autofocus.focus_disparity = app->autofocus.distance = 0.0f;
     app->ipc_fd = fd;
     app->settings_open = false;
-    app->key_picking = app->key_pick_request = false;
-    app->key_sample_pending = false;
+    app->key_picking = app->autofocus.key_pick_request = false;
+    app->autofocus.key_sample_pending = false;
     app->playing = true;
     app->awaiting_command = false;
     app->eos_received = false;
@@ -4025,299 +4025,6 @@ static void sync_browser_input(struct app *app, XrTime time)
     }
 }
 
-/* ---- autofocus -------------------------------------------------------
- * Close subjects in stereo video need strong convergence and easily split
- * into double images. The measurement finds the disparity of the picture
- * where the viewer looks; the eye pictures are then moved apart so that
- * near subjects keep at most the disparity of AUTOFOCUS_TARGET_DEGREES.
- * The focus is set to a subject distance and only changes when the
- * distance changes by more than the hysteresis; with the threshold on,
- * subjects farther than FOCUS_DISTANCE leave the video unchanged. The
- * offset moves to a new focus over the fade time. */
-#define AUTOFOCUS_TARGET_DEGREES 3.6f /* about 1 m at 63 mm baseline */
-#define AUTOFOCUS_BASELINE_METERS 0.063f
-#define AUTOFOCUS_MAX_DEGREES 12.0f
-#define AUTOFOCUS_MIN_SCORE 0.6f
-#define AUTOFOCUS_MIN_VARIANCE 2e-4f
-#define AUTOFOCUS_EVERY_FRAMES 3U
-
-/* Gaze ray (eye tracking) or, without it, the head's forward ray. */
-static XrVector3f view_direction(struct app *app, XrPosef head, XrTime time,
-                                 bool *gaze)
-{
-    *gaze = false;
-    if (app->xr.has_eye_gaze) {
-        XrSpaceLocation location = {.type = XR_TYPE_SPACE_LOCATION};
-        const XrSpaceLocationFlags tracked =
-            XR_SPACE_LOCATION_ORIENTATION_VALID_BIT |
-            XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
-        if (XR_SUCCEEDED(xrLocateSpace(app->gaze_space, app->xr.space, time,
-                                       &location)) &&
-            (location.locationFlags & tracked) == tracked) {
-            *gaze = true;
-            if (!app->gaze_logged) {
-                printf("eye_gaze tracking=1\n");
-                app->gaze_logged = true;
-            }
-            return rotate_vector(location.pose.orientation,
-                                 (XrVector3f){0, 0, -1});
-        }
-    }
-    return rotate_vector(head.orientation, (XrVector3f){0, 0, -1});
-}
-
-/* Measurement window in both eye pictures around where the viewer looks
- * (equirectangular projections only); false if nothing can be measured. */
-static bool disparity_window(struct app *app, XrVector3f direction,
-                             struct mat4 world_to_dome, XrVector3f eye,
-                             float stereo_x, struct disparity_push *push)
-{
-    if (app->projection_mode == NV12_PROJECTION_FLAT ||
-        app->projection_mode == NV12_PROJECTION_FISHEYE ||
-        app->stereo_layout == NV12_STEREO_MONO)
-        return false;
-    XrVector3f d = transform_direction(world_to_dome, direction);
-    float length = sqrtf(vector_dot(d, d));
-    if (length <= 0.0f)
-        return false;
-    d.x /= length;
-    d.y /= length;
-    d.z /= length;
-    float b = vector_dot(eye, d);
-    float t = -b + sqrtf(b * b - vector_dot(eye, eye) + 1.0f);
-    XrVector3f q = {eye.x + t * d.x, eye.y + t * d.y, eye.z + t * d.z};
-    const float degrees = PI_F / 180.0f;
-    bool full = app->projection_mode == NV12_PROJECTION_EQUIRECT_360;
-    float span = full ? 2.0f * PI_F : PI_F;
-    /* The left picture is shown moved by half the stereo offset. */
-    float longitude = atan2f(q.x, -q.z) + 0.5f * stereo_x * degrees;
-    float latitude = asinf(fmaxf(-1.0f, fminf(1.0f, q.y)));
-    float stereo_y = app->adjust[PLAYER_ADJUST_STEREO_Y] * 0.5f * degrees;
-    if (!full && fabsf(longitude) > 0.5f * PI_F - 3.0f * degrees)
-        return false;
-    float u = longitude / span + 0.5f;
-    if (full)
-        u -= floorf(u);
-    float v_left = 0.5f - (latitude + stereo_y) / PI_F;
-    float v_right = 0.5f - (latitude - stereo_y) / PI_F;
-    bool sbs = app->stereo_layout == NV12_STEREO_SBS;
-    float u_scale = sbs ? 0.5f : 1.0f, v_scale = sbs ? 1.0f : 0.5f;
-    int left_eye = app->swap_eyes ? 1 : 0, right_eye = 1 - left_eye;
-    float u_per_degree = degrees / span * u_scale;
-    float v_per_degree = degrees / PI_F * v_scale;
-    *push = (struct disparity_push){
-        .left = {sbs ? 0.5f * left_eye + u * u_scale : u,
-                 sbs ? v_left : 0.5f * left_eye + v_left * v_scale,
-                 DISPARITY_WINDOW_DEGREES_X / 24.0f * u_per_degree,
-                 DISPARITY_WINDOW_DEGREES_Y / 16.0f * v_per_degree},
-        .right = {sbs ? 0.5f * right_eye + u * u_scale : u,
-                  sbs ? v_right : 0.5f * right_eye + v_right * v_scale,
-                  DISPARITY_STEP_DEGREES * u_per_degree,
-                  (float)DISPARITY_ZERO},
-        .bounds = {sbs ? 0.5f * right_eye : 0.0f,
-                   sbs ? 0.5f * right_eye + 0.5f : 1.0f,
-                   app->coded_width ? (float)app->video_width /
-                                          (float)app->coded_width : 1.0f,
-                   app->coded_height ? (float)app->video_height /
-                                           (float)app->coded_height : 1.0f},
-    };
-    return true;
-}
-
-/* Subject distance of a disparity (degrees). */
-static float focus_distance(float disparity)
-{
-    const float degrees = PI_F / 180.0f;
-    return AUTOFOCUS_BASELINE_METERS /
-           (2.0f * tanf(0.5f * fmaxf(disparity, 0.05f) * degrees));
-}
-
-/* Sets the focus to the subject at `disparity`, or none. */
-static void set_focus(struct app *app, bool focused, float disparity)
-{
-    app->autofocus_focused = focused;
-    app->autofocus_focus_disparity = focused ? disparity : 0.0f;
-    app->autofocus_distance = focused ? focus_distance(disparity) : 0.0f;
-}
-
-/* Reads the last measurement and decides whether to refocus. */
-static void update_autofocus(struct app *app)
-{
-    const struct disparity_result *result = app->disparity_mapping;
-    double now = monotonic_seconds();
-    int best = 0;
-    for (int i = 1; i < DISPARITY_CANDIDATES; ++i)
-        if (result->score[i] > result->score[best])
-            best = i;
-    float score = result->score[best];
-    bool valid = best > 0 && best < DISPARITY_CANDIDATES - 1 &&
-                 score >= AUTOFOCUS_MIN_SCORE &&
-                 result->left_variance >= AUTOFOCUS_MIN_VARIANCE;
-    app->autofocus_valid = valid;
-    app->autofocus_score = score;
-    app->autofocus_variance = result->left_variance;
-    float disparity = 0.0f;
-    if (valid) {
-        /* Parabola through the peak and its neighbours. */
-        float a = result->score[best - 1], c = result->score[best + 1];
-        float curvature = a - 2.0f * score + c;
-        float refine = curvature < 0.0f ? 0.5f * (a - c) / curvature : 0.0f;
-        disparity = ((float)best + refine - (float)DISPARITY_ZERO) *
-                    DISPARITY_STEP_DEGREES;
-        app->autofocus_disparity = disparity;
-        float distance = focus_distance(disparity);
-        float limit = app->adjust[PLAYER_ADJUST_FOCUS_DISTANCE];
-        float hysteresis = app->adjust[PLAYER_ADJUST_FOCUS_HYSTERESIS];
-        if (!app->autofocus_focused) {
-            if (!app->focus_threshold || distance <= limit)
-                set_focus(app, true, disparity);
-        } else if (app->focus_threshold &&
-                   distance > limit * (1.0f + hysteresis)) {
-            /* Released a little beyond the limit so that a subject right at
-             * it does not switch back and forth. */
-            set_focus(app, false, 0.0f);
-        } else if (fabsf(distance - app->autofocus_distance) >
-                   hysteresis * app->autofocus_distance) {
-            set_focus(app, true, disparity);
-        }
-    }
-    if (now - app->autofocus_log_time >= 1.0) {
-        app->autofocus_log_time = now;
-        printf("autofocus gaze=%d valid=%d disparity=%.2f score=%.2f"
-               " variance=%.5f focus=%.2f offset=%.2f\n",
-               app->autofocus_gaze, valid, disparity, score,
-               result->left_variance, app->autofocus_distance,
-               app->autofocus_offset);
-    }
-}
-
-/* Moves the offset towards the current focus, once per frame. A critically
- * damped spring: it starts and ends smoothly, is about 95 % there after
- * the fade time, and a refocus on the way keeps its speed. */
-static void advance_autofocus(struct app *app)
-{
-    double now = monotonic_seconds();
-    float elapsed = app->autofocus_time > 0.0
-                        ? (float)(now - app->autofocus_time)
-                        : 0.0f;
-    app->autofocus_time = now;
-    float strength = app->adjust[PLAYER_ADJUST_AUTOFOCUS];
-    if (strength <= 0.0f) {
-        app->autofocus_offset = app->autofocus_speed = 0.0f;
-        set_focus(app, false, 0.0f);
-        return;
-    }
-    float target = fminf(strength * fmaxf(0.0f,
-                                          app->autofocus_focus_disparity -
-                                              AUTOFOCUS_TARGET_DEGREES),
-                         AUTOFOCUS_MAX_DEGREES);
-    float fade = app->adjust[PLAYER_ADJUST_FOCUS_FADE];
-    if (fade <= 0.0f) {
-        app->autofocus_offset = target;
-        app->autofocus_speed = 0.0f;
-        return;
-    }
-    float omega = 4.74f / fade; /* (1 + w t) e^(-w t) = 0.05 at w t = 4.74 */
-    float away = app->autofocus_offset - target;
-    float push = (app->autofocus_speed + omega * away) * elapsed;
-    float decay = expf(-omega * elapsed);
-    app->autofocus_offset = target + (away + push) * decay;
-    app->autofocus_speed = (app->autofocus_speed - omega * push) * decay;
-}
-
-/* Gaze marker textures: the measurement window (4 x 3 degrees) with a
- * centre dot. */
-#define GAZE_MARKER_WIDTH 128U
-#define GAZE_MARKER_HEIGHT 96U
-#define GAZE_MARKER_DISTANCE 1.5f
-
-static void create_gaze_markers(struct app *app)
-{
-    static const struct ui_color colors[2] = {
-        UI_RGBA(80, 230, 120, 255), UI_RGBA(255, 170, 50, 255),
-    };
-    for (int i = 0; i < 2; ++i) {
-        XrSwapchainCreateInfo info = {
-            .type = XR_TYPE_SWAPCHAIN_CREATE_INFO,
-            .usageFlags = XR_SWAPCHAIN_USAGE_SAMPLED_BIT |
-                          XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT,
-            .format = app->ui_format, .sampleCount = 1,
-            .width = GAZE_MARKER_WIDTH, .height = GAZE_MARKER_HEIGHT,
-            .faceCount = 1, .arraySize = 1, .mipCount = 1,
-        };
-        need_xr("xrCreateSwapchain(gaze marker)",
-                xrCreateSwapchain(app->xr.session, &info,
-                                  &app->gaze_marker[i]));
-        static uint8_t pixels[GAZE_MARKER_WIDTH * GAZE_MARKER_HEIGHT * 4];
-        memset(pixels, 0, sizeof(pixels));
-        struct ui_canvas canvas = {pixels, GAZE_MARKER_WIDTH,
-                                   GAZE_MARKER_HEIGHT, app->ui_bgra};
-        ui_stroke_round_rect(&canvas, 3, 3, GAZE_MARKER_WIDTH - 6,
-                             GAZE_MARKER_HEIGHT - 6, 8, 4, colors[i]);
-        ui_fill_circle(&canvas, GAZE_MARKER_WIDTH / 2.0f,
-                       GAZE_MARKER_HEIGHT / 2.0f, 6, UI_RGBA(0, 0, 0, 140));
-        ui_fill_circle(&canvas, GAZE_MARKER_WIDTH / 2.0f,
-                       GAZE_MARKER_HEIGHT / 2.0f, 4, colors[i]);
-        fill_static_swapchain(app, app->gaze_marker[i], pixels,
-                              GAZE_MARKER_WIDTH, GAZE_MARKER_HEIGHT);
-    }
-}
-
-static XrCompositionLayerQuad make_gaze_marker_layer(const struct app *app)
-{
-    const float degrees = PI_F / 180.0f;
-    return (XrCompositionLayerQuad){
-        .type = XR_TYPE_COMPOSITION_LAYER_QUAD,
-        .layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT,
-        .space = app->xr.space,
-        .eyeVisibility = XR_EYE_VISIBILITY_BOTH,
-        .subImage = {
-            .swapchain = app->gaze_marker[app->autofocus_gaze ? 0 : 1],
-            .imageRect = {.extent = {GAZE_MARKER_WIDTH, GAZE_MARKER_HEIGHT}},
-        },
-        .pose = app->gaze_marker_pose,
-        .size = {2.0f * GAZE_MARKER_DISTANCE *
-                     tanf(0.5f * DISPARITY_WINDOW_DEGREES_X * degrees),
-                 2.0f * GAZE_MARKER_DISTANCE *
-                     tanf(0.5f * DISPARITY_WINDOW_DEGREES_Y * degrees)},
-    };
-}
-
-/* Debug line on the panel, refreshed four times a second. */
-static void update_debug_text(struct app *app)
-{
-    double now = monotonic_seconds();
-    if (!app->gaze_debug || now - app->debug_text_time < 0.25)
-        return;
-    app->debug_text_time = now;
-    char text[sizeof(app->debug_text)];
-    const char *source = app->autofocus_gaze ? tr("eye")
-                         : app->xr.has_eye_gaze ? tr("head (no gaze)")
-                                             : tr("head (no eye tracking)");
-    char focus[24];
-    snprintf(focus, sizeof(focus), "%s", tr("off"));
-    if (app->autofocus_focused)
-        snprintf(focus, sizeof(focus), "%.2f m", app->autofocus_distance);
-    if (app->projection_mode == NV12_PROJECTION_FLAT ||
-        app->projection_mode == NV12_PROJECTION_FISHEYE ||
-        app->stereo_layout == NV12_STEREO_MONO)
-        snprintf(text, sizeof(text),
-                 tr("Gaze: %s · measured only for 180/360 with SBS/TB"),
-                 source);
-    else
-        snprintf(text, sizeof(text),
-                 tr("Gaze: %s · disparity %+.2f° · score %.2f · structure "
-                    "%.4f · %s · focus %s · offset %.2f°"),
-                 source, app->autofocus_disparity, app->autofocus_score,
-                 app->autofocus_variance,
-                 app->autofocus_valid ? tr("valid") : tr("rejected"), focus,
-                 app->autofocus_offset);
-    if (strcmp(text, app->debug_text) != 0) {
-        snprintf(app->debug_text, sizeof(app->debug_text), "%s", text);
-        app->ui_dirty = true;
-    }
-}
-
 /* Passthrough shows the room where nothing is drawn, if the viewer chose
  * it and the runtime blends with the room (the Frame since SteamVR's
  * update of 2026-10-10; not the PC streaming to it). */
@@ -4475,27 +4182,6 @@ static bool video_uv_at_ray(const struct app *app, XrVector3f origin,
     if (distance)
         *distance = along;
     return true;
-}
-
-/* The measured key colour (stereo-disparity.comp, sample mode) becomes the
- * title's picked key, with a threshold that suits colour distances. */
-static void finish_key_pick(struct app *app)
-{
-    const struct disparity_result *result = app->disparity_mapping;
-    app->adjust[PLAYER_ADJUST_KEY_Y] = result->score[0];
-    app->adjust[PLAYER_ADJUST_KEY_CB] = result->score[1];
-    app->adjust[PLAYER_ADJUST_KEY_CR] = result->score[2];
-    bool was_picked = app->adjust[PLAYER_ADJUST_KEY_COLOR] > 2.5f;
-    app->adjust[PLAYER_ADJUST_KEY_COLOR] = 3.0f;
-    if (!was_picked) {
-        app->adjust[PLAYER_ADJUST_KEY_THRESHOLD] = 0.08f;
-        app->adjust[PLAYER_ADJUST_KEY_SOFTNESS] = 0.04f;
-    }
-    save_adjust(app, PLAYER_ADJUST_KEY_COLOR);
-    app->key_picking = false;
-    app->ui_dirty = true;
-    printf("key_picked y=%.1f cb=%.1f cr=%.1f\n", result->score[0],
-           result->score[1], result->score[2]);
 }
 
 static XrEnvironmentBlendMode environment_blend_mode(const struct app *app)
@@ -4767,10 +4453,10 @@ static void render_frame(struct app *app)
     bool gaze = false;
     XrVector3f look = view_direction(app, center.pose,
                                      frame_state.predictedDisplayTime, &gaze);
-    app->autofocus_gaze = gaze;
-    app->gaze_marker_visible = app->gaze_debug && video;
-    if (app->gaze_marker_visible) {
-        app->gaze_marker_pose = (XrPosef){
+    app->autofocus.gaze = gaze;
+    app->autofocus.gaze_marker_visible = app->gaze_debug && video;
+    if (app->autofocus.gaze_marker_visible) {
+        app->autofocus.gaze_marker_pose = (XrPosef){
             center.pose.orientation,
             {center.pose.position.x + look.x * GAZE_MARKER_DISTANCE,
              center.pose.position.y + look.y * GAZE_MARKER_DISTANCE,
@@ -4781,19 +4467,19 @@ static void render_frame(struct app *app)
     bool measure =
         video &&
         (app->adjust[PLAYER_ADJUST_AUTOFOCUS] > 0.0f || app->gaze_debug) &&
-        ++app->disparity_frames % AUTOFOCUS_EVERY_FRAMES == 0U &&
+        ++app->autofocus.disparity_frames % AUTOFOCUS_EVERY_FRAMES == 0U &&
         disparity_window(app, look, world_to_dome, eye_position,
                          app->adjust[PLAYER_ADJUST_STEREO_X] +
-                             app->autofocus_offset,
+                             app->autofocus.offset,
                          &disparity_push);
     /* A key colour pick takes the measurement's turn. */
     bool key_sample = false;
-    if (app->key_pick_request && video) {
-        app->key_pick_request = false;
+    if (app->autofocus.key_pick_request && video) {
+        app->autofocus.key_pick_request = false;
         float uv[2];
-        XrVector3f aim = rotate_vector(app->key_pick_aim.orientation,
+        XrVector3f aim = rotate_vector(app->autofocus.key_pick_aim.orientation,
                                        (XrVector3f){0, 0, -1});
-        if (video_uv_at_ray(app, app->key_pick_aim.position, aim,
+        if (video_uv_at_ray(app, app->autofocus.key_pick_aim.position, aim,
                             center.pose.position, world_to_dome,
                             eye_position, screen_model, uv, NULL)) {
             float step_u = app->video_width ? 1.5f / (float)app->video_width
@@ -4823,7 +4509,7 @@ static void render_frame(struct app *app)
         struct mat4 view = view_from_pose(views[eye].pose);
         float side = eye == 0 ? -1.0f : 1.0f;
         float stereo_x = (app->adjust[PLAYER_ADJUST_STEREO_X] +
-                          app->autofocus_offset) * 0.5f;
+                          app->autofocus.offset) * 0.5f;
         float stereo_y = app->adjust[PLAYER_ADJUST_STEREO_Y] * 0.5f;
         struct view_uniform uniform = {
             .mvp = multiply(projection, multiply(view, screen_model)),
@@ -4875,11 +4561,11 @@ static void render_frame(struct app *app)
     need_vk("vkWaitForFences(render)", vkWaitForFences(app->gpu.device, 1, &app->fence, VK_TRUE, UINT64_C(5000000000)));
     need_vk("vkResetFences(render)", vkResetFences(app->gpu.device, 1, &app->fence));
     double fenced = monotonic_seconds();
-    if (app->key_sample_pending) {
-        app->key_sample_pending = false;
+    if (app->autofocus.key_sample_pending) {
+        app->autofocus.key_sample_pending = false;
         finish_key_pick(app);
-    } else if (app->disparity_pending) {
-        app->disparity_pending = false;
+    } else if (app->autofocus.disparity_pending) {
+        app->autofocus.disparity_pending = false;
         update_autofocus(app);
     }
     need_vk("vkResetCommandPool(render)", vkResetCommandPool(app->gpu.device, app->command_pool, 0));
@@ -4924,8 +4610,8 @@ static void render_frame(struct app *app)
                              video_acquires);
     if (measure) {
         vkCmdBindPipeline(app->command, VK_PIPELINE_BIND_POINT_COMPUTE,
-                          video->tp10 ? app->disparity_pipeline_tp10
-                                      : app->disparity_pipeline);
+                          video->tp10 ? app->autofocus.disparity_pipeline_tp10
+                                      : app->autofocus.disparity_pipeline);
         uint32_t offset = 0;
         vkCmdBindDescriptorSets(app->command, VK_PIPELINE_BIND_POINT_COMPUTE,
                                 app->pipeline_layout, 0, 1,
@@ -4934,7 +4620,7 @@ static void render_frame(struct app *app)
                            VK_SHADER_STAGE_COMPUTE_BIT, 0,
                            sizeof(disparity_push), &disparity_push);
         vkCmdDispatch(app->command, 1, 1, 1);
-        app->key_sample_pending = key_sample;
+        app->autofocus.key_sample_pending = key_sample;
         VkMemoryBarrier to_host = {
             .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
             .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT,
@@ -4944,7 +4630,7 @@ static void render_frame(struct app *app)
                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
                              VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &to_host, 0,
                              NULL, 0, NULL);
-        app->disparity_pending = !key_sample;
+        app->autofocus.disparity_pending = !key_sample;
     }
     XrCompositionLayerQuad ui_layer = app->playing
                                           ? make_ui_layer(app)
@@ -5113,7 +4799,7 @@ static void render_frame(struct app *app)
         (const XrCompositionLayerBaseHeader *)&layer,
     };
     uint32_t layer_count = 1;
-    if (app->playing && app->gaze_marker_visible)
+    if (app->playing && app->autofocus.gaze_marker_visible)
         layers[layer_count++] = (const XrCompositionLayerBaseHeader *)&gaze_layer;
     if (show_ui) {
         if (!app->panels_in_eye_images)

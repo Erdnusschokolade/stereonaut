@@ -52,6 +52,7 @@
 #include "xr-math.h"
 #include "xr-session.h"
 #include "overlay.h"
+#include "autofocus.h"
 
 #define ARRAY_COUNT(a) (sizeof(a) / sizeof((a)[0]))
 /* Entries of button_inputs (buttons beyond trigger and grip). */
@@ -122,25 +123,6 @@ struct view_uniform {
     float background[4];  /* premultiplied colour where there is no video */
     float chroma_key[4];  /* key direction (Cb, Cr), threshold, softness */
     float chroma_spill[4]; /* spill removal, key on (> 0) */
-};
-
-/* Autofocus measurement (stereo-disparity.comp). */
-#define DISPARITY_CANDIDATES 128
-#define DISPARITY_ZERO 16          /* candidates below zero disparity */
-#define DISPARITY_STEP_DEGREES 0.15f
-#define DISPARITY_WINDOW_DEGREES_X 4.0f
-#define DISPARITY_WINDOW_DEGREES_Y 3.0f
-
-struct disparity_push {
-    float left[4];   /* window centre (texture uv), sample step */
-    float right[4];  /* window centre, shift per candidate, zero index */
-    float bounds[4]; /* right eye u range, TP10 plane scale */
-    float sample_mode[4]; /* x > 0: measure the key colour at left.xy */
-};
-
-struct disparity_result {
-    float score[DISPARITY_CANDIDATES];
-    float left_variance;
 };
 
 _Static_assert(sizeof(struct view_uniform) <= UBO_STRIDE,
@@ -244,44 +226,17 @@ struct app {
     VkPipelineLayout pipeline_layout;
     VkPipeline pipeline;
     VkPipeline pipeline_tp10;
-    /* Autofocus: disparity measurement (NV12 and TP10 variants) and its
-     * host-visible result (struct disparity_result). */
-    VkPipeline disparity_pipeline, disparity_pipeline_tp10;
-    VkBuffer disparity_buffer;
-    VkDeviceMemory disparity_memory;
-    void *disparity_mapping;
-    bool disparity_pending;
-    uint64_t disparity_frames;
-    double autofocus_log_time;
-    float autofocus_offset; /* degrees the eye pictures are moved apart */
-    float autofocus_speed;  /* degrees per second of the offset */
-    double autofocus_time;  /* last advance of the offset */
-    /* Subject the focus is set to (distance in metres and its disparity
-     * in degrees); none: the video is shown unchanged. */
-    bool autofocus_focused;
-    float autofocus_distance, autofocus_focus_disparity;
+    struct autofocus autofocus;
     bool focus_threshold;   /* only subjects nearer than FOCUS_DISTANCE */
     bool av1_software;      /* settings.json, read by the next session */
     /* Passthrough chosen (settings.json); whether the runtime offers it is
      * xr.alpha_blend_supported. */
     bool passthrough;
-    /* Chroma key colour picker: waiting for the trigger, the aim it was
-     * pulled with (measured in the next frame), result being read back. */
-    bool key_picking, key_pick_request, key_sample_pending;
-    XrPosef key_pick_aim;
-    bool autofocus_gaze;    /* last window followed the eye tracking */
-    /* Last measurement, for the debug display. */
-    bool autofocus_valid;
-    float autofocus_disparity, autofocus_score, autofocus_variance;
-    /* Debug display ("Blick anzeigen"): a frame of the measurement window
-     * along the gaze (green: eye tracking, orange: head direction) and a
-     * text line on the panel. */
+    /* Chroma key colour picker: waiting for the trigger (the measurement
+     * is in autofocus). */
+    bool key_picking;
+    /* Debug display ("Blick anzeigen", see struct autofocus). */
     bool gaze_debug;
-    XrSwapchain gaze_marker[2]; /* eye tracking, head direction */
-    XrPosef gaze_marker_pose;
-    bool gaze_marker_visible;
-    double debug_text_time;
-    char debug_text[192];
     VkDescriptorSetLayout descriptor_layout;
     VkDescriptorPool descriptor_pool;
     VkSamplerYcbcrConversion conversion;
@@ -365,7 +320,6 @@ struct app {
     struct overlay overlay;
     XrAction gaze_action;
     XrSpace gaze_space;
-    bool gaze_logged;
     int stick_direction[2]; /* -1 left, +1 right, 0 centred */
     struct button select[2];
     XrPath hands[2];
@@ -482,6 +436,10 @@ struct app {
 };
 
 /* Still in stereonaut-renderer.c, used by the modules split off so far. */
+void save_adjust(const struct app *app, int index);
+void fill_static_swapchain(struct app *app, XrSwapchain swapchain,
+                           const uint8_t *pixels, uint32_t width,
+                           uint32_t height);
 struct ui_texture;
 void record_ui_upload(VkCommandBuffer command, struct ui_texture *texture,
                       VkImage target, VkBuffer staging, bool initialized);
