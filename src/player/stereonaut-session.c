@@ -10,6 +10,7 @@
  */
 #define _POSIX_C_SOURCE 200809L
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
@@ -210,6 +211,7 @@ static struct decoded_video *decoded_video;
 #define EXIT_UNSUPPORTED_FORMAT 3
 #define EXIT_SOURCE_FAILED 4
 #define EXIT_BROKEN_SOURCE 5
+#define EXIT_DECODER_BUSY 6
 
 static struct jf_config jellyfin_config;
 static struct jf_playback jellyfin_playback;
@@ -316,6 +318,75 @@ static void must_ioctl(unsigned long request, void *argument, const char *what)
 {
     if (xioctl(request, argument) < 0)
         fail_errno(what);
+}
+
+/* Logs the other processes that have the decoder open; true if there are
+ * any. Iris shares its capacity among all of them: a browser playing a
+ * video (Steam's steamwebhelper) leaves too little for 8K. */
+static bool report_decoder_users(void)
+{
+    struct stat device;
+    if (stat(DECODED_VIDEO_IRIS_DEVICE, &device) < 0)
+        return false;
+    DIR *processes = opendir("/proc");
+    if (!processes)
+        return false;
+    bool found = false;
+    pid_t self = getpid();
+    struct dirent *process;
+    while ((process = readdir(processes))) {
+        char *end;
+        long pid = strtol(process->d_name, &end, 10);
+        if (*end || pid <= 0 || pid == self)
+            continue;
+        char path[64];
+        snprintf(path, sizeof(path), "/proc/%ld/fd", pid);
+        DIR *fds = opendir(path);
+        if (!fds)
+            continue;
+        bool holds = false;
+        struct dirent *fd;
+        while (!holds && (fd = readdir(fds))) {
+            struct stat target;
+            holds = fd->d_name[0] != '.' &&
+                    fstatat(dirfd(fds), fd->d_name, &target, 0) == 0 &&
+                    S_ISCHR(target.st_mode) &&
+                    target.st_rdev == device.st_rdev;
+        }
+        closedir(fds);
+        if (!holds)
+            continue;
+        char name[64] = "?";
+        snprintf(path, sizeof(path), "/proc/%ld/comm", pid);
+        FILE *comm = fopen(path, "r");
+        if (comm) {
+            if (fgets(name, sizeof(name), comm))
+                name[strcspn(name, "\n")] = '\0';
+            fclose(comm);
+        }
+        fprintf(stderr, "decoder_busy pid=%ld comm=%s\n", pid, name);
+        found = true;
+    }
+    closedir(processes);
+    return found;
+}
+
+/* An ioctl that claims decoder capacity: if Iris refuses for lack of it
+ * while another process uses the decoder, the launcher says so instead of
+ * blaming the format. */
+static void must_decoder_ioctl(unsigned long request, void *argument,
+                               const char *what)
+{
+    if (xioctl(request, argument) == 0)
+        return;
+    int error = errno;
+    if ((error == ENOMEM || error == EBUSY) && !stop_requested &&
+        report_decoder_users()) {
+        fprintf(stderr, "%s: errno=%d (%s)\n", what, error, strerror(error));
+        exit(EXIT_DECODER_BUSY);
+    }
+    errno = error;
+    fail_errno(what);
 }
 
 static int fd_ioctl(int fd, unsigned long request, void *argument)
@@ -1890,7 +1961,7 @@ static unsigned allocate_output_buffers(
         .type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE,
         .memory = V4L2_MEMORY_MMAP,
     };
-    must_ioctl(VIDIOC_REQBUFS, &request, "VIDIOC_REQBUFS OUTPUT");
+    must_decoder_ioctl(VIDIOC_REQBUFS, &request, "VIDIOC_REQBUFS OUTPUT");
     if (!request.count || request.count > MAX_OUTPUT_BUFFERS)
         fail_message("unexpected OUTPUT buffer count");
     for (unsigned i = 0; i < request.count; i++) {
@@ -2157,7 +2228,7 @@ static unsigned setup_capture(
         .type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE,
         .memory = V4L2_MEMORY_MMAP,
     };
-    must_ioctl(VIDIOC_REQBUFS, &request, "VIDIOC_REQBUFS CAPTURE");
+    must_decoder_ioctl(VIDIOC_REQBUFS, &request, "VIDIOC_REQBUFS CAPTURE");
     if (!request.count || request.count > MAX_CAPTURE_BUFFERS)
         fail_message("unexpected CAPTURE buffer count");
     for (unsigned i = 0; i < request.count; i++) {
@@ -2973,7 +3044,7 @@ open_decoder:
     bool have_next_packet = false;
     bool video_eof = options.frame_limit == 1U;
     enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE;
-    must_ioctl(VIDIOC_STREAMON, &type, "VIDIOC_STREAMON OUTPUT");
+    must_decoder_ioctl(VIDIOC_STREAMON, &type, "VIDIOC_STREAMON OUTPUT");
     bool capture_started = false;
     bool source_change_pending = false;
     bool drain_sent = false;

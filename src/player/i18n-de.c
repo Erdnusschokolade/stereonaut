@@ -99,6 +99,9 @@ static const struct i18n_entry entries[] = {
     {"The title cannot be played", "Titel kann nicht abgespielt werden"},
     {"Cannot reach Jellyfin or the network",
      "Jellyfin oder Netzwerk nicht erreichbar"},
+    {"Another program is using the video decoder (e.g. a video in Steam)",
+     "Ein anderes Programm belegt den Videodecoder (z. B. ein Video in "
+     "Steam)"},
     {"This video or audio format is not supported yet",
      "Video- oder Audioformat wird derzeit nicht unterstützt"},
 

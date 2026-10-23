@@ -22,6 +22,7 @@
 #define EXIT_UNSUPPORTED_FORMAT 3
 #define EXIT_SOURCE_FAILED 4
 #define EXIT_BROKEN_SOURCE 5
+#define EXIT_DECODER_BUSY 6
 
 static int ui_fd = -1;
 static pid_t host_pid = -1;
@@ -404,6 +405,10 @@ int main(int argc, char **argv)
             if (exit_code == EXIT_BROKEN_SOURCE)
                 snprintf(browser_message, sizeof(browser_message), "%s",
                          N_("The video file on the server is broken"));
+            else if (exit_code == EXIT_DECODER_BUSY)
+                snprintf(browser_message, sizeof(browser_message), "%s",
+                         N_("Another program is using the video decoder "
+                            "(e.g. a video in Steam)"));
             else if (exit_code == EXIT_SOURCE_FAILED)
                 snprintf(browser_message, sizeof(browser_message), "%s",
                          N_("Cannot reach Jellyfin or the network"));
