@@ -549,8 +549,9 @@ void sync_player_input(struct app *app, XrTime time)
                                   time, &location));
             if ((location.locationFlags & valid) == valid) {
                 hands[hand].aim_valid = true;
-                hands[hand].aim = location.pose;
-                hands[hand].hit = panel_ray(app, location.pose);
+                hands[hand].aim =
+                    steady_aim(app, hand, location.pose, time);
+                hands[hand].hit = panel_ray(app, hands[hand].aim);
             }
         }
         read_select(app, hand, &hands[hand]);
@@ -856,12 +857,13 @@ void sync_browser_input(struct app *app, XrTime time)
                               &location));
         if ((location.locationFlags & valid) != valid)
             continue;
+        XrPosef aim = steady_aim(app, hand, location.pose, time);
         struct panel_hit hit = panel_ray_at(
             browser_center(app), app->home_yaw,
             BROWSER_UI_PANEL_WIDTH_METERS, BROWSER_UI_PANEL_HEIGHT_METERS,
-            location.pose);
+            aim);
         app->overlay.lasers[hand] = (struct laser){
-            .valid = true, .aim = location.pose,
+            .valid = true, .aim = aim,
             .panel_length = panel_hit_inside(&hit) ? hit.distance : -1.0f,
         };
         if (panel_hit_inside(&hit)) {

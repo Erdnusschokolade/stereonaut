@@ -41,6 +41,10 @@ dav1d AV1 bis 4K auf der CPU (Standard an, siehe unten).
   Sprünge); beim Zeigen auf die Seek-Leiste ein einzelnes Bild, entprellt
   gegen das Zittern des Controllers. Die Kacheln eines Titels lädt der
   Player nach dem Start im Hintergrund vor.
+- Zeigestrahl in Browser und Player geglättet, die rohe Zeigepose ist zu
+  unruhig (wie in der Steam-Oberfläche; 1€-Filter: in Ruhe stark, bei
+  schnellen Bewegungen kaum Verzögerung; `STEREONAUT_AIM_FILTER=MIN,BETA`,
+  `0` = aus).
 - Spulen ohne Neustart der Session auf den Keyframe in Spulrichtung (siehe
   Grenzen), das letzte Bild bleibt bis zum neuen stehen. Bis zum ersten
   Bild über Jellyfin: H.264 4K meist 0,15–0,2 s, HEVC 8K um 0,25 s,

@@ -188,7 +188,7 @@ part in a struct of its own header:
 | `autofocus.c` | `autofocus` | disparity measurement, focus and fade, key colour pick, gaze markers |
 | `panel-compositor.c` | `panels` | panel textures and quad swapchains, the player panel's thread, browser and settings upload, pointer, panel pipeline, ray hits |
 | `overlay.c` | `overlay` | controller models, pointer beams, the overlay layer or its passes in the eye images |
-| `xr-input.c` | `input` | actions and suggested bindings, trigger, stick, grip and buttons |
+| `xr-input.c` | `input` | actions and suggested bindings, trigger, stick, grip and buttons, smoothing of the jittery aim pose |
 | `input-bindings.c` | `controls` | the controller bindings: combinations, repeat, learning, seeking by binding |
 | `session-ipc.c` | `link` | the NV12 socket to the playing session |
 | `ui-control.c` | – | what the viewer does with player panel, popup, settings page and browser |

@@ -15,6 +15,16 @@
  * rarely keeps up. */
 #define GRIP_PRESS_THRESHOLD 0.40f
 #define GRIP_RELEASE_THRESHOLD 0.25f
+/* Pointer ray: a 1€ filter (Casiez et al.) on the aim pose. At rest it
+ * smooths with AIM_MIN_CUTOFF, against the jitter of the raw pose that
+ * the panels 2 m away magnify (SteamVR smooths its own pointer, too); the
+ * cutoff rises with the speed (AIM_BETA per rad/s, or m/s), so a quick
+ * move hardly lags. STEREONAUT_AIM_FILTER=MIN,BETA overrides both, 0
+ * switches the filter off. */
+#define AIM_MIN_CUTOFF 1.5f   /* Hz */
+#define AIM_BETA 5.0f
+#define AIM_SPEED_CUTOFF 1.0f /* Hz, smoothing of the speed itself */
+#define AIM_RESET_GAP 0.1f    /* seconds without a pose: start afresh */
 
 const struct button_input button_inputs[] = {
     {BINDING_LEFT_STICK_CLICK, "left_stick_click", "Stick-Klick links", 0,
@@ -67,6 +77,17 @@ static void create_action(XrActionSet set, XrActionType type,
 
 void initialize_actions(struct app *app)
 {
+    app->input.aim_min_cutoff = AIM_MIN_CUTOFF;
+    app->input.aim_beta = AIM_BETA;
+    const char *filter = getenv("STEREONAUT_AIM_FILTER");
+    if (filter) {
+        float min_cutoff = 0.0f, beta = AIM_BETA;
+        sscanf(filter, "%f,%f", &min_cutoff, &beta);
+        app->input.aim_min_cutoff = fmaxf(min_cutoff, 0.0f);
+        app->input.aim_beta = fmaxf(beta, 0.0f);
+        printf("aim_filter min_cutoff=%.2f beta=%.2f\n",
+               app->input.aim_min_cutoff, app->input.aim_beta);
+    }
     app->input.hands[0] = xr_path(app, "/user/hand/left");
     app->input.hands[1] = xr_path(app, "/user/hand/right");
     XrActionSetCreateInfo set = {
@@ -373,6 +394,57 @@ void read_stick_directions(struct app *app, unsigned hand,
         }
     if (best >= 0)
         down[binding_stick(hand, best)] = true;
+}
+
+/* Share of the new value of a low-pass filter with `cutoff` (Hz) after
+ * `dt` seconds. */
+static float smoothing(float cutoff, float dt)
+{
+    float tau = 1.0f / (2.0f * PI_F * cutoff);
+    return 1.0f / (1.0f + tau / dt);
+}
+
+XrPosef steady_aim(struct app *app, unsigned hand, XrPosef aim,
+                   XrTime time)
+{
+    struct aim_filter *filter = &app->input.aim_filter[hand];
+    float dt = (float)(time - filter->time) * 1e-9f;
+    if (app->input.aim_min_cutoff <= 0.0f || !filter->valid || dt < 0.0f ||
+        dt > AIM_RESET_GAP) {
+        *filter = (struct aim_filter){
+            .valid = true, .time = time, .pose = aim};
+        return aim;
+    }
+    if (dt == 0.0f)
+        return filter->pose;
+    XrQuaternionf from = filter->pose.orientation, to = aim.orientation;
+    float dot = from.x * to.x + from.y * to.y + from.z * to.z +
+                from.w * to.w;
+    if (dot < 0.0f) {
+        to = (XrQuaternionf){-to.x, -to.y, -to.z, -to.w};
+        dot = -dot;
+    }
+    XrVector3f a = filter->pose.position, b = aim.position;
+    float moved = sqrtf((b.x - a.x) * (b.x - a.x) +
+                        (b.y - a.y) * (b.y - a.y) +
+                        (b.z - a.z) * (b.z - a.z));
+    float speed = (2.0f * acosf(fminf(dot, 1.0f)) + moved) / dt;
+    filter->speed += smoothing(AIM_SPEED_CUTOFF, dt) * (speed - filter->speed);
+    float k = smoothing(app->input.aim_min_cutoff +
+                            app->input.aim_beta * filter->speed,
+                        dt);
+    XrQuaternionf q = {from.x + k * (to.x - from.x),
+                       from.y + k * (to.y - from.y),
+                       from.z + k * (to.z - from.z),
+                       from.w + k * (to.w - from.w)};
+    float length = sqrtf(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w);
+    filter->pose.orientation = (XrQuaternionf){
+        q.x / length, q.y / length, q.z / length, q.w / length};
+    filter->pose.position = (XrVector3f){a.x + k * (b.x - a.x),
+                                         a.y + k * (b.y - a.y),
+                                         a.z + k * (b.z - a.z)};
+    filter->time = time;
+    return filter->pose;
 }
 
 /* Grip per hand for the bindings: the squeeze button or the analog grip

@@ -43,6 +43,14 @@ struct hand_input {
     XrActionStateBoolean squeeze;
 };
 
+/* 1€ filter state of one hand's aim pose (steady_aim). */
+struct aim_filter {
+    bool valid;
+    XrTime time;
+    XrPosef pose;
+    float speed; /* filtered, rad/s plus m/s */
+};
+
 struct xr_input {
     XrActionSet action_set;
     XrAction aim_action;
@@ -59,6 +67,9 @@ struct xr_input {
     struct button select[2];
     XrPath hands[2];
     XrSpace aim_spaces[2];
+    struct aim_filter aim_filter[2];
+    /* Filter cutoff at rest (Hz, 0 = unfiltered) and its rise per speed. */
+    float aim_min_cutoff, aim_beta;
 };
 
 struct app;
@@ -82,6 +93,11 @@ void read_stick_directions(struct app *app, unsigned hand,
  * past its threshold (with hysteresis). */
 void read_grips(struct app *app, const struct hand_input hands[2],
                 bool grips[2]);
+/* The aim pose of a hand with the raw pose's jitter filtered out: steady
+ * while pointing at one spot, without lag on a quick move. `time` is the
+ * display time the pose was located for. */
+XrPosef steady_aim(struct app *app, unsigned hand, XrPosef aim,
+                   XrTime time);
 /* Boolean actions: pressed in this sync, or held. */
 bool pressed_edge(const XrActionStateBoolean *state);
 bool held(const XrActionStateBoolean *state);
