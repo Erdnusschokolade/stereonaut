@@ -46,7 +46,8 @@ cc -std=c11 -O2 -Wall -Wextra -Werror \
                        libavcodec libavutil) \
   -I/usr/include -I"$script_dir" -I"$project_dir/tools/openxr-playback" \
   -o "$build_dir/stereonaut-renderer" \
-  "$script_dir/stereonaut-renderer.c" "$script_dir/browser-ui.c" \
+  "$script_dir/stereonaut-renderer.c" "$script_dir/xr-math.c" \
+  "$script_dir/browser-ui.c" \
   "$script_dir/player-ui.c" "$script_dir/ui-draw.c" "$script_dir/ui-layout.c" \
   "$script_dir/thumbnails.c" \
   "$script_dir/file-browser.c" "$script_dir/jellyfin.c" \
