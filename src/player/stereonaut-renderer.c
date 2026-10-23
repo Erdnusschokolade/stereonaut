@@ -4,44 +4,6 @@
 
 #include "renderer.h"
 
-/* Buttons beyond trigger and grip, for the controller bindings. Only
- * valve/frame_controller has them all (paths checked on the Frame with
- * tools/openxr-playback/xr-input-profile-probe.c: the right controller has
- * A/B/X/Y and menu, the left the d-pad and view); the Index profile gets
- * the stick clicks and A/B. */
-static const struct {
-    int input;          /* enum binding_input */
-    const char *action; /* OpenXR action name */
-    const char *label;
-    unsigned hand;      /* 0 left, 1 right */
-    const char *component;
-    bool index;         /* also bound for valve/index_controller */
-} button_inputs[] = {
-    {BINDING_LEFT_STICK_CLICK, "left_stick_click", "Stick-Klick links", 0,
-     "thumbstick/click", true},
-    {BINDING_RIGHT_STICK_CLICK, "right_stick_click", "Stick-Klick rechts",
-     1, "thumbstick/click", true},
-    {BINDING_LEFT_BUMPER, "left_bumper", "Bumper links", 0, "bumper/click",
-     false},
-    {BINDING_RIGHT_BUMPER, "right_bumper", "Bumper rechts", 1,
-     "bumper/click", false},
-    {BINDING_DPAD_UP, "dpad_up", "Kreuz hoch", 0, "dpad_up/click", false},
-    {BINDING_DPAD_DOWN, "dpad_down", "Kreuz runter", 0, "dpad_down/click",
-     false},
-    {BINDING_DPAD_LEFT, "dpad_left", "Kreuz links", 0, "dpad_left/click",
-     false},
-    {BINDING_DPAD_RIGHT, "dpad_right", "Kreuz rechts", 0, "dpad_right/click",
-     false},
-    {BINDING_VIEW, "view", "View", 0, "view/click", false},
-    {BINDING_A, "button_a", "A", 1, "a/click", true},
-    {BINDING_B, "button_b", "B", 1, "b/click", true},
-    {BINDING_X, "button_x", "X", 1, "x/click", false},
-    {BINDING_Y, "button_y", "Y", 1, "y/click", false},
-    {BINDING_MENU, "menu", "Menue", 1, "menu/click", false},
-};
-_Static_assert(ARRAY_COUNT(button_inputs) == BUTTON_INPUT_COUNT,
-               "BUTTON_INPUT_COUNT differs from button_inputs");
-
 static void send_control(struct app *app, uint32_t type, const char *path,
                          int64_t start_us);
 
@@ -55,221 +17,6 @@ static uint64_t parse_u64(const char *text, const char *name)
         exit(2);
     }
     return (uint64_t)value;
-}
-
-static XrPath xr_path(struct app *app, const char *text)
-{
-    XrPath path = XR_NULL_PATH;
-    need_xr("xrStringToPath", xrStringToPath(app->xr.instance, text, &path));
-    return path;
-}
-
-static void create_action(XrActionSet set, XrActionType type,
-                          const char *name, const char *localized,
-                          XrPath hands[2], XrAction *action)
-{
-    XrActionCreateInfo info = {
-        .type = XR_TYPE_ACTION_CREATE_INFO,
-        .actionType = type,
-        .countSubactionPaths = 2,
-        .subactionPaths = hands,
-    };
-    snprintf(info.actionName, sizeof(info.actionName), "%s", name);
-    snprintf(info.localizedActionName, sizeof(info.localizedActionName),
-             "%s", localized);
-    need_xr("xrCreateAction", xrCreateAction(set, &info, action));
-}
-
-static void initialize_actions(struct app *app)
-{
-    app->hands[0] = xr_path(app, "/user/hand/left");
-    app->hands[1] = xr_path(app, "/user/hand/right");
-    XrActionSetCreateInfo set = {
-        .type = XR_TYPE_ACTION_SET_CREATE_INFO,
-    };
-    snprintf(set.actionSetName, sizeof(set.actionSetName), "player");
-    snprintf(set.localizedActionSetName, sizeof(set.localizedActionSetName),
-             "Stereonaut Player");
-    need_xr("xrCreateActionSet",
-            xrCreateActionSet(app->xr.instance, &set, &app->action_set));
-    create_action(app->action_set, XR_ACTION_TYPE_POSE_INPUT,
-                  "aim", "Zeigen", app->hands, &app->aim_action);
-    create_action(app->action_set, XR_ACTION_TYPE_FLOAT_INPUT,
-                  "select", "Auswaehlen", app->hands,
-                  &app->select_action);
-    create_action(app->action_set, XR_ACTION_TYPE_BOOLEAN_INPUT,
-                  "squeeze", "Greifen", app->hands, &app->squeeze_action);
-    create_action(app->action_set, XR_ACTION_TYPE_VECTOR2F_INPUT,
-                  "stick", "Blaettern und Spulen", app->hands,
-                  &app->stick_action);
-    create_action(app->action_set, XR_ACTION_TYPE_FLOAT_INPUT,
-                  "grip_value", "Griff (Kombinationen)", app->hands,
-                  &app->grip_value_action);
-    for (size_t i = 0; i < ARRAY_COUNT(button_inputs); ++i)
-        create_action(app->action_set, XR_ACTION_TYPE_BOOLEAN_INPUT,
-                      button_inputs[i].action, button_inputs[i].label,
-                      app->hands, &app->button_actions[i]);
-    struct {
-        const char *profile;
-        const char *select_component;
-        const char *squeeze_component;
-        bool thumbstick;
-        bool enabled;
-        int buttons; /* button_inputs: 0 none, 1 Index subset, 2 all */
-        bool grip_value; /* has squeeze/value */
-    } profiles[] = {
-        {"/interaction_profiles/valve/frame_controller",
-         "trigger/value", "squeeze/click", true,
-         app->xr.has_valve_frame_controller, 2, true},
-        {"/interaction_profiles/khr/generic_controller",
-         "trigger/value", "squeeze/value", true, app->xr.has_generic_controller,
-         0, true},
-        {"/interaction_profiles/valve/index_controller",
-         "trigger/value", "squeeze/value", true, true, 1, true},
-        /* The common PCVR profiles use the same core affordances as Index:
-         * trigger for pointing, squeeze for panel grab and a thumbstick for
-         * seek/volume. Keep face-button suggestions to Index: their names
-         * and hands differ between Touch, WMR and Vive. */
-        {"/interaction_profiles/oculus/touch_controller",
-         "trigger/value", "squeeze/value", true,
-         app->xr.has_pcvr_controller, 0, true},
-        {"/interaction_profiles/microsoft/motion_controller",
-         "trigger/value", "squeeze/value", true,
-         app->xr.has_pcvr_controller, 0, true},
-        {"/interaction_profiles/htc/vive_cosmos_controller",
-         "trigger/value", "squeeze/click", true,
-         app->xr.has_pcvr_controller, 0, false},
-        /* Original Vive wands expose a trackpad rather than a thumbstick;
-         * it is still a Vector2f input and maps naturally to navigation. */
-        {"/interaction_profiles/htc/vive_controller",
-         "trigger/value", "squeeze/click", true,
-         app->xr.has_pcvr_controller, 0, false},
-        /* No squeeze button or stick: panel grab, show/hide, page flips and
-         * stick seeking are unavailable. */
-        {"/interaction_profiles/khr/simple_controller",
-         "select/click", NULL, false, true, 0, false},
-    };
-    static const char *const hand_names[2] = {"left", "right"};
-    unsigned accepted = 0;
-    for (size_t p = 0; p < ARRAY_COUNT(profiles); ++p) {
-        if (!profiles[p].enabled)
-            continue;
-        XrActionSuggestedBinding bindings[10 + ARRAY_COUNT(button_inputs)];
-        uint32_t count = 0;
-        char text[4][2][96];
-        for (unsigned hand = 0; hand < 2; ++hand) {
-            snprintf(text[0][hand], sizeof(text[0][hand]),
-                     "/user/hand/%s/input/aim/pose", hand_names[hand]);
-            bindings[count++] = (XrActionSuggestedBinding){
-                app->aim_action, xr_path(app, text[0][hand])};
-            snprintf(text[1][hand], sizeof(text[1][hand]),
-                     "/user/hand/%s/input/%s", hand_names[hand],
-                     profiles[p].select_component);
-            bindings[count++] = (XrActionSuggestedBinding){
-                app->select_action, xr_path(app, text[1][hand])};
-            if (profiles[p].squeeze_component) {
-                snprintf(text[2][hand], sizeof(text[2][hand]),
-                         "/user/hand/%s/input/%s", hand_names[hand],
-                         profiles[p].squeeze_component);
-                bindings[count++] = (XrActionSuggestedBinding){
-                    app->squeeze_action, xr_path(app, text[2][hand])};
-            }
-            if (profiles[p].thumbstick) {
-                const char *stick = strstr(profiles[p].profile,
-                                           "vive_controller")
-                                        ? "trackpad" : "thumbstick";
-                snprintf(text[3][hand], sizeof(text[3][hand]),
-                         "/user/hand/%s/input/%s", hand_names[hand], stick);
-                bindings[count++] = (XrActionSuggestedBinding){
-                    app->stick_action, xr_path(app, text[3][hand])};
-            }
-            if (profiles[p].grip_value) {
-                char path[96];
-                snprintf(path, sizeof(path),
-                         "/user/hand/%s/input/squeeze/value",
-                         hand_names[hand]);
-                bindings[count++] = (XrActionSuggestedBinding){
-                    app->grip_value_action, xr_path(app, path)};
-            }
-        }
-        for (size_t i = 0; i < ARRAY_COUNT(button_inputs); ++i) {
-            if (profiles[p].buttons == 0 ||
-                (profiles[p].buttons == 1 && !button_inputs[i].index))
-                continue;
-            char path[96];
-            snprintf(path, sizeof(path), "/user/hand/%s/input/%s",
-                     hand_names[button_inputs[i].hand],
-                     button_inputs[i].component);
-            bindings[count++] = (XrActionSuggestedBinding){
-                app->button_actions[i], xr_path(app, path)};
-        }
-        XrInteractionProfileSuggestedBinding suggestion = {
-            .type = XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING,
-            .interactionProfile = xr_path(app, profiles[p].profile),
-            .countSuggestedBindings = count,
-            .suggestedBindings = bindings,
-        };
-        XrResult result =
-            xrSuggestInteractionProfileBindings(app->xr.instance, &suggestion);
-        printf("controller_bindings profile=%s result=%d\n",
-               profiles[p].profile, result);
-        if (XR_SUCCEEDED(result))
-            ++accepted;
-    }
-    need(accepted > 0, "no controller interaction profile was accepted");
-    for (unsigned hand = 0; hand < 2; ++hand) {
-        XrActionSpaceCreateInfo space = {
-            .type = XR_TYPE_ACTION_SPACE_CREATE_INFO,
-            .action = app->aim_action,
-            .subactionPath = app->hands[hand],
-            .poseInActionSpace = {{0, 0, 0, 1}, {0, 0, 0}},
-        };
-        need_xr("xrCreateActionSpace",
-                xrCreateActionSpace(app->xr.session, &space,
-                                    &app->aim_spaces[hand]));
-    }
-    if (app->xr.has_eye_gaze) {
-        XrActionCreateInfo gaze = {
-            .type = XR_TYPE_ACTION_CREATE_INFO,
-            .actionType = XR_ACTION_TYPE_POSE_INPUT,
-        };
-        snprintf(gaze.actionName, sizeof(gaze.actionName), "gaze");
-        snprintf(gaze.localizedActionName,
-                 sizeof(gaze.localizedActionName), "Blickrichtung");
-        need_xr("xrCreateAction(gaze)",
-                xrCreateAction(app->action_set, &gaze, &app->gaze_action));
-        XrActionSuggestedBinding binding = {
-            app->gaze_action,
-            xr_path(app, "/user/eyes_ext/input/gaze_ext/pose"),
-        };
-        XrInteractionProfileSuggestedBinding suggestion = {
-            .type = XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING,
-            .interactionProfile =
-                xr_path(app, "/interaction_profiles/ext/eye_gaze_interaction"),
-            .countSuggestedBindings = 1,
-            .suggestedBindings = &binding,
-        };
-        XrResult result =
-            xrSuggestInteractionProfileBindings(app->xr.instance, &suggestion);
-        printf("eye_gaze_binding result=%d\n", result);
-        XrActionSpaceCreateInfo space = {
-            .type = XR_TYPE_ACTION_SPACE_CREATE_INFO,
-            .action = app->gaze_action,
-            .poseInActionSpace = {{0, 0, 0, 1}, {0, 0, 0}},
-        };
-        if (XR_FAILED(result) ||
-            XR_FAILED(xrCreateActionSpace(app->xr.session, &space,
-                                          &app->gaze_space)))
-            app->xr.has_eye_gaze = false;
-    }
-    XrSessionActionSetsAttachInfo attach = {
-        .type = XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO,
-        .countActionSets = 1,
-        .actionSets = &app->action_set,
-    };
-    need_xr("xrAttachSessionActionSets",
-            xrAttachSessionActionSets(app->xr.session, &attach));
-    app->overlay.render_models_dirty = true;
 }
 
 /* Steps of 10 %; above 100 % the samples are amplified (may clip). */
@@ -741,104 +488,6 @@ static bool on_player_panel(const struct app *app,
            player_ui_on_panel(&state, hit->u, hit->v);
 }
 
-struct hand_input {
-    bool aim_valid;
-    XrPosef aim;
-    struct panel_hit hit;
-    bool select_edge;
-    bool select_held;
-    XrActionStateBoolean squeeze;
-};
-
-static void read_boolean(struct app *app, XrAction action, XrPath hand,
-                         XrActionStateBoolean *state)
-{
-    XrActionStateGetInfo info = {
-        .type = XR_TYPE_ACTION_STATE_GET_INFO,
-        .action = action,
-        .subactionPath = hand,
-    };
-    *state = (XrActionStateBoolean){.type = XR_TYPE_ACTION_STATE_BOOLEAN};
-    need_xr("xrGetActionStateBoolean",
-            xrGetActionStateBoolean(app->xr.session, &info, state));
-}
-
-/* Horizontal thumbstick flicks: -1/+1 once per deflection past the
- * threshold (vertical movement is ignored), 0 otherwise. */
-static int read_stick(struct app *app, unsigned hand)
-{
-    XrActionStateGetInfo info = {
-        .type = XR_TYPE_ACTION_STATE_GET_INFO,
-        .action = app->stick_action,
-        .subactionPath = app->hands[hand],
-    };
-    XrActionStateVector2f state = {.type = XR_TYPE_ACTION_STATE_VECTOR2F};
-    need_xr("xrGetActionStateVector2f",
-            xrGetActionStateVector2f(app->xr.session, &info, &state));
-    float x = state.isActive ? state.currentState.x : 0.0f;
-    float y = state.isActive ? state.currentState.y : 0.0f;
-    int direction = app->stick_direction[hand];
-    if (direction && direction * x < STICK_RELEASE_THRESHOLD) {
-        app->stick_direction[hand] = 0;
-        return 0;
-    }
-    if (!direction) {
-        if (fabsf(x) < STICK_PRESS_THRESHOLD || fabsf(y) > fabsf(x))
-            return 0;
-        direction = x > 0.0f ? 1 : -1;
-        app->stick_direction[hand] = direction;
-        return direction;
-    }
-    return 0;
-}
-
-/* One frame of an analog button; true on the rising edge of a new press.
- * While the action is inactive (focus loss, SteamVR dashboard) the last
- * state is kept: treating that as a release turned a trigger still held on
- * return into a phantom press and lifted the suppression after "back". */
-static bool button_update(struct button *button, bool active, float value,
-                          bool *held)
-{
-    bool was = button->down;
-    if (active) {
-        if (!button->down && value >= SELECT_PRESS_THRESHOLD)
-            button->down = true;
-        else if (button->down && value < SELECT_RELEASE_THRESHOLD)
-            button->down = false;
-        if (!button->down)
-            button->suppressed = false;
-    }
-    *held = button->down;
-    return active && button->down && !was && !button->suppressed;
-}
-
-static void read_select(struct app *app, unsigned hand,
-                        struct hand_input *input)
-{
-    XrActionStateGetInfo info = {
-        .type = XR_TYPE_ACTION_STATE_GET_INFO,
-        .action = app->select_action,
-        .subactionPath = app->hands[hand],
-    };
-    XrActionStateFloat state = {.type = XR_TYPE_ACTION_STATE_FLOAT};
-    need_xr("xrGetActionStateFloat",
-            xrGetActionStateFloat(app->xr.session, &info, &state));
-    input->select_edge = button_update(&app->select[hand], state.isActive,
-                                       state.currentState,
-                                       &input->select_held);
-}
-
-static bool pressed_edge(const XrActionStateBoolean *state)
-{
-    return state->isActive && state->changedSinceLastSync &&
-           state->currentState;
-}
-
-static bool held(const XrActionStateBoolean *state)
-{
-    return state->isActive && state->currentState;
-}
-
 /* Show the panel again. If it is far outside the gaze cone it is moved in
  * front of the viewer, otherwise it keeps its world position. */
 static void show_panel(struct app *app, const XrSpaceLocation *head,
@@ -916,39 +565,6 @@ static float steady_bar_u(struct app *app, float u)
 }
 
 /* ---- controller bindings ---------------------------------------------- */
-
-/* Stick directions of one hand: the dominant direction past the press
- * threshold stays held until it falls under the release threshold. */
-static void read_stick_directions(struct app *app, unsigned hand,
-                                  bool down[BINDING_INPUT_COUNT])
-{
-    XrActionStateGetInfo info = {
-        .type = XR_TYPE_ACTION_STATE_GET_INFO,
-        .action = app->stick_action,
-        .subactionPath = app->hands[hand],
-    };
-    XrActionStateVector2f state = {.type = XR_TYPE_ACTION_STATE_VECTOR2F};
-    need_xr("xrGetActionStateVector2f",
-            xrGetActionStateVector2f(app->xr.session, &info, &state));
-    float x = state.isActive ? state.currentState.x : 0.0f;
-    float y = state.isActive ? state.currentState.y : 0.0f;
-    const float values[4] = {-x, x, y, -y}; /* left, right, up, down */
-    for (int d = 0; d < 4; ++d)
-        if (app->input_held[binding_stick(hand, d)] &&
-            values[d] >= STICK_RELEASE_THRESHOLD) {
-            down[binding_stick(hand, d)] = true;
-            return;
-        }
-    int best = -1;
-    float best_value = STICK_PRESS_THRESHOLD;
-    for (int d = 0; d < 4; ++d)
-        if (values[d] >= best_value) {
-            best = d;
-            best_value = values[d];
-        }
-    if (best >= 0)
-        down[binding_stick(hand, best)] = true;
-}
 
 /* Ends the session and starts the next or previous title of the folder;
  * the BROWSE that follows picks up app->skip_path. */
@@ -1065,7 +681,7 @@ static void run_binding(struct app *app, int action, bool repeated)
 static void learn_binding(struct app *app, int input, int modifier)
 {
     printf("binding_learn input=%d modifier=%d grip_value=%.2f/%.2f\n", input,
-           modifier, app->grip_value[0], app->grip_value[1]);
+           modifier, app->input.grip_value[0], app->input.grip_value[1]);
     for (int i = 0; i < BINDING_ACTION_COUNT; ++i)
         if (i != app->learn_action && app->bindings[i].input == input &&
             app->bindings[i].modifier == modifier) {
@@ -1152,8 +768,8 @@ static void process_bindings(struct app *app, const bool grip[2])
     }
     for (size_t i = 0; i < ARRAY_COUNT(button_inputs); ++i) {
         XrActionStateBoolean state;
-        read_boolean(app, app->button_actions[i],
-                     app->hands[button_inputs[i].hand], &state);
+        read_boolean(app, app->input.button_actions[i],
+                     app->input.hands[button_inputs[i].hand], &state);
         down[button_inputs[i].input] = held(&state);
     }
     double now = monotonic_seconds();
@@ -1170,29 +786,6 @@ static void process_bindings(struct app *app, const bool grip[2])
         }
     }
     memcpy(app->input_held, down, sizeof(down));
-}
-
-/* Grip per hand for the bindings: the squeeze button or the analog grip
- * past its threshold (with hysteresis). */
-static void read_grips(struct app *app, const struct hand_input hands[2],
-                       bool grips[2])
-{
-    for (unsigned hand = 0; hand < 2; ++hand) {
-        XrActionStateGetInfo info = {
-            .type = XR_TYPE_ACTION_STATE_GET_INFO,
-            .action = app->grip_value_action,
-            .subactionPath = app->hands[hand],
-        };
-        XrActionStateFloat state = {.type = XR_TYPE_ACTION_STATE_FLOAT};
-        need_xr("xrGetActionStateFloat(grip)",
-                xrGetActionStateFloat(app->xr.session, &info, &state));
-        float value = state.isActive ? state.currentState : 0.0f;
-        app->grip_value[hand] = value;
-        app->grip_value_down[hand] =
-            value >= (app->grip_value_down[hand] ? GRIP_RELEASE_THRESHOLD
-                                                 : GRIP_PRESS_THRESHOLD);
-        grips[hand] = held(&hands[hand].squeeze) || app->grip_value_down[hand];
-    }
 }
 
 /* Status line of the updates tab and the dot on "Settings". */
@@ -1361,7 +954,7 @@ static bool apply_setting(struct app *app, int action)
 
 static void sync_player_input(struct app *app, XrTime time)
 {
-    XrActiveActionSet active = {.actionSet = app->action_set};
+    XrActiveActionSet active = {.actionSet = app->input.action_set};
     XrActionsSyncInfo sync = {
         .type = XR_TYPE_ACTIONS_SYNC_INFO,
         .countActiveActionSets = 1,
@@ -1380,8 +973,8 @@ static void sync_player_input(struct app *app, XrTime time)
     for (unsigned hand = 0; hand < 2; ++hand) {
         XrActionStateGetInfo pose_info = {
             .type = XR_TYPE_ACTION_STATE_GET_INFO,
-            .action = app->aim_action,
-            .subactionPath = app->hands[hand],
+            .action = app->input.aim_action,
+            .subactionPath = app->input.hands[hand],
         };
         XrActionStatePose pose = {.type = XR_TYPE_ACTION_STATE_POSE};
         need_xr("xrGetActionStatePose",
@@ -1389,7 +982,7 @@ static void sync_player_input(struct app *app, XrTime time)
         if (pose.isActive) {
             XrSpaceLocation location = {.type = XR_TYPE_SPACE_LOCATION};
             need_xr("xrLocateSpace(player aim)",
-                    xrLocateSpace(app->aim_spaces[hand], app->xr.space,
+                    xrLocateSpace(app->input.aim_spaces[hand], app->xr.space,
                                   time, &location));
             if ((location.locationFlags & valid) == valid) {
                 hands[hand].aim_valid = true;
@@ -1398,7 +991,7 @@ static void sync_player_input(struct app *app, XrTime time)
             }
         }
         read_select(app, hand, &hands[hand]);
-        read_boolean(app, app->squeeze_action, app->hands[hand],
+        read_boolean(app, app->input.squeeze_action, app->input.hands[hand],
                      &hands[hand].squeeze);
     }
     bool grips[2];
@@ -1728,7 +1321,7 @@ static void end_playback(struct app *app)
     /* The trigger that pressed "back" is usually still held: ignore it
      * until a release so the browser does not react to it (it could
      * otherwise land on "Beenden" and close the program). */
-    app->select[0].suppressed = app->select[1].suppressed = true;
+    app->input.select[0].suppressed = app->input.select[1].suppressed = true;
     trickplay_open(app->trickplay, NULL);
     app->details_valid = false;
     for (int i = 0; i < TRICKPLAY_STRIP; ++i) {
@@ -1783,7 +1376,7 @@ static void begin_playback(struct app *app, int fd, const char *location)
     app->link.eos_received = false;
     app->ui_dirty = true;
     /* see end_playback */
-    app->select[0].suppressed = app->select[1].suppressed = true;
+    app->input.select[0].suppressed = app->input.select[1].suppressed = true;
     printf("playback_attached\n");
 }
 
@@ -1863,7 +1456,7 @@ static void handle_control(struct app *app)
 
 static void sync_browser_input(struct app *app, XrTime time)
 {
-    XrActiveActionSet active = {.actionSet = app->action_set};
+    XrActiveActionSet active = {.actionSet = app->input.action_set};
     XrActionsSyncInfo sync = {
         .type = XR_TYPE_ACTIONS_SYNC_INFO,
         .countActiveActionSets = 1,
@@ -1882,14 +1475,14 @@ static void sync_browser_input(struct app *app, XrTime time)
     for (unsigned hand = 0; hand < 2; ++hand) {
         XrActionStateGetInfo pose_info = {
             .type = XR_TYPE_ACTION_STATE_GET_INFO,
-            .action = app->aim_action,
-            .subactionPath = app->hands[hand],
+            .action = app->input.aim_action,
+            .subactionPath = app->input.hands[hand],
         };
         XrActionStatePose pose = {.type = XR_TYPE_ACTION_STATE_POSE};
         need_xr("xrGetActionStatePose(browser)",
                 xrGetActionStatePose(app->xr.session, &pose_info, &pose));
         read_select(app, hand, &hands[hand]);
-        read_boolean(app, app->squeeze_action, app->hands[hand],
+        read_boolean(app, app->input.squeeze_action, app->input.hands[hand],
                      &hands[hand].squeeze);
         if (hands[hand].select_edge)
             pressed = true;
@@ -1900,7 +1493,7 @@ static void sync_browser_input(struct app *app, XrTime time)
             continue;
         XrSpaceLocation location = {.type = XR_TYPE_SPACE_LOCATION};
         need_xr("xrLocateSpace(browser aim)",
-                xrLocateSpace(app->aim_spaces[hand], app->xr.space, time,
+                xrLocateSpace(app->input.aim_spaces[hand], app->xr.space, time,
                               &location));
         if ((location.locationFlags & valid) != valid)
             continue;
@@ -2265,7 +1858,7 @@ static void render_frame(struct app *app)
     if (app->overlay.render_models_dirty) {
         app->overlay.render_models_dirty = false;
         render_models_load(&app->overlay.render_models, app->xr.instance, app->xr.session,
-                           app->hands);
+                           app->input.hands);
         upload_render_models(app);
     }
     XrFrameState frame_state = {.type = XR_TYPE_FRAME_STATE};

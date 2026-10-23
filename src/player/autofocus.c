@@ -20,7 +20,7 @@ XrVector3f view_direction(struct app *app, XrPosef head, XrTime time,
         const XrSpaceLocationFlags tracked =
             XR_SPACE_LOCATION_ORIENTATION_VALID_BIT |
             XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
-        if (XR_SUCCEEDED(xrLocateSpace(app->gaze_space, app->xr.space, time,
+        if (XR_SUCCEEDED(xrLocateSpace(app->input.gaze_space, app->xr.space, time,
                                        &location)) &&
             (location.locationFlags & tracked) == tracked) {
             *gaze = true;

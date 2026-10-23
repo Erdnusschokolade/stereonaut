@@ -116,7 +116,7 @@ void poll_events(struct app *app)
                 };
                 char text[XR_MAX_PATH_LENGTH] = "none";
                 if (XR_SUCCEEDED(xrGetCurrentInteractionProfile(
-                        app->xr.session, app->hands[hand], &profile)) &&
+                        app->xr.session, app->input.hands[hand], &profile)) &&
                     profile.interactionProfile != XR_NULL_PATH) {
                     uint32_t length = 0;
                     xrPathToString(app->xr.instance, profile.interactionProfile,

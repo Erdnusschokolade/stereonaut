@@ -51,6 +51,7 @@ cc -std=c11 -O2 -Wall -Wextra -Werror \
   "$script_dir/autofocus.c" \
   "$script_dir/panel-compositor.c" \
   "$script_dir/video-import.c" "$script_dir/session-ipc.c" \
+  "$script_dir/xr-input.c" \
   "$script_dir/browser-ui.c" \
   "$script_dir/player-ui.c" "$script_dir/ui-draw.c" "$script_dir/ui-layout.c" \
   "$script_dir/thumbnails.c" \

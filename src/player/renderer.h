@@ -56,10 +56,9 @@
 #include "panel-compositor.h"
 #include "video-import.h"
 #include "session-ipc.h"
+#include "xr-input.h"
 
 #define ARRAY_COUNT(a) (sizeof(a) / sizeof((a)[0]))
-/* Entries of button_inputs (buttons beyond trigger and grip). */
-#define BUTTON_INPUT_COUNT 14
 #define UBO_STRIDE 512U
 #define PI_F 3.14159265358979f
 #define UI_WIDTH PLAYER_UI_WIDTH
@@ -69,20 +68,6 @@
 #define PC_RENDER_SCALE 1.3f
 #define UI_PANEL_HEIGHT_METERS PLAYER_UI_PANEL_HEIGHT_METERS
 #define GRAB_RECENTER_COS 0.5f
-/* The select action is analog so the press point can be lower than the
- * trigger's full click travel. */
-#define SELECT_PRESS_THRESHOLD 0.50f
-#define SELECT_RELEASE_THRESHOLD 0.03f
-/* Thumbstick left/right: same low threshold as the trigger, one action per
- * deflection. */
-#define STICK_PRESS_THRESHOLD 0.30f
-#define STICK_RELEASE_THRESHOLD 0.15f
-/* Grip as a modifier of button bindings: its analog value, because the
- * Frame's grip click needs a firm squeeze that a hand also moving the stick
- * rarely keeps up. */
-#define GRIP_PRESS_THRESHOLD 0.40f
-#define GRIP_RELEASE_THRESHOLD 0.25f
-
 /* Holding a stick direction or button repeats its action (volume, tilt,
  * zoom) after the delay, then at the interval. */
 #define BINDING_REPEAT_DELAY 0.5
@@ -127,12 +112,6 @@ struct view_uniform {
 
 _Static_assert(sizeof(struct view_uniform) <= UBO_STRIDE,
                "view uniform exceeds dynamic UBO stride");
-
-/* Trigger state with hysteresis (button_update). */
-struct button {
-    bool down;       /* debounced physical state */
-    bool suppressed; /* ignore the current press until a genuine release */
-};
 
 /* Frame timing, logged every FRAME_TIMING_INTERVAL seconds (frame_timing):
  * frames SteamVR waited for (missed: the predicted display time skipped a
@@ -192,15 +171,7 @@ struct app {
     uint32_t format_source; /* enum nv12_format_source, shown on the panel */
     uint32_t fisheye_fov;   /* lens angle (degrees) for fisheye titles */
     float volume;           /* output gain (settings.json "volume") */
-    XrActionSet action_set;
-    XrAction aim_action;
-    XrAction select_action;
-    XrAction squeeze_action;
-    XrAction stick_action;
-    XrAction grip_value_action;
-    bool grip_value_down[2];
-    float grip_value[2];
-    XrAction button_actions[BUTTON_INPUT_COUNT];
+    struct xr_input input;
     /* Controller bindings (settings.json "binding_*") and their input
      * state: what was down last frame, whether a held button served as a
      * modifier (then it does not act on release), and the repeating action
@@ -216,12 +187,6 @@ struct app {
     char skip_path[PLAYER_UI_PATH_MAX];
     char skip_title[256];
     struct overlay overlay;
-    XrAction gaze_action;
-    XrSpace gaze_space;
-    int stick_direction[2]; /* -1 left, +1 right, 0 centred */
-    struct button select[2];
-    XrPath hands[2];
-    XrSpace aim_spaces[2];
     int ui_hover;
     bool ui_pointer_visible;
     int ui_pointer_x;
