@@ -879,6 +879,15 @@ int ui_text_width(struct ui_font *font, int pixel_size, const char *text)
     return measure(font, pixel_size, text, -1);
 }
 
+int ui_text_width_n(struct ui_font *font, int pixel_size, const char *text,
+                    size_t length)
+{
+    if (!ui_font_ready(font) || !text || length == 0)
+        return 0;
+    return measure(font, pixel_size, text,
+                   length > INT32_MAX ? INT32_MAX : (int)length);
+}
+
 static int draw_run(struct ui_canvas *canvas, struct ui_font *font,
                     int pixel_size, int x, int baseline, struct ui_color color,
                     const char *text, int byte_limit)

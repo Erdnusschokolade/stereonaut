@@ -114,6 +114,9 @@ bool ui_font_ready(const struct ui_font *font);
 enum ui_align { UI_ALIGN_LEFT, UI_ALIGN_CENTER, UI_ALIGN_RIGHT };
 
 int ui_text_width(struct ui_font *font, int pixel_size, const char *text);
+/* Width of the first `length` bytes of `text` (whole code points). */
+int ui_text_width_n(struct ui_font *font, int pixel_size, const char *text,
+                    size_t length);
 /* Draws a single line with its top at `y` (ascent-based baseline). With
  * `max_width` > 0 the text is shortened with an ellipsis. Returns the drawn
  * width. */

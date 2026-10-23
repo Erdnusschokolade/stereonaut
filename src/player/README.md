@@ -248,6 +248,13 @@ and unused entries and translations whose printf conversions differ;
 `--list CODE` prints the missing ones as entries to fill in. The launcher
 sends its messages in English and the host translates them.
 
+The panels are drawn on the CPU by `ui-draw.c`. Views being moved to a
+declarative layout describe their boxes with Clay
+(`third_party/clay/clay.h`, v0.14, zlib licence) through `ui-layout.c`:
+the result holds the draw commands and the boxes of the controls, so
+drawing and hit testing use the same layout. So far the updates tab of the
+settings uses it; the other tabs still place their widgets by hand.
+
 Updates (settings page, tab "Updates"): `updater.c` runs
 `stereonaut-update.sh` from the install directory as a child process and
 reads its lines without blocking. `check` follows GitHub's redirect of
