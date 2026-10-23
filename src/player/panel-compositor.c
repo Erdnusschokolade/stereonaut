@@ -263,7 +263,7 @@ void create_ui_resources(struct app *app)
 {
     VkCommandBufferAllocateInfo commands = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-        .commandPool = app->command_pool,
+        .commandPool = app->render.command_pool,
         .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
         .commandBufferCount = 1,
     };
@@ -559,7 +559,7 @@ void create_browser_texture(struct app *app)
     }
     VkCommandBufferAllocateInfo commands = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-        .commandPool = app->command_pool,
+        .commandPool = app->render.command_pool,
         .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
         .commandBufferCount = 1,
     };
@@ -656,7 +656,7 @@ void fill_static_swapchain(struct app *app, XrSwapchain swapchain,
     memcpy(mapping, pixels, (size_t)bytes);
     VkCommandBufferAllocateInfo commands = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-        .commandPool = app->command_pool,
+        .commandPool = app->render.command_pool,
         .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
         .commandBufferCount = 1,
     };
@@ -729,7 +729,7 @@ void fill_static_swapchain(struct app *app, XrSwapchain swapchain,
                 xrReleaseSwapchainImage(swapchain, &release));
     }
     vkDestroyFence(app->gpu.device, fence, NULL);
-    vkFreeCommandBuffers(app->gpu.device, app->command_pool, 1, &command);
+    vkFreeCommandBuffers(app->gpu.device, app->render.command_pool, 1, &command);
     vkUnmapMemory(app->gpu.device, memory);
     vkDestroyBuffer(app->gpu.device, buffer, NULL);
     vkFreeMemory(app->gpu.device, memory, NULL);

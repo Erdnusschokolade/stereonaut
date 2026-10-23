@@ -321,7 +321,7 @@ void record_host_upload(struct app *app,
             .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                                  .levelCount = 1, .layerCount = 1},
         };
-    vkCmdPipelineBarrier(app->command,
+    vkCmdPipelineBarrier(app->render.command,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
                              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, NULL, 0, NULL,
@@ -341,9 +341,9 @@ void record_host_upload(struct app *app,
                                  .layerCount = 1},
             .imageExtent = {app->video.width / 2U, app->video.height / 2U, 1},
         };
-        vkCmdCopyBufferToImage(app->command, video->host_buffer, video->image,
+        vkCmdCopyBufferToImage(app->render.command, video->host_buffer, video->image,
                                VK_IMAGE_LAYOUT_GENERAL, 1, &luma);
-        vkCmdCopyBufferToImage(app->command, video->host_buffer,
+        vkCmdCopyBufferToImage(app->render.command, video->host_buffer,
                                video->image_uv, VK_IMAGE_LAYOUT_GENERAL, 1,
                                &chroma);
     } else {
@@ -358,7 +358,7 @@ void record_host_upload(struct app *app,
              .imageExtent = {app->video.width / 2U, app->video.height / 2U,
                              1}},
         };
-        vkCmdCopyBufferToImage(app->command, video->host_buffer, video->image,
+        vkCmdCopyBufferToImage(app->render.command, video->host_buffer, video->image,
                                VK_IMAGE_LAYOUT_GENERAL, 2, planes);
     }
     for (uint32_t i = 0; i < count; ++i) {
@@ -366,7 +366,7 @@ void record_host_upload(struct app *app,
         barriers[i].dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
         barriers[i].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
     }
-    vkCmdPipelineBarrier(app->command, VK_PIPELINE_STAGE_TRANSFER_BIT,
+    vkCmdPipelineBarrier(app->render.command, VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
                              VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
                          0, 0, NULL, 0, NULL, count, barriers);
@@ -605,7 +605,7 @@ static void write_video_descriptor(struct app *app, VkDescriptorSet set,
 {
     VkImageView view = buffer->view;
     VkDescriptorBufferInfo descriptor_buffer = {
-        .buffer = app->uniform_buffer,
+        .buffer = app->render.uniform_buffer,
         .offset = 0,
         .range = sizeof(struct view_uniform),
     };

@@ -59,9 +59,9 @@
 #include "xr-input.h"
 #include "input-bindings.h"
 #include "ui-control.h"
+#include "render-pipeline.h"
 
 #define ARRAY_COUNT(a) (sizeof(a) / sizeof((a)[0]))
-#define UBO_STRIDE 512U
 #define PI_F 3.14159265358979f
 #define UI_WIDTH PLAYER_UI_WIDTH
 #define UI_HEIGHT PLAYER_UI_HEIGHT
@@ -69,29 +69,6 @@
 #define UI_PANEL_WIDTH_METERS PLAYER_UI_PANEL_WIDTH_METERS
 #define PC_RENDER_SCALE 1.3f
 #define UI_PANEL_HEIGHT_METERS PLAYER_UI_PANEL_HEIGHT_METERS
-
-struct view_uniform {
-    struct mat4 mvp;
-    struct mat4 camera_to_world;
-    float fov_tangents[4];
-    int32_t modes[4];
-    float source_info[4];
-    float video_scale[4]; /* TP10: visible / padded size of the planes */
-    float levels[4];      /* black, white, chroma range (8-bit codes) */
-    /* Eye position inside the video dome (radius 1 m, dome axes): head
-     * motion (6DoF), zoom, height and slide. */
-    float eye_offset[4];
-    /* This eye's stereo offset: longitude and latitude shift (radians) and
-     * the same as texture offset for the flat screen. */
-    float stereo_offset[4];
-    float picture[4];     /* brightness, contrast, saturation, gamma */
-    float background[4];  /* premultiplied colour where there is no video */
-    float chroma_key[4];  /* key direction (Cb, Cr), threshold, softness */
-    float chroma_spill[4]; /* spill removal, key on (> 0) */
-};
-
-_Static_assert(sizeof(struct view_uniform) <= UBO_STRIDE,
-               "view uniform exceeds dynamic UBO stride");
 
 /* Frame timing, logged every FRAME_TIMING_INTERVAL seconds (frame_timing):
  * frames SteamVR waited for (missed: the predicted display time skipped a
@@ -113,13 +90,7 @@ struct frame_timing {
 struct app {
     struct xr_state xr;
     struct gpu gpu;
-    VkCommandPool command_pool;
-    VkCommandBuffer command;
-    VkFence fence;
-    VkRenderPass render_pass;
-    VkPipelineLayout pipeline_layout;
-    VkPipeline pipeline;
-    VkPipeline pipeline_tp10;
+    struct render_pipeline render;
     struct autofocus autofocus;
     bool focus_threshold;   /* only subjects nearer than FOCUS_DISTANCE */
     bool av1_software;      /* settings.json, read by the next session */
@@ -131,8 +102,6 @@ struct app {
     bool key_picking;
     /* Debug display ("Blick anzeigen", see struct autofocus). */
     bool gaze_debug;
-    VkDescriptorSetLayout descriptor_layout;
-    VkDescriptorPool descriptor_pool;
     struct video_import video;
     bool awaiting_frame; /* no frame of the stream yet (start, seek) */
     int ui_fd;              /* control socket to the launcher */
@@ -181,11 +150,6 @@ struct app {
     bool seek_scrubbing;     /* paused, only scrub_us moves */
     bool seek_resume;        /* played before: play on after the seek */
     bool seek_show_panel;    /* show the panel in the next input pass */
-    VkBuffer uniform_buffer;
-    VkDeviceMemory uniform_memory;
-    void *uniform_mapping;
-    VkImageView image_views[MAX_IMAGES][2];
-    VkFramebuffer framebuffers[MAX_IMAGES][2];
     bool popup_open;
     int popup_tab;                       /* enum player_ui_tab */
     /* Settings page over the browser: the popup's settings tabs, drawn

@@ -52,7 +52,7 @@ cc -std=c11 -O2 -Wall -Wextra -Werror \
   "$script_dir/panel-compositor.c" \
   "$script_dir/video-import.c" "$script_dir/session-ipc.c" \
   "$script_dir/xr-input.c" "$script_dir/input-bindings.c" \
-  "$script_dir/ui-control.c" \
+  "$script_dir/ui-control.c" "$script_dir/render-pipeline.c" \
   "$script_dir/browser-ui.c" \
   "$script_dir/player-ui.c" "$script_dir/ui-draw.c" "$script_dir/ui-layout.c" \
   "$script_dir/thumbnails.c" \

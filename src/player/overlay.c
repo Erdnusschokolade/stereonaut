@@ -308,7 +308,7 @@ void create_overlay(struct app *app)
         for (uint32_t image = 0; image < app->overlay.image_counts[eye];
              ++image) {
             if (app->overlay.in_eye_images) {
-                VkImageView views[2] = {app->image_views[image][eye],
+                VkImageView views[2] = {app->render.image_views[image][eye],
                                         app->overlay.depth_views[eye]};
                 VkFramebufferCreateInfo framebuffer = {
                     .sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
@@ -488,7 +488,7 @@ static bool upload_model_texture(struct app *app, struct gpu_model *model)
     memcpy(mapping, texture->rgba, (size_t)bytes);
     VkCommandBufferAllocateInfo allocate = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
-        .commandPool = app->command_pool,
+        .commandPool = app->render.command_pool,
         .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY, .commandBufferCount = 1,
     };
     VkCommandBuffer command;
@@ -520,7 +520,7 @@ static bool upload_model_texture(struct app *app, struct gpu_model *model)
             vkWaitForFences(app->gpu.device, 1, &fence, VK_TRUE,
                             UINT64_C(5000000000)));
     vkDestroyFence(app->gpu.device, fence, NULL);
-    vkFreeCommandBuffers(app->gpu.device, app->command_pool, 1, &command);
+    vkFreeCommandBuffers(app->gpu.device, app->render.command_pool, 1, &command);
     vkDestroyBuffer(app->gpu.device, staging, NULL);
     vkFreeMemory(app->gpu.device, staging_memory, NULL);
     VkImageViewCreateInfo view = {
