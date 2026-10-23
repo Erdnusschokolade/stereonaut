@@ -306,70 +306,6 @@ static void add_stepper(struct popup_layout *layout,
     add_widget(layout, WIDGET_VALUE, value_x, y + 8, plus_x - value_x, value);
 }
 
-/* Controller tab: pairs of actions in two columns, help or the action
- * being assigned in the third. */
-static void layout_buttons(const struct player_ui_state *state,
-                           struct popup_layout *layout)
-{
-    static const struct {
-        const char *label;
-        int first, second; /* enum binding_action, -1 = none */
-    } rows[6] = {
-        {N_("Seek (−10 s | +10 s)"), BINDING_SEEK_BACK,
-         BINDING_SEEK_FORWARD},
-        {N_("Volume (− | +)"), BINDING_VOLUME_DOWN, BINDING_VOLUME_UP},
-        {N_("Video (previous | next)"), BINDING_PREVIOUS, BINDING_NEXT},
-        {N_("Tilt (down | up)"), BINDING_TILT_DOWN, BINDING_TILT_UP},
-        {N_("Zoom (out | in)"), BINDING_ZOOM_OUT, BINDING_ZOOM_IN},
-        {N_("Play / pause"), BINDING_PLAY_PAUSE, -1},
-    };
-    for (int r = 0; r < 6; ++r) {
-        int column = r / 3, row = r % 3;
-        add_widget(layout, WIDGET_HINT, COLUMN_X(column), ROW_LABEL_Y(row), 0,
-                   tr(rows[r].label));
-        int count = rows[r].second >= 0 ? 2 : 1;
-        int width = (COLUMN_W - (count - 1) * CHIP_GAP) / count;
-        for (int i = 0; i < count; ++i) {
-            int action = i ? rows[r].second : rows[r].first;
-            char text[64];
-            if (state->learn_action == action)
-                snprintf(text, sizeof(text), "%s", tr("press …"));
-            else
-                binding_describe(state->bindings
-                                     ? state->bindings[action]
-                                     : binding_action_info[action].standard,
-                                 text, sizeof(text));
-            add_chip(layout, PLAYER_UI_BINDING + action,
-                     COLUMN_X(column) + i * (width + CHIP_GAP),
-                     ROW_CHIP_Y(row), width, text,
-                     state->learn_action == action);
-            layout->items[layout->count - 1].small = true;
-        }
-    }
-    int x = COLUMN_X(2), half = (COLUMN_W - CHIP_GAP) / 2;
-    if (state->learn_action >= 0 &&
-        state->learn_action < BINDING_ACTION_COUNT) {
-        char label[96];
-        snprintf(label, sizeof(label), tr("Assign: %s"),
-                 tr(binding_action_info[state->learn_action].label));
-        add_widget(layout, WIDGET_TEXT, x, ROW_LABEL_Y(0), 0, label);
-        add_paragraph(layout, x, ROW_LABEL_Y(0) + 40, 3,
-                      tr("Press a button, or for a combination hold the "
-                         "first and press the second."));
-        add_chip(layout, PLAYER_UI_BINDING_CLEAR, x, ROW_CHIP_Y(2), half,
-                 tr("Remove"), false);
-        add_chip(layout, PLAYER_UI_BINDING_CANCEL, x + half + CHIP_GAP,
-                 ROW_CHIP_Y(2), half, tr("Cancel"), false);
-    } else {
-        add_paragraph(layout, x, ROW_LABEL_Y(0), 5,
-                      tr("Choose a field, then press the button or "
-                         "combination on the controller. The grip works "
-                         "only in combinations. Applies to all titles."));
-        add_chip(layout, PLAYER_UI_BINDING_DEFAULTS, x, ROW_CHIP_Y(2),
-                 COLUMN_W, tr("Default buttons"), false);
-    }
-}
-
 /* ---- popup tabs laid out with Clay (ui-layout.h) -------------------------
  * The tab's content fills the popup below the tab row, mostly as three
  * columns. A column is a stack on a grid of rows: a hint above a row (a
@@ -646,6 +582,84 @@ static void layout_autofocus(const struct player_ui_state *state,
     }
 }
 
+/* Controller tab: pairs of actions in two columns, help or the action
+ * being assigned in the third. */
+static void layout_buttons(const struct player_ui_state *state,
+                           struct ui_layout *layout)
+{
+    static const struct {
+        const char *label;
+        int first, second; /* enum binding_action, -1 = none */
+    } rows[6] = {
+        {N_("Seek (−10 s | +10 s)"), BINDING_SEEK_BACK,
+         BINDING_SEEK_FORWARD},
+        {N_("Volume (− | +)"), BINDING_VOLUME_DOWN, BINDING_VOLUME_UP},
+        {N_("Video (previous | next)"), BINDING_PREVIOUS, BINDING_NEXT},
+        {N_("Tilt (down | up)"), BINDING_TILT_DOWN, BINDING_TILT_UP},
+        {N_("Zoom (out | in)"), BINDING_ZOOM_OUT, BINDING_ZOOM_IN},
+        {N_("Play / pause"), BINDING_PLAY_PAUSE, -1},
+    };
+    bool learning = state->learn_action >= 0 &&
+                    state->learn_action < BINDING_ACTION_COUNT;
+    COLUMNS {
+        for (int column = 0; column < 2; ++column)
+            COLUMN {
+                for (int r = 3 * column; r < 3 * column + 3; ++r) {
+                    hint(layout, tr(rows[r].label));
+                    CHIP_ROW {
+                        int count = rows[r].second >= 0 ? 2 : 1;
+                        for (int i = 0; i < count; ++i) {
+                            int action = i ? rows[r].second : rows[r].first;
+                            char text[64];
+                            if (state->learn_action == action)
+                                snprintf(text, sizeof(text), "%s",
+                                         tr("press …"));
+                            else
+                                binding_describe(
+                                    state->bindings
+                                        ? state->bindings[action]
+                                        : binding_action_info[action]
+                                              .standard,
+                                    text, sizeof(text));
+                            chip_sized(layout, state,
+                                       PLAYER_UI_BINDING + action, text,
+                                       state->learn_action == action,
+                                       CLAY_SIZING_GROW(0), true);
+                        }
+                    }
+                }
+            }
+        COLUMN {
+            if (learning) {
+                char label[96];
+                snprintf(label, sizeof(label), tr("Assign: %s"),
+                         tr(binding_action_info[state->learn_action].label));
+                ui_layout_text(layout, label, UI_LAYOUT_REGULAR, 24,
+                               color_text);
+                note(layout, 3,
+                     tr("Press a button, or for a combination hold the "
+                        "first and press the second."));
+                SPACER;
+                CHIP_ROW {
+                    chip(layout, state, PLAYER_UI_BINDING_CLEAR, tr("Remove"),
+                         false);
+                    chip(layout, state, PLAYER_UI_BINDING_CANCEL,
+                         tr("Cancel"), false);
+                }
+            } else {
+                paragraph(layout, 5,
+                          tr("Choose a field, then press the button or "
+                             "combination on the controller. The grip "
+                             "works only in combinations. Applies to all "
+                             "titles."));
+                SPACER;
+                chip(layout, state, PLAYER_UI_BINDING_DEFAULTS,
+                     tr("Default buttons"), false);
+            }
+        }
+    }
+}
+
 /* Updates tab: versions and the check (first column), the status and the
  * update (second), the check at start (third). */
 static void layout_updates(const struct player_ui_state *state,
@@ -763,6 +777,9 @@ static bool layout_tab(const struct player_ui_state *state,
         break;
     case PLAYER_UI_TAB_AUTOFOCUS:
         describe = layout_autofocus;
+        break;
+    case PLAYER_UI_TAB_BUTTONS:
+        describe = layout_buttons;
         break;
     case PLAYER_UI_TAB_LANGUAGE:
         describe = layout_language;
@@ -944,8 +961,6 @@ static void layout_popup(const struct player_ui_state *state,
                  state->key_picking);
         add_stepper(layout, state, 2, STEPPER_Y(2) + 12,
                     PLAYER_ADJUST_KEY_SPILL, NULL);
-    } else if (state->popup_tab == PLAYER_UI_TAB_BUTTONS) {
-        layout_buttons(state, layout);
     }
 }
 
