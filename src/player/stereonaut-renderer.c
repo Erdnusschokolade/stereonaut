@@ -4,9 +4,6 @@
 
 #include "renderer.h"
 
-static void send_control(struct app *app, uint32_t type, const char *path,
-                         int64_t start_us);
-
 static uint64_t parse_u64(const char *text, const char *name)
 {
     char *end = NULL;
@@ -20,7 +17,7 @@ static uint64_t parse_u64(const char *text, const char *name)
 }
 
 /* Steps of 10 %; above 100 % the samples are amplified (may clip). */
-static void change_volume(struct app *app, int direction)
+void change_volume(struct app *app, int direction)
 {
     float volume = roundf((app->volume + 0.1f * (float)direction) * 10.0f) /
                    10.0f;
@@ -128,7 +125,7 @@ static void load_adjust(struct app *app, bool global)
     }
 }
 
-static void change_adjust(struct app *app, int control)
+void change_adjust(struct app *app, int control)
 {
     int index = (control - PLAYER_UI_ADJUST) / 2;
     int direction = (control - PLAYER_UI_ADJUST) % 2 ? 1 : -1;
@@ -205,19 +202,9 @@ static void load_preview_settings(struct app *app)
     for (int i = 0; i < BINDING_ACTION_COUNT; ++i) {
         char key[64];
         snprintf(key, sizeof(key), "binding_%s", binding_action_info[i].key);
-        app->bindings[i] = binding_decode(settings_get_int(
+        app->controls.bindings[i] = binding_decode(settings_get_int(
             key, binding_encode(binding_action_info[i].standard)));
     }
-}
-
-static void save_binding(const struct app *app, int action)
-{
-    char key[64];
-    snprintf(key, sizeof(key), "binding_%s", binding_action_info[action].key);
-    settings_set_int(key, binding_encode(app->bindings[action]));
-    char text[64];
-    binding_describe(app->bindings[action], text, sizeof(text));
-    printf("binding %s=%s\n", binding_action_info[action].key, text);
 }
 
 /* Shader levels (enum nv12_video_levels): black and white luma and the
@@ -377,8 +364,8 @@ struct player_ui_state player_state(const struct app *app)
             (updater_available(&app->updater) ||
              !app->updater.installed[0]),
         .update_auto = app->update_auto,
-        .bindings = app->bindings,
-        .learn_action = app->learn_action,
+        .bindings = app->controls.bindings,
+        .learn_action = app->controls.learn_action,
         .debug_text = app->gaze_debug ? app->autofocus.debug_text : NULL,
         .projection_mode = app->projection_mode,
         .stereo_layout = app->stereo_layout,
@@ -566,228 +553,6 @@ static float steady_bar_u(struct app *app, float u)
 
 /* ---- controller bindings ---------------------------------------------- */
 
-/* Ends the session and starts the next or previous title of the folder;
- * the BROWSE that follows picks up app->skip_path. */
-static void skip_title(struct app *app, int direction)
-{
-    char next[PLAYER_UI_PATH_MAX];
-    if (app->skip_path[0] ||
-        !browser_ui_following_title(&app->browser, app->location, direction,
-                                    next, sizeof(next))) {
-        printf("binding_skip direction=%d none\n", direction);
-        return;
-    }
-    snprintf(app->skip_path, sizeof(app->skip_path), "%s", next);
-    snprintf(app->skip_title, sizeof(app->skip_title), "%s",
-             app->browser.selected_title);
-    printf("binding_skip direction=%d next=%s\n", direction, next);
-    send_ipc(app, NV12_IPC_ACTION, NV12_ACTION_BACK);
-    if (app->awaiting_frame)
-        send_control(app, PLAYER_UI_STOP_REQUESTED, NULL, 0);
-}
-
-/* One step of seeking with the bindings or the panel's -10/+10 buttons,
- * see SEEK_BURST_GAP. Targets are absolute and continue from a pending
- * one, so the session lands where the seek bar shows. */
-static void seek_binding(struct app *app, int direction, bool repeated)
-{
-    if (app->scrub_hand >= 0)
-        return;
-    if (app->link.duration_us <= 0) {
-        /* No status yet (loading): only the session knows the position. */
-        send_ipc(app, NV12_IPC_ACTION,
-                 direction > 0 ? NV12_ACTION_SEEK_FORWARD
-                               : NV12_ACTION_SEEK_BACK);
-        return;
-    }
-    double now = monotonic_seconds();
-    int64_t step = SEEK_STEP_US;
-    if (repeated) {
-        double held_for = now - app->seek_press_time;
-        step *= held_for > 5.0 ? 6 : held_for > 2.5 ? 3 : 1;
-    } else {
-        app->seek_burst = now - app->seek_press_time < SEEK_BURST_GAP
-                              ? app->seek_burst + 1
-                              : 1;
-        app->seek_press_time = now;
-    }
-    app->seek_step_time = now;
-    app->preview_spacing_us = step;
-    int64_t target = app->seek_pending || app->seek_scrubbing
-                         ? app->scrub_us
-                         : app->link.position_us;
-    target += direction * step;
-    if (target >= app->link.duration_us)
-        target = app->link.duration_us - 1;
-    if (target < 0)
-        target = 0;
-    app->scrub_us = target;
-    app->seek_by_binding = true;
-    app->ui_dirty = true;
-    if (!app->seek_scrubbing &&
-        (repeated || app->seek_burst >= SEEK_BURST_SCRUB)) {
-        app->seek_scrubbing = true;
-        app->seek_resume = app->link.player_state == NV12_PLAYER_PLAYING;
-        struct nv12_ipc_message pause = {
-            .type = NV12_IPC_ACTION, .index = NV12_ACTION_TOGGLE_PAUSE,
-            .player_state = NV12_PLAYER_PAUSED,
-        };
-        send_message(app, &pause);
-        app->seek_show_panel = true;
-        printf("seek_scrub=start target_us=%" PRId64 "\n", target);
-    }
-    if (app->seek_scrubbing) {
-        app->last_input_time = now;
-        return;
-    }
-    app->seek_pending = true;
-    send_seek_to(app, target, 0);
-}
-
-static void run_binding(struct app *app, int action, bool repeated)
-{
-    printf("binding_action %s\n", binding_action_info[action].key);
-    switch (action) {
-    case BINDING_SEEK_BACK:
-    case BINDING_SEEK_FORWARD:
-        seek_binding(app, action == BINDING_SEEK_FORWARD ? 1 : -1, repeated);
-        break;
-    case BINDING_VOLUME_DOWN:
-    case BINDING_VOLUME_UP:
-        change_volume(app, action == BINDING_VOLUME_UP ? 1 : -1);
-        break;
-    case BINDING_TILT_DOWN:
-    case BINDING_TILT_UP:
-        change_adjust(app, PLAYER_UI_ADJUST + 2 * PLAYER_ADJUST_TILT +
-                               (action == BINDING_TILT_UP));
-        break;
-    case BINDING_ZOOM_OUT:
-    case BINDING_ZOOM_IN:
-        change_adjust(app, PLAYER_UI_ADJUST + 2 * PLAYER_ADJUST_ZOOM +
-                               (action == BINDING_ZOOM_IN));
-        break;
-    case BINDING_PLAY_PAUSE:
-        send_ipc(app, NV12_IPC_ACTION, NV12_ACTION_TOGGLE_PAUSE);
-        break;
-    case BINDING_PREVIOUS:
-    case BINDING_NEXT:
-        skip_title(app, action == BINDING_NEXT ? 1 : -1);
-        break;
-    }
-}
-
-/* Assigns the pressed buttons to the action waiting for them; another
- * action with the same buttons loses them. */
-static void learn_binding(struct app *app, int input, int modifier)
-{
-    printf("binding_learn input=%d modifier=%d grip_value=%.2f/%.2f\n", input,
-           modifier, app->input.grip_value[0], app->input.grip_value[1]);
-    for (int i = 0; i < BINDING_ACTION_COUNT; ++i)
-        if (i != app->learn_action && app->bindings[i].input == input &&
-            app->bindings[i].modifier == modifier) {
-            app->bindings[i] = (struct binding){-1, -1};
-            save_binding(app, i);
-        }
-    app->bindings[app->learn_action] = (struct binding){input, modifier};
-    save_binding(app, app->learn_action);
-    app->learn_action = -1;
-    app->ui_dirty = true;
-}
-
-/* A modifier counts if it was down before this frame. */
-static void press_input(struct app *app, int input, double now)
-{
-    app->last_input_time = now;
-    app->input_combined[input] = false;
-    app->input_repeat[input] = 0;
-    int modifier = -1;
-    if (app->learn_action >= 0) {
-        for (int m = BINDING_FIRST_BUTTON; m < BINDING_INPUT_COUNT; ++m)
-            if (m != input && app->input_held[m]) {
-                modifier = m;
-                break;
-            }
-        if (modifier >= 0) {
-            app->input_combined[modifier] = true;
-            learn_binding(app, input, modifier);
-        } else if (!binding_is_button(input)) {
-            learn_binding(app, input, -1);
-        }
-        /* A button alone is assigned on release: it may still become the
-         * first button of a combination. */
-    } else {
-        int action = binding_match(app->bindings, input, app->input_held,
-                                   &modifier);
-        if (modifier >= 0)
-            app->input_combined[modifier] = true;
-        else if (binding_is_button(input) &&
-                 binding_is_modifier(app->bindings, input))
-            return; /* acts on release unless used as a modifier */
-        if (action < 0)
-            return;
-        run_binding(app, action, false);
-        if (binding_action_info[action].repeat) {
-            app->input_repeat[input] = action + 1;
-            app->input_repeat_time[input] = now + BINDING_REPEAT_DELAY;
-        }
-    }
-    /* A grip that became a modifier does not show/hide the panel. */
-    if (modifier == BINDING_LEFT_GRIP || modifier == BINDING_RIGHT_GRIP)
-        app->grip_toggle[modifier == BINDING_RIGHT_GRIP] = false;
-}
-
-static void release_input(struct app *app, int input)
-{
-    bool combined = app->input_combined[input];
-    app->input_combined[input] = false;
-    app->input_repeat[input] = 0;
-    if (!binding_is_button(input) || combined ||
-        input == BINDING_LEFT_GRIP || input == BINDING_RIGHT_GRIP)
-        return;
-    if (app->learn_action >= 0) {
-        learn_binding(app, input, -1);
-        return;
-    }
-    if (!binding_is_modifier(app->bindings, input))
-        return; /* acted on press */
-    const bool none[BINDING_INPUT_COUNT] = {false};
-    int modifier;
-    int action = binding_match(app->bindings, input, none, &modifier);
-    if (action >= 0)
-        run_binding(app, action, false);
-}
-
-/* Turns stick directions and buttons into actions; while an action waits
- * for its buttons, the next press is assigned to it instead. */
-static void process_bindings(struct app *app, const bool grip[2])
-{
-    bool down[BINDING_INPUT_COUNT] = {false};
-    for (unsigned hand = 0; hand < 2; ++hand) {
-        read_stick_directions(app, hand, down);
-        down[hand ? BINDING_RIGHT_GRIP : BINDING_LEFT_GRIP] = grip[hand];
-    }
-    for (size_t i = 0; i < ARRAY_COUNT(button_inputs); ++i) {
-        XrActionStateBoolean state;
-        read_boolean(app, app->input.button_actions[i],
-                     app->input.hands[button_inputs[i].hand], &state);
-        down[button_inputs[i].input] = held(&state);
-    }
-    double now = monotonic_seconds();
-    for (int input = 0; input < BINDING_INPUT_COUNT; ++input) {
-        bool was = app->input_held[input];
-        if (down[input] && !was) {
-            press_input(app, input, now);
-        } else if (!down[input] && was) {
-            release_input(app, input);
-        } else if (down[input] && app->input_repeat[input] &&
-                   now >= app->input_repeat_time[input]) {
-            run_binding(app, app->input_repeat[input] - 1, true);
-            app->input_repeat_time[input] = now + BINDING_REPEAT_INTERVAL;
-        }
-    }
-    memcpy(app->input_held, down, sizeof(down));
-}
-
 /* Status line of the updates tab and the dot on "Settings". */
 static void refresh_update_status(struct app *app)
 {
@@ -852,21 +617,21 @@ static bool apply_setting(struct app *app, int action)
     if (action >= PLAYER_UI_BINDING &&
         action < PLAYER_UI_BINDING + BINDING_ACTION_COUNT) {
         int chosen = action - PLAYER_UI_BINDING;
-        app->learn_action = app->learn_action == chosen ? -1 : chosen;
+        app->controls.learn_action = app->controls.learn_action == chosen ? -1 : chosen;
     } else if (action == PLAYER_UI_BINDING_CLEAR) {
-        if (app->learn_action >= 0) {
-            app->bindings[app->learn_action] = (struct binding){-1, -1};
-            save_binding(app, app->learn_action);
+        if (app->controls.learn_action >= 0) {
+            app->controls.bindings[app->controls.learn_action] = (struct binding){-1, -1};
+            save_binding(app, app->controls.learn_action);
         }
-        app->learn_action = -1;
+        app->controls.learn_action = -1;
     } else if (action == PLAYER_UI_BINDING_CANCEL) {
-        app->learn_action = -1;
+        app->controls.learn_action = -1;
     } else if (action == PLAYER_UI_BINDING_DEFAULTS) {
         for (int i = 0; i < BINDING_ACTION_COUNT; ++i) {
-            app->bindings[i] = binding_action_info[i].standard;
+            app->controls.bindings[i] = binding_action_info[i].standard;
             save_binding(app, i);
         }
-        app->learn_action = -1;
+        app->controls.learn_action = -1;
     } else if (action >= PLAYER_UI_ADJUST &&
                action < PLAYER_UI_ADJUST_END) {
         change_adjust(app, action);
@@ -877,7 +642,7 @@ static bool apply_setting(struct app *app, int action)
             app->settings_tab = tab;
         else
             app->popup_tab = tab;
-        app->learn_action = -1;
+        app->controls.learn_action = -1;
     } else if (action >= PLAYER_UI_AUTOHIDE &&
                action < PLAYER_UI_AUTOHIDE + PLAYER_UI_AUTOHIDE_COUNT) {
         app->autohide = player_ui_autohide[action - PLAYER_UI_AUTOHIDE];
@@ -1067,8 +832,8 @@ static void sync_player_input(struct app *app, XrTime time)
     for (unsigned hand = 0; hand < 2; ++hand) {
         /* Show/hide on release, unless the grip served as a modifier of a
          * button binding in between. */
-        if (app->grip_toggle[hand] && !held(&hands[hand].squeeze)) {
-            app->grip_toggle[hand] = false;
+        if (app->controls.grip_toggle[hand] && !held(&hands[hand].squeeze)) {
+            app->controls.grip_toggle[hand] = false;
             if (app->ui_visible) {
                 app->ui_visible = false;
                 app->auto_hidden = false;
@@ -1093,8 +858,8 @@ static void sync_player_input(struct app *app, XrTime time)
             app->grab_hand = (int)hand;
             app->ui_dirty = true;
             printf("player_panel=grabbed hand=%u\n", hand);
-        } else if (app->learn_action < 0) {
-            app->grip_toggle[hand] = true;
+        } else if (app->controls.learn_action < 0) {
+            app->controls.grip_toggle[hand] = true;
         }
     }
     if (app->grab_hand >= 0 && hands[app->grab_hand].aim_valid) {
@@ -1156,7 +921,7 @@ static void sync_player_input(struct app *app, XrTime time)
             app->ui_dirty = true;
         } else if (action == PLAYER_UI_VIEW_POPUP) {
             app->popup_open = !app->popup_open;
-            app->learn_action = -1;
+            app->controls.learn_action = -1;
             app->ui_dirty = true;
         } else if (apply_setting(app, action)) {
             /* global setting or popup tab */
@@ -1253,8 +1018,8 @@ static void sync_player_input(struct app *app, XrTime time)
 
 /* ---- launcher control socket ---------------------------------------- */
 
-static void send_control(struct app *app, uint32_t type, const char *path,
-                         int64_t start_us)
+void send_control(struct app *app, uint32_t type, const char *path,
+                  int64_t start_us)
 {
     struct player_ui_result result = {.type = type, .start_us = start_us};
     if (path)
@@ -1291,11 +1056,11 @@ static void end_playback(struct app *app)
     app->seek_burst = 0;
     app->grab_hand = -1;
     app->scrub_hand = -1;
-    app->learn_action = -1;
-    memset(app->input_held, 0, sizeof(app->input_held));
-    memset(app->input_combined, 0, sizeof(app->input_combined));
-    memset(app->input_repeat, 0, sizeof(app->input_repeat));
-    app->grip_toggle[0] = app->grip_toggle[1] = false;
+    app->controls.learn_action = -1;
+    memset(app->controls.held, 0, sizeof(app->controls.held));
+    memset(app->controls.combined, 0, sizeof(app->controls.combined));
+    memset(app->controls.repeat, 0, sizeof(app->controls.repeat));
+    app->controls.grip_toggle[0] = app->controls.grip_toggle[1] = false;
     app->ui_hover = 0;
     app->ui_pointer_visible = false;
     app->link.player_state = NV12_PLAYER_PLAYING;
@@ -1533,19 +1298,19 @@ static void sync_browser_input(struct app *app, XrTime time)
             app->settings_hover = settings_hover;
             app->browser.dirty = true;
         }
-        if (app->learn_action >= 0) {
+        if (app->controls.learn_action >= 0) {
             bool grips[2];
             read_grips(app, hands, grips);
             process_bindings(app, grips);
-            if (app->learn_action < 0)
+            if (app->controls.learn_action < 0)
                 app->browser.dirty = true;
         }
         if (!pressed)
             return;
         if (settings_hover == PLAYER_UI_SETTINGS_CLOSE ||
-            (settings_hover < 0 && app->learn_action < 0)) {
+            (settings_hover < 0 && app->controls.learn_action < 0)) {
             app->settings_open = false;
-            app->learn_action = -1;
+            app->controls.learn_action = -1;
             app->browser.dirty = true;
             printf("settings_page=closed\n");
         } else if (settings_hover > 0) {
@@ -1574,8 +1339,8 @@ static void sync_browser_input(struct app *app, XrTime time)
     case BROWSER_UI_SETTINGS_REQUESTED:
         app->settings_open = true;
         app->settings_hover = -1;
-        app->learn_action = -1;
-        memset(app->input_held, 0, sizeof(app->input_held));
+        app->controls.learn_action = -1;
+        memset(app->controls.held, 0, sizeof(app->controls.held));
         browser_ui_close_menus(&app->browser);
         app->browser.dirty = true;
         printf("settings_page=open\n");
@@ -2423,7 +2188,7 @@ int main(int argc, char **argv)
     app.grab_hand = -1;
     app.scrub_hand = -1;
     app.bar_u = -1.0f;
-    app.learn_action = -1;
+    app.controls.learn_action = -1;
     app.home_pending = true;
     app.settings_tab = PLAYER_UI_TAB_PLAYBACK;
     app.awaiting_frame = true;

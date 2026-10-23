@@ -363,7 +363,7 @@ void read_stick_directions(struct app *app, unsigned hand,
     float y = state.isActive ? state.currentState.y : 0.0f;
     const float values[4] = {-x, x, y, -y}; /* left, right, up, down */
     for (int d = 0; d < 4; ++d)
-        if (app->input_held[binding_stick(hand, d)] &&
+        if (app->controls.held[binding_stick(hand, d)] &&
             values[d] >= STICK_RELEASE_THRESHOLD) {
             down[binding_stick(hand, d)] = true;
             return;

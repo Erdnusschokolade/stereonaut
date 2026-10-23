@@ -453,7 +453,7 @@ static void fill_panel_job(const struct app *app, struct panel_job *job)
     state.update_installed = job->update_installed;
     state.update_latest = job->update_latest;
     state.update_status = job->update_status;
-    memcpy(job->bindings, app->bindings, sizeof(job->bindings));
+    memcpy(job->bindings, app->controls.bindings, sizeof(job->bindings));
     state.bindings = job->bindings;
     if (state.debug_text) {
         snprintf(job->debug_text, sizeof(job->debug_text), "%s",

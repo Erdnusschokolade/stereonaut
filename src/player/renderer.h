@@ -57,6 +57,7 @@
 #include "video-import.h"
 #include "session-ipc.h"
 #include "xr-input.h"
+#include "input-bindings.h"
 
 #define ARRAY_COUNT(a) (sizeof(a) / sizeof((a)[0]))
 #define UBO_STRIDE 512U
@@ -68,21 +69,6 @@
 #define PC_RENDER_SCALE 1.3f
 #define UI_PANEL_HEIGHT_METERS PLAYER_UI_PANEL_HEIGHT_METERS
 #define GRAB_RECENTER_COS 0.5f
-/* Holding a stick direction or button repeats its action (volume, tilt,
- * zoom) after the delay, then at the interval. */
-#define BINDING_REPEAT_DELAY 0.5
-#define BINDING_REPEAT_INTERVAL 0.15
-
-/* Seeking with the bindings (seek_binding): presses less than
- * SEEK_BURST_GAP apart form a burst. Up to its fourth press each one
- * seeks at once; from the fifth, or once a held input repeats, playback
- * pauses and only the seek bar (with the trickplay preview) moves until
- * the input rests for SEEK_SCRUB_SETTLE. Held, the steps grow. */
-#define SEEK_STEP_US INT64_C(10000000)
-#define SEEK_BURST_GAP 0.5
-#define SEEK_BURST_SCRUB 5
-#define SEEK_SCRUB_SETTLE 0.5
-
 /* Hovering or dragging the seek bar: the position follows the pointer only
  * once it moved BAR_HYSTERESIS_PX (panel pixels) away, and the preview
  * redraws the panel at most every PREVIEW_REDRAW_INTERVAL seconds. The
@@ -172,17 +158,7 @@ struct app {
     uint32_t fisheye_fov;   /* lens angle (degrees) for fisheye titles */
     float volume;           /* output gain (settings.json "volume") */
     struct xr_input input;
-    /* Controller bindings (settings.json "binding_*") and their input
-     * state: what was down last frame, whether a held button served as a
-     * modifier (then it does not act on release), and the repeating action
-     * + 1 per input. */
-    struct binding bindings[BINDING_ACTION_COUNT];
-    int learn_action; /* action waiting for its buttons, or -1 */
-    bool input_held[BINDING_INPUT_COUNT];
-    bool input_combined[BINDING_INPUT_COUNT];
-    int input_repeat[BINDING_INPUT_COUNT];
-    double input_repeat_time[BINDING_INPUT_COUNT];
-    bool grip_toggle[2]; /* grip pressed on empty space: show/hide on release */
+    struct controls controls;
     /* "Next/previous video": the title to start once the session ended. */
     char skip_path[PLAYER_UI_PATH_MAX];
     char skip_title[256];
@@ -268,8 +244,14 @@ struct app {
     uint64_t hidden_video_frames, pipeline_skipped_frames;
 };
 
+/* stereonaut-renderer.c: a message to the launcher (PLAYER_UI_*). */
+void send_control(struct app *app, uint32_t type, const char *path,
+                  int64_t start_us);
+
 /* Still in stereonaut-renderer.c, used by the modules split off so far. */
 void save_adjust(const struct app *app, int index);
+void change_volume(struct app *app, int direction);
+void change_adjust(struct app *app, int control);
 struct player_ui_state player_state(const struct app *app);
 struct player_ui_state settings_state(const struct app *app);
 void timing_ui(struct app *app, double started);
