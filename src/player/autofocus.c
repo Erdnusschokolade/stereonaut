@@ -85,10 +85,10 @@ bool disparity_window(struct app *app, XrVector3f direction,
                   (float)DISPARITY_ZERO},
         .bounds = {sbs ? 0.5f * right_eye : 0.0f,
                    sbs ? 0.5f * right_eye + 0.5f : 1.0f,
-                   app->coded_width ? (float)app->video_width /
-                                          (float)app->coded_width : 1.0f,
-                   app->coded_height ? (float)app->video_height /
-                                           (float)app->coded_height : 1.0f},
+                   app->video.coded_width ? (float)app->video.width /
+                                          (float)app->video.coded_width : 1.0f,
+                   app->video.coded_height ? (float)app->video.height /
+                                           (float)app->video.coded_height : 1.0f},
     };
     return true;
 }

@@ -54,15 +54,13 @@
 #include "overlay.h"
 #include "autofocus.h"
 #include "panel-compositor.h"
+#include "video-import.h"
 
 #define ARRAY_COUNT(a) (sizeof(a) / sizeof((a)[0]))
 /* Entries of button_inputs (buttons beyond trigger and grip). */
 #define BUTTON_INPUT_COUNT 14
-#define VIDEO_BUFFER_COUNT 12U
 #define UBO_STRIDE 512U
 #define PI_F 3.14159265358979f
-#define DRM_FORMAT_MOD_LINEAR UINT64_C(0)
-#define DRM_FORMAT_MOD_QCOM_COMPRESSED UINT64_C(0x0500000000000001)
 #define UI_WIDTH PLAYER_UI_WIDTH
 #define UI_HEIGHT PLAYER_UI_HEIGHT
 #define UI_BYTES (UI_WIDTH * UI_HEIGHT * 4U)
@@ -129,29 +127,6 @@ struct view_uniform {
 _Static_assert(sizeof(struct view_uniform) <= UBO_STRIDE,
                "view uniform exceeds dynamic UBO stride");
 
-struct video_buffer {
-    int dma_buf_fd;
-    bool tp10;
-    VkImage image;          /* NV12, or the TP10 luma plane */
-    VkDeviceMemory memory;
-    VkImageView view;
-    VkImage image_uv;       /* TP10 chroma plane */
-    VkDeviceMemory memory_uv;
-    VkImageView view_uv;
-    VkSemaphore producer_semaphore;
-    VkDescriptorSet descriptor_set;
-    /* DMA-BUF: wait for the producer's fence. Host memory: copy the new
-     * frame into the image before sampling. */
-    bool producer_wait_pending;
-    /* NV12_BUFFER_HOST: the memfd's mapping as Vulkan host memory, copied
-     * into the device-local image(s) above for every new frame. */
-    bool host;
-    void *host_mapping;
-    size_t host_size;
-    VkBuffer host_buffer;
-    VkDeviceMemory host_memory;
-};
-
 /* Trigger state with hysteresis (button_update). */
 struct button {
     bool down;       /* debounced physical state */
@@ -198,23 +173,8 @@ struct app {
     bool gaze_debug;
     VkDescriptorSetLayout descriptor_layout;
     VkDescriptorPool descriptor_pool;
-    VkSamplerYcbcrConversion conversion;
-    VkSampler video_sampler;
-    VkSampler plane_sampler; /* TP10 planes: plain linear sampling */
-    struct video_buffer video_buffers[NV12_IPC_MAX_BUFFERS];
-    /* Last frame kept on screen while the session restarts after a seek. */
-    struct video_buffer held;
-    bool has_held;
-    VkDescriptorSet spare_set;
-    bool awaiting_frame;
-    bool first_init_done;
-    uint32_t video_buffer_count;
-    /* Host buffers being imported by video_import_worker. */
-    pthread_t video_import_thread;
-    bool video_importing;
-    atomic_bool video_import_done;
-    int current_video_index;
-    bool current_video_presented;
+    struct video_import video;
+    bool awaiting_frame; /* no frame of the stream yet (start, seek) */
     int ui_fd;              /* control socket to the launcher */
     bool playing;           /* a playback session is attached (ipc_fd) */
     bool quit;
@@ -227,11 +187,6 @@ struct app {
     bool title_finished;  /* EOS after the last frame, not "back" */
     char location[PLAYER_UI_PATH_MAX]; /* what the session plays */
     int end_action;       /* enum player_end_action (settings.json) */
-    VkDeviceSize dma_buf_size;
-    uint32_t video_width, video_height, video_stride;
-    uint32_t video_format; /* enum nv12_pixel_format */
-    uint32_t buffer_kind;  /* enum nv12_buffer_kind */
-    uint32_t coded_width, coded_height;
     uint32_t projection_mode, stereo_layout;
     bool swap_eyes;
     uint32_t video_levels; /* enum nv12_video_levels */
@@ -297,7 +252,6 @@ struct app {
     uint32_t player_state;
     int64_t position_us;
     int64_t duration_us;
-    VkDeviceSize uv_offset;
     VkBuffer uniform_buffer;
     VkDeviceMemory uniform_memory;
     void *uniform_mapping;
@@ -357,6 +311,8 @@ struct app {
 
 /* Still in stereonaut-renderer.c, used by the modules split off so far. */
 void save_adjust(const struct app *app, int index);
+void send_ipc(struct app *app, uint32_t type, uint32_t index);
+void send_volume(struct app *app);
 struct player_ui_state player_state(const struct app *app);
 struct player_ui_state settings_state(const struct app *app);
 void timing_ui(struct app *app, double started);
