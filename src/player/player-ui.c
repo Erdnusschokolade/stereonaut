@@ -660,6 +660,132 @@ static void layout_buttons(const struct player_ui_state *state,
     }
 }
 
+/* View tab: head motion and centring (first column), projection, stereo
+ * layout and eye order (second), what applies where (third). */
+static void layout_view(const struct player_ui_state *state,
+                        struct ui_layout *layout)
+{
+    static const char *const projections[4] = {N_("Flat"), "180°", "360°",
+                                               N_("Fisheye")};
+    static const char *const layouts[3] = {"Mono", "SBS", "TB"};
+    static const char *const projection_labels[] = {
+        [NV12_FORMAT_SOURCE_DEFAULT] = N_("Projection (default)"),
+        [NV12_FORMAT_SOURCE_NAME] = N_("Projection (from the file name)"),
+        [NV12_FORMAT_SOURCE_IMAGE] = N_("Projection (found in the picture)"),
+        [NV12_FORMAT_SOURCE_USER] = N_("Projection"),
+    };
+    char projection_label[96];
+    snprintf(projection_label, sizeof(projection_label), "%s",
+             tr(projection_labels[state->format_source <=
+                                          NV12_FORMAT_SOURCE_USER
+                                      ? state->format_source
+                                      : NV12_FORMAT_SOURCE_USER]));
+    if (state->projection_mode == NV12_PROJECTION_FISHEYE) {
+        size_t used = strlen(projection_label);
+        snprintf(projection_label + used, sizeof(projection_label) - used,
+                 " · %u°", state->fisheye_fov);
+    }
+    COLUMNS {
+        COLUMN {
+            hint(layout, tr("Head motion (6DoF, all titles)"));
+            stepper(layout, state, PLAYER_ADJUST_HEAD_MOTION, NULL);
+            hint(layout, tr("Orientation"));
+            chip(layout, state, PLAYER_UI_RECENTER, tr("Centre"), false);
+        }
+        COLUMN {
+            hint(layout, projection_label);
+            CHIP_ROW {
+                /* "Fisheye" needs more room than the angles. */
+                for (int i = 0; i < 4; ++i)
+                    chip_sized(layout, state, PLAYER_UI_PROJECTION + i,
+                               tr(projections[i]),
+                               i == (int)state->projection_mode,
+                               i == 3 ? CLAY_SIZING_FIXED(128)
+                                      : CLAY_SIZING_GROW(0),
+                               false);
+            }
+            hint(layout, "Stereo");
+            chip_row(layout, state, 3, PLAYER_UI_STEREO, layouts,
+                     (int)state->stereo_layout);
+            SPACER;
+            chip(layout, state, PLAYER_UI_SWAP_EYES,
+                 state->swap_eyes ? tr("Eyes swapped") : tr("Swap eyes"),
+                 state->swap_eyes);
+        }
+        COLUMN {
+            BAND {
+                paragraph(layout, 2,
+                          tr("Projection, stereo and placement apply to "
+                             "this title."));
+            }
+            note(layout, 3,
+                 tr("Scrub preview, panel, buttons: Settings on the start "
+                    "page."));
+        }
+    }
+}
+
+/* Position tab: steppers in three columns, a remark below them. */
+static void layout_position(const struct player_ui_state *state,
+                            struct ui_layout *layout)
+{
+    static const enum player_adjust grid[3][3] = {
+        {PLAYER_ADJUST_ZOOM, PLAYER_ADJUST_HEIGHT, PLAYER_ADJUST_SLIDE},
+        {PLAYER_ADJUST_TILT, PLAYER_ADJUST_YAW, PLAYER_ADJUST_ROLL},
+        {PLAYER_ADJUST_STEREO_X, PLAYER_ADJUST_STEREO_Y,
+         PLAYER_ADJUST_COUNT},
+    };
+    COLUMNS {
+        for (int column = 0; column < 3; ++column)
+            STEPPER_COLUMN {
+                for (int row = 0; row < 3; ++row)
+                    if (grid[column][row] != PLAYER_ADJUST_COUNT)
+                        stepper(layout, state, grid[column][row], NULL);
+                if (column == 2)
+                    chip(layout, state, PLAYER_UI_RESET_POSITION,
+                         tr("Reset"), false);
+            }
+    }
+    hint(layout,
+         tr("Tilt applies to all titles, everything else per title."));
+}
+
+/* Picture tab: the black level (first column), the picture's steppers
+ * (second and third). */
+static void layout_picture(const struct player_ui_state *state,
+                           struct ui_layout *layout)
+{
+    static const char *const levels[3] = {N_("Normal"), N_("Deep"),
+                                          N_("Full")};
+    COLUMNS {
+        COLUMN {
+            hint(layout, tr("Black level"));
+            chip_row(layout, state, 3, PLAYER_UI_LEVELS, levels,
+                     (int)state->video_levels);
+            /* What the levels mean, one line each. */
+            CLAY({.layout = {.sizing = {CLAY_SIZING_GROW(0),
+                                        CLAY_SIZING_FIT(0)},
+                             .padding = {.top = STACK_GAP},
+                             .childGap = 30 - HINT_H,
+                             .layoutDirection = CLAY_TOP_TO_BOTTOM}}) {
+                hint(layout, tr("Normal: black 16, white 235"));
+                hint(layout, tr("Deep: detail below black"));
+                hint(layout, tr("Full: full range 0–255"));
+            }
+        }
+        STEPPER_COLUMN {
+            stepper(layout, state, PLAYER_ADJUST_BRIGHTNESS, NULL);
+            stepper(layout, state, PLAYER_ADJUST_CONTRAST, NULL);
+            stepper(layout, state, PLAYER_ADJUST_SATURATION, NULL);
+        }
+        STEPPER_COLUMN {
+            stepper(layout, state, PLAYER_ADJUST_GAMMA, NULL);
+            EMPTY_ROW;
+            chip(layout, state, PLAYER_UI_RESET_PICTURE, tr("Reset"), false);
+        }
+    }
+}
+
 /* Updates tab: versions and the check (first column), the status and the
  * update (second), the check at start (third). */
 static void layout_updates(const struct player_ui_state *state,
@@ -781,6 +907,15 @@ static bool layout_tab(const struct player_ui_state *state,
     case PLAYER_UI_TAB_BUTTONS:
         describe = layout_buttons;
         break;
+    case PLAYER_UI_TAB_VIEW:
+        describe = layout_view;
+        break;
+    case PLAYER_UI_TAB_POSITION:
+        describe = layout_position;
+        break;
+    case PLAYER_UI_TAB_PICTURE:
+        describe = layout_picture;
+        break;
     case PLAYER_UI_TAB_LANGUAGE:
         describe = layout_language;
         break;
@@ -825,104 +960,7 @@ static void layout_popup(const struct player_ui_state *state,
                  POPUP_X + POPUP_W - 22 - TAB_W, TAB_Y, TAB_W, tr("Close"),
                  false);
 
-    if (state->popup_tab == PLAYER_UI_TAB_VIEW) {
-        static const char *const projections[4] = {N_("Flat"), "180°",
-                                                   "360°", N_("Fisheye")};
-        static const char *const layouts[3] = {"Mono", "SBS", "TB"};
-        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(0), 0,
-                   tr("Head motion (6DoF, all titles)"));
-        add_stepper(layout, state, 0, ROW_CHIP_Y(0),
-                    PLAYER_ADJUST_HEAD_MOTION, NULL);
-        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(1), 0,
-                   tr("Orientation"));
-        add_chip(layout, PLAYER_UI_RECENTER, COLUMN_X(0), ROW_CHIP_Y(1),
-                 COLUMN_W, tr("Centre"), false);
-
-        static const char *const projection_labels[] = {
-            [NV12_FORMAT_SOURCE_DEFAULT] = N_("Projection (default)"),
-            [NV12_FORMAT_SOURCE_NAME] = N_("Projection (from the file name)"),
-            [NV12_FORMAT_SOURCE_IMAGE] =
-                N_("Projection (found in the picture)"),
-            [NV12_FORMAT_SOURCE_USER] = N_("Projection"),
-        };
-        char projection_label[96];
-        snprintf(projection_label, sizeof(projection_label), "%s",
-                 tr(projection_labels[state->format_source <=
-                                              NV12_FORMAT_SOURCE_USER
-                                          ? state->format_source
-                                          : NV12_FORMAT_SOURCE_USER]));
-        if (state->projection_mode == NV12_PROJECTION_FISHEYE) {
-            size_t used = strlen(projection_label);
-            snprintf(projection_label + used,
-                     sizeof(projection_label) - used, " · %u°",
-                     state->fisheye_fov);
-        }
-        add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(0), 0,
-                   projection_label);
-        /* "Fisheye" needs more room than the angles. */
-        const int fisheye_w = 128;
-        const int short_w = (COLUMN_W - fisheye_w - 3 * CHIP_GAP) / 3;
-        for (int i = 0; i < 4; ++i)
-            add_chip(layout, PLAYER_UI_PROJECTION + i,
-                     COLUMN_X(1) + i * (short_w + CHIP_GAP), ROW_CHIP_Y(0),
-                     i == 3 ? fisheye_w : short_w, tr(projections[i]),
-                     i == (int)state->projection_mode);
-        add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(1), 0,
-                   "Stereo");
-        add_chip_row(layout, 1, 1, 3, PLAYER_UI_STEREO, layouts,
-                     (int)state->stereo_layout);
-        add_chip(layout, PLAYER_UI_SWAP_EYES, COLUMN_X(1), ROW_CHIP_Y(2),
-                 COLUMN_W,
-                 state->swap_eyes ? tr("Eyes swapped") : tr("Swap eyes"),
-                 state->swap_eyes);
-
-        add_paragraph(layout, COLUMN_X(2), ROW_LABEL_Y(0), 2,
-                      tr("Projection, stereo and placement apply to this "
-                         "title."));
-        add_paragraph(layout, COLUMN_X(2), ROW_LABEL_Y(1) + 6, 3,
-                      tr("Scrub preview, panel, buttons: Settings on the "
-                         "start page."));
-    } else if (state->popup_tab == PLAYER_UI_TAB_POSITION) {
-        static const enum player_adjust grid[3][3] = {
-            {PLAYER_ADJUST_ZOOM, PLAYER_ADJUST_HEIGHT, PLAYER_ADJUST_SLIDE},
-            {PLAYER_ADJUST_TILT, PLAYER_ADJUST_YAW, PLAYER_ADJUST_ROLL},
-            {PLAYER_ADJUST_STEREO_X, PLAYER_ADJUST_STEREO_Y,
-             PLAYER_ADJUST_COUNT},
-        };
-        for (int column = 0; column < 3; ++column)
-            for (int row = 0; row < 3; ++row)
-                if (grid[column][row] != PLAYER_ADJUST_COUNT)
-                    add_stepper(layout, state, column, STEPPER_Y(row),
-                                grid[column][row], NULL);
-        add_chip(layout, PLAYER_UI_RESET_POSITION, COLUMN_X(2), STEPPER_Y(2),
-                 COLUMN_W, tr("Reset"), false);
-        add_widget(layout, WIDGET_HINT, COLUMN_X(0), STEPPER_Y(3) - 4, 0,
-                   tr("Tilt applies to all titles, everything else per "
-                      "title."));
-    } else if (state->popup_tab == PLAYER_UI_TAB_PICTURE) {
-        static const char *const levels[3] = {N_("Normal"), N_("Deep"),
-                                              N_("Full")};
-        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(0), 0,
-                   tr("Black level"));
-        add_chip_row(layout, 0, 0, 3, PLAYER_UI_LEVELS, levels,
-                     (int)state->video_levels);
-        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(1) + 6, 0,
-                   tr("Normal: black 16, white 235"));
-        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(1) + 36, 0,
-                   tr("Deep: detail below black"));
-        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(1) + 66, 0,
-                   tr("Full: full range 0–255"));
-        add_stepper(layout, state, 1, STEPPER_Y(0),
-                    PLAYER_ADJUST_BRIGHTNESS, NULL);
-        add_stepper(layout, state, 1, STEPPER_Y(1), PLAYER_ADJUST_CONTRAST,
-                    NULL);
-        add_stepper(layout, state, 1, STEPPER_Y(2),
-                    PLAYER_ADJUST_SATURATION, NULL);
-        add_stepper(layout, state, 2, STEPPER_Y(0), PLAYER_ADJUST_GAMMA,
-                    NULL);
-        add_chip(layout, PLAYER_UI_RESET_PICTURE, COLUMN_X(2), STEPPER_Y(2),
-                 COLUMN_W, tr("Reset"), false);
-    } else if (state->popup_tab == PLAYER_UI_TAB_PASSTHROUGH) {
+    if (state->popup_tab == PLAYER_UI_TAB_PASSTHROUGH) {
         static const char *const off_on[2] = {N_("Off"), N_("On")};
         add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(0), 0,
                    tr("The room instead of black (all titles)"));
