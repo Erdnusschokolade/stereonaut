@@ -148,7 +148,7 @@ The panel layout can be checked on a desktop without a headset:
   Main10; not part of the player.
 - `docs/` – measurements and findings from the hardware investigation
   (Iris V4L2, Vulkan import, Q10C/TP10 Main10, projection, OpenXR), mostly in
-  German. `docs/mvp-player-status.md` summarises the current state.
+  German. `docs/status.md` summarises the current state.
   Development plans and task descriptions are not part of this repository;
   some documents still mention them by name.
 - `tests/` – generated decoder fixtures (see
