@@ -370,62 +370,57 @@ static void layout_buttons(const struct player_ui_state *state,
     }
 }
 
-/* Language tab: "automatic" (with the language it finds) and the
- * languages, two per row in the first two columns. */
-static void layout_language(const struct player_ui_state *state,
-                            struct popup_layout *layout)
-{
-    add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(0), 0,
-               tr("Language"));
-    char automatic[96];
-    int system = state->system_language >= 0 &&
-                         state->system_language < i18n_language_count
-                     ? state->system_language
-                     : 0;
-    snprintf(automatic, sizeof(automatic), tr("Automatic (%s)"),
-             i18n_languages[system]->name);
-    add_chip(layout, PLAYER_UI_LANGUAGE, COLUMN_X(0), ROW_CHIP_Y(0),
-             COLUMN_W, automatic, state->language == I18N_AUTO);
-    int width = (COLUMN_W - CHIP_GAP) / 2;
-    for (int i = 0; i < i18n_language_count &&
-                    PLAYER_UI_LANGUAGE + 1 + i < PLAYER_UI_LANGUAGE_END;
-         ++i) {
-        int slot = i + 2; /* the automatic chip takes a whole row */
-        int column = slot / 6, row = slot / 2 % 3;
-        if (column > 1)
-            break;
-        add_chip(layout, PLAYER_UI_LANGUAGE + 1 + i,
-                 COLUMN_X(column) + slot % 2 * (width + CHIP_GAP),
-                 ROW_CHIP_Y(row), width, i18n_languages[i]->name,
-                 state->language == i);
-    }
-    add_paragraph(layout, COLUMN_X(2), ROW_LABEL_Y(0), 5,
-                  tr("Automatic follows the language of Steam or of the "
-                     "system and shows English where no translation "
-                     "exists."));
-}
-
 /* ---- popup tabs laid out with Clay (ui-layout.h) -------------------------
- * The tab's content fills the popup below the tab row: three columns,
- * each a stack of a hint above a row (a chip, a chip row or a line of
- * text) and paragraphs. A column's last chip may sit at its bottom after
- * a spacer. */
+ * The tab's content fills the popup below the tab row, mostly as three
+ * columns. A column is a stack on a grid of rows: a hint above a row (a
+ * chip, a chip row, a stepper or a line of text), and paragraphs. A
+ * column's last chip may sit at its bottom after a spacer. Columns of
+ * steppers alone use the tighter stepper grid. */
 
 #define CONTENT_X COLUMN_X(0)
 #define CONTENT_Y ROW_LABEL_Y(0)
-#define CONTENT_W (3 * COLUMN_W + 2 * (COLUMN_X(1) - COLUMN_X(0) - COLUMN_W))
+#define CONTENT_W (3 * COLUMN_W + 2 * COLUMN_GAP)
 #define CONTENT_H (ROW_CHIP_Y(2) + CHIP_H - CONTENT_Y)
+#define COLUMN_GAP (COLUMN_X(1) - COLUMN_X(0) - COLUMN_W)
 /* Between a hint and its row, and between one row and the next hint. */
-#define STACK_GAP 6
+#define STACK_GAP (ROW_CHIP_Y(0) - ROW_LABEL_Y(0) - HINT_H)
+#define HINT_H 26 /* hint text (22 px) and its box */
+/* A hint and its row. */
+#define BAND_H (ROW_LABEL_Y(1) - ROW_LABEL_Y(0) - STACK_GAP)
+#define STEPPER_GAP (STEPPER_Y(1) - STEPPER_Y(0) - CHIP_H)
+
+#define COLUMNS                                                            \
+    CLAY({.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0)}, \
+                     .childGap = COLUMN_GAP}})
 
 #define COLUMN                                                             \
     CLAY({.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0)}, \
                      .childGap = STACK_GAP,                                \
                      .layoutDirection = CLAY_TOP_TO_BOTTOM}})
 
+#define STEPPER_COLUMN                                                     \
+    CLAY({.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0)}, \
+                     .padding = {.top = STEPPER_Y(0) - CONTENT_Y},         \
+                     .childGap = STEPPER_GAP,                              \
+                     .layoutDirection = CLAY_TOP_TO_BOTTOM}})
+
+/* One band of the row grid (a hint and its row) for other content. */
+#define BAND                                                               \
+    CLAY({.layout = {.sizing = {CLAY_SIZING_GROW(0),                       \
+                                CLAY_SIZING_FIXED(BAND_H)},                \
+                     .layoutDirection = CLAY_TOP_TO_BOTTOM}})
+
 /* Pushes what follows to the bottom of the column. */
 #define SPACER                                                             \
     CLAY({.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0)}}}) {}
+
+/* A row left empty, keeping the grid. */
+#define EMPTY_ROW                                                          \
+    CLAY({.layout = {.sizing = {CLAY_SIZING_GROW(0),                       \
+                                CLAY_SIZING_FIXED(CHIP_H)}}}) {}
+#define EMPTY_HINT                                                         \
+    CLAY({.layout = {.sizing = {CLAY_SIZING_GROW(0),                       \
+                                CLAY_SIZING_FIXED(HINT_H)}}}) {}
 
 static void hint(struct ui_layout *layout, const char *text)
 {
@@ -438,6 +433,15 @@ static void paragraph(struct ui_layout *layout, int lines, const char *text)
                         lines);
 }
 
+/* A paragraph remarking on the row above it, set off a little more. */
+static void note(struct ui_layout *layout, int lines, const char *text)
+{
+    CLAY({.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0)},
+                     .padding = {.top = STACK_GAP}}}) {
+        paragraph(layout, lines, text);
+    }
+}
+
 /* A line of text in a row of its own (shortened to the column). */
 static void text_row(struct ui_layout *layout, const char *text)
 {
@@ -448,26 +452,42 @@ static void text_row(struct ui_layout *layout, const char *text)
     }
 }
 
-static void chip(struct ui_layout *layout,
-                 const struct player_ui_state *state, int control,
-                 const char *text, bool selected)
+/* A chip `width` wide; `small` for longer texts (button names). */
+static void chip_sized(struct ui_layout *layout,
+                       const struct player_ui_state *state, int control,
+                       const char *text, bool selected, Clay_SizingAxis width,
+                       bool small)
 {
     struct ui_color background = selected ? color_accent
                                  : state->hover == control
                                      ? color_button_hover
                                      : color_button;
     CLAY({.id = ui_layout_control(layout, control),
-          .layout = {.sizing = {CLAY_SIZING_GROW(0),
-                                CLAY_SIZING_FIXED(CHIP_H)},
+          .layout = {.sizing = {width, CLAY_SIZING_FIXED(CHIP_H)},
                      .padding = {8, 8, 0, 0},
                      .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}},
           .backgroundColor = ui_layout_color(background),
           .cornerRadius = CLAY_CORNER_RADIUS(CHIP_H / 2.0f)}) {
         ui_layout_label(layout, text,
-                        selected ? UI_LAYOUT_BOLD : UI_LAYOUT_REGULAR, 24,
-                        color_text, UI_ALIGN_CENTER, CLAY_SIZING_GROW(0));
+                        selected ? UI_LAYOUT_BOLD : UI_LAYOUT_REGULAR,
+                        small ? 20 : 24, color_text, UI_ALIGN_CENTER,
+                        CLAY_SIZING_GROW(0));
     }
 }
+
+/* A chip sharing the row with its siblings. */
+static void chip(struct ui_layout *layout,
+                 const struct player_ui_state *state, int control,
+                 const char *text, bool selected)
+{
+    chip_sized(layout, state, control, text, selected, CLAY_SIZING_GROW(0),
+               false);
+}
+
+#define CHIP_ROW                                                           \
+    CLAY({.layout = {.sizing = {CLAY_SIZING_GROW(0),                       \
+                                CLAY_SIZING_FIXED(CHIP_H)},                \
+                     .childGap = CHIP_GAP}})
 
 /* `count` equal chips across the column. */
 static void chip_row(struct ui_layout *layout,
@@ -475,9 +495,7 @@ static void chip_row(struct ui_layout *layout,
                      int first_control, const char *const *labels,
                      int selected)
 {
-    CLAY({.layout = {.sizing = {CLAY_SIZING_GROW(0),
-                                CLAY_SIZING_FIXED(CHIP_H)},
-                     .childGap = CHIP_GAP}}) {
+    CHIP_ROW {
         for (int i = 0; i < count; ++i)
             chip(layout, state, first_control + i, tr(labels[i]),
                  i == selected);
@@ -489,38 +507,99 @@ static void chip_row(struct ui_layout *layout,
 static void layout_updates(const struct player_ui_state *state,
                            struct ui_layout *layout)
 {
-    COLUMN {
-        hint(layout, tr("Installed version"));
-        text_row(layout, state->update_installed && state->update_installed[0]
-                             ? state->update_installed
-                             : tr("built from the sources"));
-        hint(layout, tr("Newest release"));
-        text_row(layout, state->update_latest && state->update_latest[0]
-                             ? state->update_latest
-                             : tr("not known yet"));
-        SPACER;
-        if (state->update_can_check)
-            chip(layout, state, PLAYER_UI_UPDATE_CHECK, tr("Check now"),
-                 false);
+    COLUMNS {
+        COLUMN {
+            hint(layout, tr("Installed version"));
+            text_row(layout,
+                     state->update_installed && state->update_installed[0]
+                         ? state->update_installed
+                         : tr("built from the sources"));
+            hint(layout, tr("Newest release"));
+            text_row(layout, state->update_latest && state->update_latest[0]
+                                 ? state->update_latest
+                                 : tr("not known yet"));
+            SPACER;
+            if (state->update_can_check)
+                chip(layout, state, PLAYER_UI_UPDATE_CHECK, tr("Check now"),
+                     false);
+        }
+        COLUMN {
+            hint(layout, tr("Status"));
+            if (state->update_status && state->update_status[0])
+                paragraph(layout, 4, state->update_status);
+            SPACER;
+            if (state->update_can_install)
+                chip(layout, state, PLAYER_UI_UPDATE_INSTALL,
+                     tr("Update now"), true);
+        }
+        COLUMN {
+            static const char *const off_on[2] = {N_("Off"), N_("On")};
+            hint(layout, tr("Check at start"));
+            chip_row(layout, state, 2, PLAYER_UI_UPDATE_AUTO, off_on,
+                     state->update_auto ? 1 : 0);
+            note(layout, 4,
+                 tr("Updates come from the release page of Stereonaut and "
+                    "must carry its signature. Stereonaut restarts "
+                    "afterwards."));
+        }
     }
-    COLUMN {
-        hint(layout, tr("Status"));
-        if (state->update_status && state->update_status[0])
-            paragraph(layout, 4, state->update_status);
-        SPACER;
-        if (state->update_can_install)
-            chip(layout, state, PLAYER_UI_UPDATE_INSTALL, tr("Update now"),
-                 true);
+}
+
+/* Language tab: "automatic" (with the language it finds) and the
+ * languages, two per row: below "automatic" in the first column, then in
+ * the second. */
+static void language_pair(struct ui_layout *layout,
+                          const struct player_ui_state *state, int first,
+                          int count)
+{
+    EMPTY_HINT;
+    if (first >= count)
+        return;
+    CHIP_ROW {
+        for (int i = first; i < first + 2; ++i) {
+            if (i < count)
+                chip(layout, state, PLAYER_UI_LANGUAGE + 1 + i,
+                     i18n_languages[i]->name, state->language == i);
+            else /* keeps the half width */
+                CLAY({.layout = {.sizing = {CLAY_SIZING_GROW(0)}}}) {}
+        }
     }
-    COLUMN {
-        static const char *const off_on[2] = {N_("Off"), N_("On")};
-        hint(layout, tr("Check at start"));
-        chip_row(layout, state, 2, PLAYER_UI_UPDATE_AUTO, off_on,
-                 state->update_auto ? 1 : 0);
-        paragraph(layout, 4,
-                  tr("Updates come from the release page of Stereonaut "
-                     "and must carry its signature. Stereonaut restarts "
-                     "afterwards."));
+}
+
+static void layout_language(const struct player_ui_state *state,
+                            struct ui_layout *layout)
+{
+    char automatic[96];
+    int system = state->system_language >= 0 &&
+                         state->system_language < i18n_language_count
+                     ? state->system_language
+                     : 0;
+    snprintf(automatic, sizeof(automatic), tr("Automatic (%s)"),
+             i18n_languages[system]->name);
+    /* Two rows of pairs in the first column, three in the second. */
+    int count = i18n_language_count;
+    if (count > 10)
+        count = 10;
+    if (count > PLAYER_UI_LANGUAGE_END - PLAYER_UI_LANGUAGE - 1)
+        count = PLAYER_UI_LANGUAGE_END - PLAYER_UI_LANGUAGE - 1;
+    COLUMNS {
+        COLUMN {
+            hint(layout, tr("Language"));
+            chip(layout, state, PLAYER_UI_LANGUAGE, automatic,
+                 state->language == I18N_AUTO);
+            for (int pair = 0; pair < 2; ++pair)
+                language_pair(layout, state, 2 * pair, count);
+        }
+        COLUMN {
+            for (int pair = 2; pair < 5; ++pair)
+                language_pair(layout, state, 2 * pair, count);
+        }
+        COLUMN {
+            paragraph(layout, 5,
+                      tr("Automatic follows the language of Steam or of the "
+                         "system and shows English where no translation "
+                         "exists."));
+        }
     }
 }
 
@@ -530,7 +609,15 @@ static bool layout_tab(const struct player_ui_state *state,
                        struct ui_layout *layout)
 {
     void (*describe)(const struct player_ui_state *, struct ui_layout *) =
-        state->popup_tab == PLAYER_UI_TAB_UPDATES ? layout_updates : NULL;
+        NULL;
+    switch (state->popup_tab) {
+    case PLAYER_UI_TAB_LANGUAGE:
+        describe = layout_language;
+        break;
+    case PLAYER_UI_TAB_UPDATES:
+        describe = layout_updates;
+        break;
+    }
     if (!describe)
         return false;
     ui_layout_begin(layout, PLAYER_UI_WIDTH, PLAYER_UI_HEIGHT);
@@ -538,7 +625,7 @@ static bool layout_tab(const struct player_ui_state *state,
                      .padding = {.left = CONTENT_X, .top = CONTENT_Y}}}) {
         CLAY({.layout = {.sizing = {CLAY_SIZING_FIXED(CONTENT_W),
                                     CLAY_SIZING_FIXED(CONTENT_H)},
-                         .childGap = COLUMN_X(1) - COLUMN_X(0) - COLUMN_W}}) {
+                         .layoutDirection = CLAY_TOP_TO_BOTTOM}}) {
             describe(state, layout);
         }
     }
@@ -798,8 +885,6 @@ static void layout_popup(const struct player_ui_state *state,
                     PLAYER_ADJUST_KEY_SPILL, NULL);
     } else if (state->popup_tab == PLAYER_UI_TAB_BUTTONS) {
         layout_buttons(state, layout);
-    } else if (state->popup_tab == PLAYER_UI_TAB_LANGUAGE) {
-        layout_language(state, layout);
     }
 }
 
