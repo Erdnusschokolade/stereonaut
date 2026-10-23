@@ -734,7 +734,7 @@ static void finish_video_init(struct app *app)
         write_video_descriptor(app, app->video.buffers[i].descriptor_set,
                                &app->video.buffers[i]);
     app->video.current = -1;
-    app->eos_received = false;
+    app->link.eos_received = false;
     send_ipc(app, NV12_IPC_READY, 0);
     send_volume(app);
     printf("video_reinit buffers=%u\n", app->video.buffer_count);

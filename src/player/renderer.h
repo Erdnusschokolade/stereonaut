@@ -55,6 +55,7 @@
 #include "autofocus.h"
 #include "panel-compositor.h"
 #include "video-import.h"
+#include "session-ipc.h"
 
 #define ARRAY_COUNT(a) (sizeof(a) / sizeof((a)[0]))
 /* Entries of button_inputs (buttons beyond trigger and grip). */
@@ -176,15 +177,13 @@ struct app {
     struct video_import video;
     bool awaiting_frame; /* no frame of the stream yet (start, seek) */
     int ui_fd;              /* control socket to the launcher */
-    bool playing;           /* a playback session is attached (ipc_fd) */
+    bool playing;           /* a playback session is attached (link) */
     bool quit;
     bool xr_exit;           /* the runtime ended the session */
     bool awaiting_command;  /* a selection was sent, wait for PLAY/BROWSE */
     struct browser_ui browser;
     struct panel_compositor panels;
-    int ipc_fd;
-    bool eos_received;
-    bool title_finished;  /* EOS after the last frame, not "back" */
+    struct session_link link;
     char location[PLAYER_UI_PATH_MAX]; /* what the session plays */
     int end_action;       /* enum player_end_action (settings.json) */
     uint32_t projection_mode, stereo_layout;
@@ -247,11 +246,6 @@ struct app {
     bool seek_scrubbing;     /* paused, only scrub_us moves */
     bool seek_resume;        /* played before: play on after the seek */
     bool seek_show_panel;    /* show the panel in the next input pass */
-    uint64_t seek_serial;    /* number of the last SEEK_TO sent */
-    uint64_t seek_landing;   /* the one the session carries out (HOLD) */
-    uint32_t player_state;
-    int64_t position_us;
-    int64_t duration_us;
     VkBuffer uniform_buffer;
     VkDeviceMemory uniform_memory;
     void *uniform_mapping;
@@ -311,8 +305,6 @@ struct app {
 
 /* Still in stereonaut-renderer.c, used by the modules split off so far. */
 void save_adjust(const struct app *app, int index);
-void send_ipc(struct app *app, uint32_t type, uint32_t index);
-void send_volume(struct app *app);
 struct player_ui_state player_state(const struct app *app);
 struct player_ui_state settings_state(const struct app *app);
 void timing_ui(struct app *app, double started);

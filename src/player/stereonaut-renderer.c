@@ -272,35 +272,6 @@ static void initialize_actions(struct app *app)
     app->overlay.render_models_dirty = true;
 }
 
-static void send_message(struct app *app, const struct nv12_ipc_message *message)
-{
-    ssize_t written;
-    do {
-        written = send(app->ipc_fd, message, sizeof(*message), MSG_NOSIGNAL);
-    } while (written < 0 && errno == EINTR);
-    if (written < 0 && (errno == EPIPE || errno == ECONNRESET ||
-                        errno == ENOTCONN)) {
-        app->eos_received = true; /* the session is gone: end playback */
-        return;
-    }
-    if (written < 0) { perror("send NV12 IPC response"); exit(2); }
-    need((size_t)written == sizeof(*message), "short NV12 IPC response");
-}
-
-void send_ipc(struct app *app, uint32_t type, uint32_t index)
-{
-    struct nv12_ipc_message message = {.type = type, .index = index};
-    send_message(app, &message);
-}
-
-void send_volume(struct app *app)
-{
-    struct nv12_ipc_message message = {
-        .type = NV12_IPC_VOLUME, .volume = app->volume,
-    };
-    send_message(app, &message);
-}
-
 /* Steps of 10 %; above 100 % the samples are amplified (may clip). */
 static void change_volume(struct app *app, int direction)
 {
@@ -310,17 +281,6 @@ static void change_volume(struct app *app, int direction)
     settings_set_double("volume", app->volume);
     send_volume(app);
     app->ui_dirty = true;
-}
-
-/* `state`: NV12_PLAYER_PLAYING or _PAUSED after the seek, 0 keeps it. */
-static void send_seek_to(struct app *app, int64_t target_us, uint32_t state)
-{
-    struct nv12_ipc_message message = {
-        .type = NV12_IPC_ACTION, .index = NV12_ACTION_SEEK_TO,
-        .position_us = target_us, .player_state = state,
-        .frame_index = ++app->seek_serial,
-    };
-    send_message(app, &message);
 }
 
 /* Applies a choice from the view popup at once and reports it to the
@@ -513,140 +473,6 @@ static void save_binding(const struct app *app, int action)
     printf("binding %s=%s\n", binding_action_info[action].key, text);
 }
 
-static void send_panel_state(struct app *app)
-{
-    struct nv12_ipc_message message = {
-        .type = NV12_IPC_PANEL,
-        .panel_x = app->panel_x, .panel_y = app->panel_y,
-        .panel_z = app->panel_z, .panel_yaw = app->panel_yaw,
-        .panel_visible = app->ui_visible,
-        .panel_valid = 1,
-    };
-    send_message(app, &message);
-}
-
-static void release_current_video(struct app *app)
-{
-    if (app->video.current < 0)
-        return;
-    if (!app->video.presented) {
-        if (app->xr.should_render)
-            app->pipeline_skipped_frames++;
-        else
-            app->hidden_video_frames++;
-    }
-    send_ipc(app, NV12_IPC_RELEASE, (uint32_t)app->video.current);
-    app->released_frames++;
-    app->video.current = -1;
-}
-
-static void receive_frame_messages(struct app *app)
-{
-    if (video_import_pending(app, false))
-        return;
-    for (;;) {
-        struct nv12_ipc_message message = {0};
-        char control[CMSG_SPACE(sizeof(int) * NV12_IPC_MAX_BUFFERS)] = {0};
-        struct iovec iov = {.iov_base = &message, .iov_len = sizeof(message)};
-        struct msghdr received = {
-            .msg_iov = &iov, .msg_iovlen = 1,
-            .msg_control = control, .msg_controllen = sizeof(control),
-        };
-        ssize_t bytes = recvmsg(app->ipc_fd, &received, MSG_DONTWAIT);
-        if (bytes < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
-            return;
-        if (bytes < 0 && errno == EINTR)
-            continue;
-        if (bytes == 0) {
-            app->eos_received = true;
-            return;
-        }
-        if (bytes < 0 && errno == ECONNRESET) {
-            app->eos_received = true;
-            return;
-        }
-        if (bytes < 0) { perror("recv NV12 IPC message"); exit(2); }
-        need((size_t)bytes == sizeof(message), "short NV12 IPC message");
-        if (message.type == NV12_IPC_FRAME) {
-            need(message.index < app->video.buffer_count,
-                 "NV12 IPC frame index is invalid");
-            release_current_video(app);
-            app->video.current = (int)message.index;
-            app->video.presented = false;
-            app->video.buffers[message.index].producer_wait_pending = true;
-            if (app->awaiting_frame) {
-                app->awaiting_frame = false;
-                /* The picture of an earlier seek keeps showing the target
-                 * of the last one (else the time jumps back and forth). */
-                if (app->seek_landing == app->seek_serial &&
-                    app->seek_pending) {
-                    /* Until the next STATUS: the last one predates the
-                     * seek. */
-                    app->position_us = app->scrub_us;
-                    app->seek_pending = false;
-                }
-                app->ui_dirty = true;
-            }
-            /* The held frame is superseded by the new stream. */
-            discard_held_frame(app);
-            app->received_frames++;
-        } else if (message.type == NV12_IPC_FLUSH) {
-            release_current_video(app);
-            send_ipc(app, NV12_IPC_FLUSHED, 0);
-        } else if (message.type == NV12_IPC_HOLD) {
-            app->seek_landing = message.frame_index;
-            hold_current_frame(app);
-            send_ipc(app, NV12_IPC_HELD, 0);
-        } else if (message.type == NV12_IPC_SEEKING) {
-            app->seek_landing = message.frame_index;
-            app->awaiting_frame = true;
-            app->ui_dirty = true;
-            printf("video_seeking\n");
-        } else if (message.type == NV12_IPC_INIT) {
-            reinitialize_video(app, &message, &received);
-        } else if (message.type == NV12_IPC_FORMAT) {
-            need(message.projection_mode <= NV12_PROJECTION_FISHEYE &&
-                     message.stereo_layout <= NV12_STEREO_TB &&
-                     message.format_source <= NV12_FORMAT_SOURCE_USER,
-                 "invalid detected format");
-            app->projection_mode = message.projection_mode;
-            app->stereo_layout = message.stereo_layout;
-            app->format_source = message.format_source;
-            if (message.fisheye_fov >= 120 && message.fisheye_fov <= 240)
-                app->fisheye_fov = message.fisheye_fov;
-            app->ui_dirty = true;
-            printf("player_format projection=%u stereo=%u source=%u\n",
-                   app->projection_mode, app->stereo_layout,
-                   app->format_source);
-        } else if (message.type == NV12_IPC_EOS) {
-            app->eos_received = true;
-            app->title_finished = message.index == 1;
-        } else if (message.type == NV12_IPC_STATUS) {
-            /* Redraw only for a visible change: the shown second, the
-             * seek bar knob (whole pixels) or the play state. */
-            int64_t old_second = app->position_us / 1000000;
-            int old_knob = app->duration_us > 0
-                ? (int)(1000.0 * app->position_us / app->duration_us) : -1;
-            bool changed = app->player_state != message.player_state ||
-                           app->duration_us != message.duration_us;
-            app->player_state = message.player_state;
-            if (!app->seek_pending)
-                app->position_us = message.position_us;
-            app->duration_us = message.duration_us;
-            int knob = app->duration_us > 0
-                ? (int)(1000.0 * app->position_us / app->duration_us) : -1;
-            if (changed || old_second != app->position_us / 1000000 ||
-                old_knob != knob)
-                app->ui_dirty = true;
-        } else {
-            need(false, "unknown NV12 IPC message");
-        }
-        /* The socket is the bounded FIFO. Consume at most one decoded frame
-         * per XR iteration so a decoder burst cannot discard valid frames. */
-        return;
-    }
-}
-
 /* Shader levels (enum nv12_video_levels): black and white luma and the
  * chroma range in 8-bit code values. */
 static void video_levels_uniform(uint32_t levels, float out[4])
@@ -772,13 +598,13 @@ struct player_ui_state player_state(const struct app *app)
 {
     return (struct player_ui_state){
         .title = app->title,
-        .position_us = app->position_us,
-        .duration_us = app->duration_us,
+        .position_us = app->link.position_us,
+        .duration_us = app->link.duration_us,
         .scrub_us = app->scrub_us,
         .scrubbing = app->scrub_hand >= 0 || app->seek_pending ||
                      app->seek_scrubbing,
         .loading = app->awaiting_frame,
-        .paused = app->player_state == NV12_PLAYER_PAUSED,
+        .paused = app->link.player_state == NV12_PLAYER_PAUSED,
         .grabbed = app->grab_hand >= 0,
         .popup_open = app->popup_open,
         .popup_tab = app->popup_tab,
@@ -903,7 +729,7 @@ static void create_render_resources(struct app *app)
 static int64_t scrub_target_us(const struct app *app, float u)
 {
     return (int64_t)((double)player_ui_seek_ratio(u) *
-                     (double)app->duration_us);
+                     (double)app->link.duration_us);
 }
 
 /* Hit on a visible part of the player panel (not its transparent area). */
@@ -1050,7 +876,7 @@ static void show_panel(struct app *app, const XrSpaceLocation *head,
  * picture, and asks the trickplay worker for it. */
 static void update_preview(struct app *app, int64_t position_us, bool strip)
 {
-    bool visible = position_us >= 0 && app->duration_us > 0;
+    bool visible = position_us >= 0 && app->link.duration_us > 0;
     if (visible != app->preview_visible || strip != app->preview_strip)
         app->ui_dirty = true;
     else if (visible && position_us / 1000000 != app->preview_us / 1000000)
@@ -1151,7 +977,7 @@ static void seek_binding(struct app *app, int direction, bool repeated)
 {
     if (app->scrub_hand >= 0)
         return;
-    if (app->duration_us <= 0) {
+    if (app->link.duration_us <= 0) {
         /* No status yet (loading): only the session knows the position. */
         send_ipc(app, NV12_IPC_ACTION,
                  direction > 0 ? NV12_ACTION_SEEK_FORWARD
@@ -1173,10 +999,10 @@ static void seek_binding(struct app *app, int direction, bool repeated)
     app->preview_spacing_us = step;
     int64_t target = app->seek_pending || app->seek_scrubbing
                          ? app->scrub_us
-                         : app->position_us;
+                         : app->link.position_us;
     target += direction * step;
-    if (target >= app->duration_us)
-        target = app->duration_us - 1;
+    if (target >= app->link.duration_us)
+        target = app->link.duration_us - 1;
     if (target < 0)
         target = 0;
     app->scrub_us = target;
@@ -1185,7 +1011,7 @@ static void seek_binding(struct app *app, int direction, bool repeated)
     if (!app->seek_scrubbing &&
         (repeated || app->seek_burst >= SEEK_BURST_SCRUB)) {
         app->seek_scrubbing = true;
-        app->seek_resume = app->player_state == NV12_PLAYER_PLAYING;
+        app->seek_resume = app->link.player_state == NV12_PLAYER_PLAYING;
         struct nv12_ipc_message pause = {
             .type = NV12_IPC_ACTION, .index = NV12_ACTION_TOGGLE_PAUSE,
             .player_state = NV12_PLAYER_PAUSED,
@@ -1627,7 +1453,7 @@ static void sync_player_input(struct app *app, XrTime time)
         }
     }
     if (app->ui_visible && app->autohide > 0 &&
-        app->player_state == NV12_PLAYER_PLAYING && !app->popup_open &&
+        app->link.player_state == NV12_PLAYER_PLAYING && !app->popup_open &&
         !app->awaiting_frame && app->grab_hand < 0 && app->scrub_hand < 0 &&
         !app->seek_scrubbing && now - app->last_input_time > app->autohide) {
         app->ui_visible = false;
@@ -1857,11 +1683,11 @@ static void end_playback(struct app *app)
     discard_held_frame(app);
     for (uint32_t i = 0; i < app->video.buffer_count; ++i)
         destroy_video_buffer(app, &app->video.buffers[i]);
-    if (app->ipc_fd >= 0)
-        close(app->ipc_fd);
-    app->ipc_fd = -1;
+    if (app->link.fd >= 0)
+        close(app->link.fd);
+    app->link.fd = -1;
     app->playing = false;
-    app->eos_received = false;
+    app->link.eos_received = false;
     app->video.current = -1;
     app->video.presented = false;
     app->awaiting_frame = true;
@@ -1879,7 +1705,7 @@ static void end_playback(struct app *app)
     app->grip_toggle[0] = app->grip_toggle[1] = false;
     app->ui_hover = 0;
     app->ui_pointer_visible = false;
-    app->player_state = NV12_PLAYER_PLAYING;
+    app->link.player_state = NV12_PLAYER_PLAYING;
     printf("openxr_summary xr_frames=%" PRIu64
            " rendered_frames=%" PRIu64 " received_frames=%" PRIu64
            " unique_video_frames=%" PRIu64
@@ -1896,8 +1722,8 @@ static void end_playback(struct app *app)
     app->unique_video_frames = app->repeated_video_frames = 0;
     app->hidden_video_frames = app->pipeline_skipped_frames = 0;
     app->released_frames = 0;
-    app->position_us = 0;
-    app->duration_us = 0;
+    app->link.position_us = 0;
+    app->link.duration_us = 0;
     app->video.width = app->video.height = 0;
     /* The trigger that pressed "back" is usually still held: ignore it
      * until a release so the browser does not react to it (it could
@@ -1922,7 +1748,7 @@ static void begin_playback(struct app *app, int fd, const char *location)
     if (app->playing)
         end_playback(app);
     snprintf(app->location, sizeof(app->location), "%s", location);
-    app->title_finished = false;
+    app->link.title_finished = false;
     app->last_input_time = monotonic_seconds();
     app->auto_hidden = false;
     if (strncmp(location, "jf:item:", 8) == 0) {
@@ -1948,13 +1774,13 @@ static void begin_playback(struct app *app, int fd, const char *location)
     app->autofocus.time = 0.0;
     app->autofocus.focused = false;
     app->autofocus.focus_disparity = app->autofocus.distance = 0.0f;
-    app->ipc_fd = fd;
+    app->link.fd = fd;
     app->settings_open = false;
     app->key_picking = app->autofocus.key_pick_request = false;
     app->autofocus.key_sample_pending = false;
     app->playing = true;
     app->awaiting_command = false;
-    app->eos_received = false;
+    app->link.eos_received = false;
     app->ui_dirty = true;
     /* see end_playback */
     app->select[0].suppressed = app->select[1].suppressed = true;
@@ -1993,7 +1819,7 @@ static void handle_control(struct app *app)
                 begin_playback(app, fd, command.path);
             }
         } else if (command.type == PLAYER_UI_BROWSE) {
-            bool finished = app->playing && app->title_finished;
+            bool finished = app->playing && app->link.title_finished;
             if (app->playing)
                 end_playback(app);
             command.path[sizeof(command.path) - 1] = '\0';
@@ -2990,13 +2816,13 @@ int main(int argc, char **argv)
     }
     struct app app = {0};
     app.ui_fd = (int)parse_u64(argv[1], "UI fd");
-    app.ipc_fd = -1;
+    app.link.fd = -1;
     app.video.buffer_count = VIDEO_BUFFER_COUNT;
     for (uint32_t i = 0; i < NV12_IPC_MAX_BUFFERS; ++i)
         app.video.buffers[i].dma_buf_fd = -1;
     app.video.held.dma_buf_fd = -1;
     app.video.current = -1;
-    app.player_state = NV12_PLAYER_PLAYING;
+    app.link.player_state = NV12_PLAYER_PLAYING;
     app.ui_visible = true;
     app.ui_dirty = true;
     app.panel_y = -0.35f;
@@ -3089,7 +2915,7 @@ int main(int argc, char **argv)
         if (app.quit)
             break;
         if (app.xr.running) render_frame(&app); else nanosleep(&pause, NULL);
-        if (app.playing && app.eos_received)
+        if (app.playing && app.link.eos_received)
             end_playback(&app);
     }
     if (app.xr_exit)
