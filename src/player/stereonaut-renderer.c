@@ -42,8 +42,6 @@ static const struct {
 _Static_assert(ARRAY_COUNT(button_inputs) == BUTTON_INPUT_COUNT,
                "BUTTON_INPUT_COUNT differs from button_inputs");
 
-static void need_vk(const char *what, VkResult result);
-static void need(bool condition, const char *what);
 static void hold_current_frame(struct app *app);
 static void send_control(struct app *app, uint32_t type, const char *path,
                          int64_t start_us);
@@ -64,53 +62,10 @@ static uint64_t parse_u64(const char *text, const char *name)
     return (uint64_t)value;
 }
 
-static bool has_device_extension(VkPhysicalDevice physical, const char *name)
-{
-    uint32_t count = 0;
-    need_vk("vkEnumerateDeviceExtensionProperties(count)",
-            vkEnumerateDeviceExtensionProperties(physical, NULL, &count, NULL));
-    VkExtensionProperties *properties = calloc(count, sizeof(*properties));
-    need(properties != NULL, "allocate extension properties");
-    need_vk("vkEnumerateDeviceExtensionProperties(list)",
-            vkEnumerateDeviceExtensionProperties(physical, NULL, &count, properties));
-    bool found = false;
-    for (uint32_t i = 0; i < count; ++i)
-        if (strcmp(properties[i].extensionName, name) == 0) found = true;
-    free(properties);
-    return found;
-}
-
-static void die_xr(const char *what, XrResult result)
-{
-    fprintf(stderr, "%s: XrResult=%d\n", what, result);
-    exit(2);
-}
-
-static void need_xr(const char *what, XrResult result)
-{
-    if (XR_FAILED(result)) die_xr(what, result);
-}
-
-static void need_vk(const char *what, VkResult result)
-{
-    if (result != VK_SUCCESS) {
-        fprintf(stderr, "%s: VkResult=%d\n", what, result);
-        exit(2);
-    }
-}
-
-static void need(bool condition, const char *what)
-{
-    if (!condition) {
-        fprintf(stderr, "%s\n", what);
-        exit(2);
-    }
-}
-
 static XrPath xr_path(struct app *app, const char *text)
 {
     XrPath path = XR_NULL_PATH;
-    need_xr("xrStringToPath", xrStringToPath(app->xr, text, &path));
+    need_xr("xrStringToPath", xrStringToPath(app->xr.instance, text, &path));
     return path;
 }
 
@@ -141,7 +96,7 @@ static void initialize_actions(struct app *app)
     snprintf(set.localizedActionSetName, sizeof(set.localizedActionSetName),
              "Stereonaut Player");
     need_xr("xrCreateActionSet",
-            xrCreateActionSet(app->xr, &set, &app->action_set));
+            xrCreateActionSet(app->xr.instance, &set, &app->action_set));
     create_action(app->action_set, XR_ACTION_TYPE_POSE_INPUT,
                   "aim", "Zeigen", app->hands, &app->aim_action);
     create_action(app->action_set, XR_ACTION_TYPE_FLOAT_INPUT,
@@ -170,9 +125,9 @@ static void initialize_actions(struct app *app)
     } profiles[] = {
         {"/interaction_profiles/valve/frame_controller",
          "trigger/value", "squeeze/click", true,
-         app->has_valve_frame_controller, 2, true},
+         app->xr.has_valve_frame_controller, 2, true},
         {"/interaction_profiles/khr/generic_controller",
-         "trigger/value", "squeeze/value", true, app->has_generic_controller,
+         "trigger/value", "squeeze/value", true, app->xr.has_generic_controller,
          0, true},
         {"/interaction_profiles/valve/index_controller",
          "trigger/value", "squeeze/value", true, true, 1, true},
@@ -182,18 +137,18 @@ static void initialize_actions(struct app *app)
          * and hands differ between Touch, WMR and Vive. */
         {"/interaction_profiles/oculus/touch_controller",
          "trigger/value", "squeeze/value", true,
-         app->has_pcvr_controller, 0, true},
+         app->xr.has_pcvr_controller, 0, true},
         {"/interaction_profiles/microsoft/motion_controller",
          "trigger/value", "squeeze/value", true,
-         app->has_pcvr_controller, 0, true},
+         app->xr.has_pcvr_controller, 0, true},
         {"/interaction_profiles/htc/vive_cosmos_controller",
          "trigger/value", "squeeze/click", true,
-         app->has_pcvr_controller, 0, false},
+         app->xr.has_pcvr_controller, 0, false},
         /* Original Vive wands expose a trackpad rather than a thumbstick;
          * it is still a Vector2f input and maps naturally to navigation. */
         {"/interaction_profiles/htc/vive_controller",
          "trigger/value", "squeeze/click", true,
-         app->has_pcvr_controller, 0, false},
+         app->xr.has_pcvr_controller, 0, false},
         /* No squeeze button or stick: panel grab, show/hide, page flips and
          * stick seeking are unavailable. */
         {"/interaction_profiles/khr/simple_controller",
@@ -260,7 +215,7 @@ static void initialize_actions(struct app *app)
             .suggestedBindings = bindings,
         };
         XrResult result =
-            xrSuggestInteractionProfileBindings(app->xr, &suggestion);
+            xrSuggestInteractionProfileBindings(app->xr.instance, &suggestion);
         printf("controller_bindings profile=%s result=%d\n",
                profiles[p].profile, result);
         if (XR_SUCCEEDED(result))
@@ -275,10 +230,10 @@ static void initialize_actions(struct app *app)
             .poseInActionSpace = {{0, 0, 0, 1}, {0, 0, 0}},
         };
         need_xr("xrCreateActionSpace",
-                xrCreateActionSpace(app->session, &space,
+                xrCreateActionSpace(app->xr.session, &space,
                                     &app->aim_spaces[hand]));
     }
-    if (app->has_eye_gaze) {
+    if (app->xr.has_eye_gaze) {
         XrActionCreateInfo gaze = {
             .type = XR_TYPE_ACTION_CREATE_INFO,
             .actionType = XR_ACTION_TYPE_POSE_INPUT,
@@ -300,7 +255,7 @@ static void initialize_actions(struct app *app)
             .suggestedBindings = &binding,
         };
         XrResult result =
-            xrSuggestInteractionProfileBindings(app->xr, &suggestion);
+            xrSuggestInteractionProfileBindings(app->xr.instance, &suggestion);
         printf("eye_gaze_binding result=%d\n", result);
         XrActionSpaceCreateInfo space = {
             .type = XR_TYPE_ACTION_SPACE_CREATE_INFO,
@@ -308,9 +263,9 @@ static void initialize_actions(struct app *app)
             .poseInActionSpace = {{0, 0, 0, 1}, {0, 0, 0}},
         };
         if (XR_FAILED(result) ||
-            XR_FAILED(xrCreateActionSpace(app->session, &space,
+            XR_FAILED(xrCreateActionSpace(app->xr.session, &space,
                                           &app->gaze_space)))
-            app->has_eye_gaze = false;
+            app->xr.has_eye_gaze = false;
     }
     XrSessionActionSetsAttachInfo attach = {
         .type = XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO,
@@ -318,7 +273,7 @@ static void initialize_actions(struct app *app)
         .actionSets = &app->action_set,
     };
     need_xr("xrAttachSessionActionSets",
-            xrAttachSessionActionSets(app->session, &attach));
+            xrAttachSessionActionSets(app->xr.session, &attach));
     app->render_models_dirty = true;
 }
 
@@ -358,7 +313,7 @@ static void apply_init(struct app *app, const struct nv12_ipc_message *message,
     app->buffer_kind = message->buffer_kind;
     need(app->buffer_kind == NV12_BUFFER_DMA_BUF ||
              (app->buffer_kind == NV12_BUFFER_HOST &&
-              app->get_host_pointer_properties),
+              app->gpu.get_host_pointer_properties),
          "video buffers in host memory need VK_EXT_external_memory_host");
     app->coded_width = message->coded_width;
     app->coded_height = message->coded_height;
@@ -664,7 +619,7 @@ static void release_current_video(struct app *app)
     if (app->current_video_index < 0)
         return;
     if (!app->current_video_presented) {
-        if (app->xr_should_render)
+        if (app->xr.should_render)
             app->pipeline_skipped_frames++;
         else
             app->hidden_video_frames++;
@@ -783,399 +738,6 @@ static void receive_frame_messages(struct app *app)
     }
 }
 
-static uint32_t memory_type(VkPhysicalDevice physical, uint32_t bits,
-                            VkMemoryPropertyFlags wanted)
-{
-    VkPhysicalDeviceMemoryProperties properties;
-    vkGetPhysicalDeviceMemoryProperties(physical, &properties);
-    for (uint32_t i = 0; i < properties.memoryTypeCount; ++i)
-        if ((bits & (1U << i)) &&
-            (properties.memoryTypes[i].propertyFlags & wanted) == wanted)
-            return i;
-    fprintf(stderr, "no compatible Vulkan memory type\n");
-    exit(2);
-}
-
-/* Started from the desktop overlay inside the SteamVR dashboard, the app
- * becomes visible but keeps the dashboard in front (session state VISIBLE
- * instead of FOCUSED) until the viewer clicks "back to game". Hide it with
- * SteamVR's own tool, only during startup so a dashboard the viewer opens
- * later stays alone. */
-static void hide_dashboard_at_startup(const struct app *app)
-{
-    enum { WINDOW_S = 20, MAX_ATTEMPTS = 4 };
-    static time_t first_call_s;
-    static time_t last_attempt_s;
-    static int attempts;
-    time_t now = time(NULL);
-    if (!first_call_s)
-        first_call_s = now;
-    /* This workaround is specific to the Steam Frame dashboard launch.
-     * Desktop SteamVR decides dashboard focus itself; hiding it there makes
-     * a direct PCVR launch unexpectedly lose its system UI. */
-    if (!app->has_valve_frame_controller ||
-        app->state != XR_SESSION_STATE_VISIBLE ||
-        now - first_call_s > WINDOW_S || attempts >= MAX_ATTEMPTS ||
-        (attempts && now - last_attempt_s < 1))
-        return;
-    ++attempts;
-    last_attempt_s = now;
-    const char *tool = getenv("STEREONAUT_VRCMD");
-    if (!tool || !tool[0])
-        tool = "/opt/steamvr/bin/linuxarm64/vrcmd";
-    if (access(tool, X_OK) < 0)
-        return;
-    signal(SIGCHLD, SIG_IGN);
-    pid_t child = fork();
-    if (child == 0) {
-        int null = open("/dev/null", O_WRONLY);
-        if (null >= 0) {
-            dup2(null, STDOUT_FILENO);
-            dup2(null, STDERR_FILENO);
-        }
-        execl(tool, "vrcmd", "--hidedashboard", (char *)NULL);
-        _exit(127);
-    }
-    printf("hide_dashboard attempt=%d pid=%ld\n", attempts, (long)child);
-}
-
-static void poll_events(struct app *app)
-{
-    for (;;) {
-        XrEventDataBuffer event = {.type = XR_TYPE_EVENT_DATA_BUFFER};
-        XrResult result = xrPollEvent(app->xr, &event);
-        if (result == XR_EVENT_UNAVAILABLE) return;
-        need_xr("xrPollEvent", result);
-        if (event.type == XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED) {
-            static const char *const hand_names[2] = {"left", "right"};
-            for (unsigned hand = 0; hand < 2; ++hand) {
-                XrInteractionProfileState profile = {
-                    .type = XR_TYPE_INTERACTION_PROFILE_STATE,
-                };
-                char text[XR_MAX_PATH_LENGTH] = "none";
-                if (XR_SUCCEEDED(xrGetCurrentInteractionProfile(
-                        app->session, app->hands[hand], &profile)) &&
-                    profile.interactionProfile != XR_NULL_PATH) {
-                    uint32_t length = 0;
-                    xrPathToString(app->xr, profile.interactionProfile,
-                                   sizeof(text), &length, text);
-                }
-                printf("interaction_profile hand=%s profile=%s\n",
-                       hand_names[hand], text);
-            }
-            continue;
-        }
-        if (event.type == RENDER_MODELS_CHANGED_EVENT) {
-            app->render_models_dirty = true;
-            continue;
-        }
-        if (event.type == XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING) {
-            const XrEventDataReferenceSpaceChangePending *change =
-                (const XrEventDataReferenceSpaceChangePending *)&event;
-            printf("reference_space_change type=%d time=%" PRId64 "\n",
-                   change->referenceSpaceType, change->changeTime);
-            if (change->referenceSpaceType == XR_REFERENCE_SPACE_TYPE_LOCAL) {
-                app->home_pending = true;
-                app->home_after = change->changeTime;
-            }
-            continue;
-        }
-        if (event.type != XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) continue;
-        XrEventDataSessionStateChanged *change =
-            (XrEventDataSessionStateChanged *)&event;
-        app->state = change->state;
-        ++app->session_changes;
-        printf("openxr_session_state=%d time=%" PRId64 "\n", app->state,
-               change->time);
-        if (app->state == XR_SESSION_STATE_READY) {
-            XrSessionBeginInfo begin = {
-                .type = XR_TYPE_SESSION_BEGIN_INFO,
-                .primaryViewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
-            };
-            need_xr("xrBeginSession", xrBeginSession(app->session, &begin));
-            app->running = true;
-        } else if (app->state == XR_SESSION_STATE_STOPPING) {
-            need_xr("xrEndSession", xrEndSession(app->session));
-            app->running = false;
-        } else if (app->state == XR_SESSION_STATE_EXITING ||
-                   app->state == XR_SESSION_STATE_LOSS_PENDING) {
-            app->running = false;
-            app->quit = true;
-            app->xr_exit = true;
-            return;
-        }
-    }
-}
-
-static uint8_t *read_file(const char *path, size_t *size)
-{
-    FILE *file = fopen(path, "rb");
-    if (!file) { perror(path); exit(2); }
-    if (fseek(file, 0, SEEK_END) || (*size = (size_t)ftell(file)) == 0 ||
-        fseek(file, 0, SEEK_SET)) { perror("read shader size"); exit(2); }
-    uint8_t *data = malloc(*size);
-    if (!data || fread(data, 1, *size, file) != *size) {
-        perror("read shader"); exit(2);
-    }
-    fclose(file);
-    return data;
-}
-
-static VkShaderModule shader(VkDevice device, const char *path)
-{
-    size_t size = 0;
-    uint8_t *data = read_file(path, &size);
-    need(size % 4 == 0, "SPIR-V size is not word aligned");
-    VkShaderModuleCreateInfo info = {
-        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
-        .codeSize = size, .pCode = (const uint32_t *)data,
-    };
-    VkShaderModule result = VK_NULL_HANDLE;
-    need_vk("vkCreateShaderModule", vkCreateShaderModule(device, &info, NULL, &result));
-    free(data);
-    return result;
-}
-
-static void initialize_xr_vulkan(struct app *app)
-{
-    /* Controller profiles with a squeeze/grip button are optional extensions;
-     * khr/simple_controller has none. */
-    const char *valve_extension = "XR_VALVE_frame_controller_interaction";
-    const char *generic_extension = "XR_KHR_generic_controller";
-    uint32_t available_count = 0;
-    need_xr("xrEnumerateInstanceExtensionProperties(count)",
-            xrEnumerateInstanceExtensionProperties(NULL, 0, &available_count,
-                                                   NULL));
-    XrExtensionProperties *available =
-        calloc(available_count ? available_count : 1U, sizeof(*available));
-    need(available != NULL, "allocate OpenXR extension list");
-    for (uint32_t i = 0; i < available_count; ++i)
-        available[i].type = XR_TYPE_EXTENSION_PROPERTIES;
-    need_xr("xrEnumerateInstanceExtensionProperties(list)",
-            xrEnumerateInstanceExtensionProperties(NULL, available_count,
-                                                   &available_count,
-                                                   available));
-    for (uint32_t i = 0; i < available_count; ++i) {
-        if (strcmp(available[i].extensionName,
-                   XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME) == 0)
-            app->has_eye_gaze_extension = true;
-        if (strcmp(available[i].extensionName, valve_extension) == 0)
-            app->has_valve_frame_controller = true;
-        if (strcmp(available[i].extensionName, generic_extension) == 0)
-            app->has_generic_controller = true;
-    }
-    /* No extension is required for the standardized PC interaction
-     * profiles. Unsupported profiles are harmlessly rejected by
-     * xrSuggestInteractionProfileBindings. */
-    app->has_pcvr_controller = true;
-    const char *extensions[8] = {XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME};
-    uint32_t extension_count = 1;
-    if (app->has_eye_gaze_extension)
-        extensions[extension_count++] =
-            XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME;
-    if (app->has_valve_frame_controller)
-        extensions[extension_count++] = valve_extension;
-    if (app->has_generic_controller)
-        extensions[extension_count++] = generic_extension;
-    render_models_request_extensions(&app->render_models, available,
-                                     available_count, extensions,
-                                     &extension_count);
-    free(available);
-    XrInstanceCreateInfo info = {
-        .type = XR_TYPE_INSTANCE_CREATE_INFO,
-        .applicationInfo = {.applicationVersion = 1, .engineVersion = 1,
-                            .apiVersion = XR_MAKE_VERSION(1, 0, 0)},
-        .enabledExtensionCount = extension_count,
-        .enabledExtensionNames = extensions,
-    };
-    snprintf(info.applicationInfo.applicationName,
-             sizeof(info.applicationInfo.applicationName), "stereonaut-xr-quad");
-    snprintf(info.applicationInfo.engineName, sizeof(info.applicationInfo.engineName), "stereonaut");
-    need_xr("xrCreateInstance", xrCreateInstance(&info, &app->xr));
-    XrSystemGetInfo system_info = {.type = XR_TYPE_SYSTEM_GET_INFO,
-                                   .formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY};
-    need_xr("xrGetSystem", xrGetSystem(app->xr, &system_info, &app->system));
-    if (app->has_eye_gaze_extension) {
-        XrSystemEyeGazeInteractionPropertiesEXT eye_gaze = {
-            .type = XR_TYPE_SYSTEM_EYE_GAZE_INTERACTION_PROPERTIES_EXT,
-        };
-        XrSystemProperties properties = {
-            .type = XR_TYPE_SYSTEM_PROPERTIES, .next = &eye_gaze,
-        };
-        if (XR_SUCCEEDED(xrGetSystemProperties(app->xr, app->system,
-                                               &properties)))
-            app->has_eye_gaze = eye_gaze.supportsEyeGazeInteraction;
-    }
-    printf("eye_gaze extension=%d supported=%d\n",
-           app->has_eye_gaze_extension, app->has_eye_gaze);
-    XrEnvironmentBlendMode blend_modes[8];
-    uint32_t blend_mode_count = 0;
-    if (XR_SUCCEEDED(xrEnumerateEnvironmentBlendModes(
-            app->xr, app->system, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
-            8, &blend_mode_count, blend_modes)))
-        for (uint32_t i = 0; i < blend_mode_count; ++i)
-            if (blend_modes[i] == XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND)
-                app->alpha_blend_supported = true;
-    printf("environment_blend_modes count=%u alpha_blend=%d\n",
-           blend_mode_count, app->alpha_blend_supported);
-
-    PFN_xrCreateVulkanInstanceKHR create_instance = NULL;
-    PFN_xrGetVulkanGraphicsDevice2KHR get_device = NULL;
-    PFN_xrCreateVulkanDeviceKHR create_device = NULL;
-    PFN_xrGetVulkanGraphicsRequirements2KHR get_requirements = NULL;
-    need_xr("xrGetInstanceProcAddr(create instance)", xrGetInstanceProcAddr(app->xr, "xrCreateVulkanInstanceKHR", (PFN_xrVoidFunction *)&create_instance));
-    need_xr("xrGetInstanceProcAddr(get device)", xrGetInstanceProcAddr(app->xr, "xrGetVulkanGraphicsDevice2KHR", (PFN_xrVoidFunction *)&get_device));
-    need_xr("xrGetInstanceProcAddr(create device)", xrGetInstanceProcAddr(app->xr, "xrCreateVulkanDeviceKHR", (PFN_xrVoidFunction *)&create_device));
-    need_xr("xrGetInstanceProcAddr(requirements)", xrGetInstanceProcAddr(app->xr, "xrGetVulkanGraphicsRequirements2KHR", (PFN_xrVoidFunction *)&get_requirements));
-    need(create_instance && get_device && create_device && get_requirements, "missing Vulkan-enable2 entry point");
-    XrGraphicsRequirementsVulkanKHR requirements = {
-        .type = XR_TYPE_GRAPHICS_REQUIREMENTS_VULKAN_KHR,
-    };
-    need_xr("xrGetVulkanGraphicsRequirements2KHR", get_requirements(app->xr, app->system, &requirements));
-    printf("openxr_vulkan_requirements min=%" PRIu64 " max=%" PRIu64 "\n",
-           requirements.minApiVersionSupported, requirements.maxApiVersionSupported);
-
-    VkApplicationInfo vk_app = {.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
-        .pApplicationName = "stereonaut-xr-quad", .applicationVersion = 1,
-        .pEngineName = "stereonaut", .engineVersion = 1, .apiVersion = VK_API_VERSION_1_1};
-    VkInstanceCreateInfo vk_info = {.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
-        .pApplicationInfo = &vk_app};
-    XrVulkanInstanceCreateInfoKHR xr_vk_info = {
-        .type = XR_TYPE_VULKAN_INSTANCE_CREATE_INFO_KHR, .systemId = app->system,
-        .pfnGetInstanceProcAddr = vkGetInstanceProcAddr, .vulkanCreateInfo = &vk_info};
-    VkResult vk_result = VK_SUCCESS;
-    need_xr("xrCreateVulkanInstanceKHR", create_instance(app->xr, &xr_vk_info, &app->instance, &vk_result));
-    need_vk("xrCreateVulkanInstanceKHR Vulkan", vk_result);
-    XrVulkanGraphicsDeviceGetInfoKHR device_info = {
-        .type = XR_TYPE_VULKAN_GRAPHICS_DEVICE_GET_INFO_KHR,
-        .systemId = app->system, .vulkanInstance = app->instance};
-    need_xr("xrGetVulkanGraphicsDevice2KHR", get_device(app->xr, &device_info, &app->physical));
-
-    uint32_t count = 0;
-    vkGetPhysicalDeviceQueueFamilyProperties(app->physical, &count, NULL);
-    VkQueueFamilyProperties *families = calloc(count, sizeof(*families));
-    need(families != NULL, "allocate queue families");
-    vkGetPhysicalDeviceQueueFamilyProperties(app->physical, &count, families);
-    bool found = false;
-    for (uint32_t i = 0; i < count; ++i)
-        if (families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
-            app->queue_family = i; found = true; break;
-        }
-    free(families);
-    need(found, "OpenXR Vulkan device has no graphics queue");
-    const char *device_extensions[] = {
-        VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME,
-        VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME,
-        VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
-        VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME,
-        VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME,
-        VK_KHR_SAMPLER_YCBCR_CONVERSION_EXTENSION_NAME,
-    };
-    for (size_t i = 0; i < ARRAY_COUNT(device_extensions); ++i)
-        need(has_device_extension(app->physical, device_extensions[i]),
-             "required NV12 DMA-BUF Vulkan extension is missing");
-    /* PC decoder buffers arrive as memfds (no udmabuf size limit). */
-    const char *enabled_extensions[ARRAY_COUNT(device_extensions) + 1];
-    memcpy(enabled_extensions, device_extensions, sizeof(device_extensions));
-    uint32_t enabled_count = ARRAY_COUNT(device_extensions);
-    bool host_import = has_device_extension(
-        app->physical, VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);
-    if (host_import)
-        enabled_extensions[enabled_count++] =
-            VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME;
-    /* Panels drawn into the eye images are sampled anisotropically. */
-    VkPhysicalDeviceFeatures supported, features = {0};
-    vkGetPhysicalDeviceFeatures(app->physical, &supported);
-    features.samplerAnisotropy = supported.samplerAnisotropy;
-    float priority = 1.0f;
-    VkDeviceQueueCreateInfo queue_info = {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-        .queueFamilyIndex = app->queue_family, .queueCount = 1, .pQueuePriorities = &priority};
-    VkDeviceCreateInfo vk_device_info = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-        .queueCreateInfoCount = 1, .pQueueCreateInfos = &queue_info,
-        .enabledExtensionCount = enabled_count,
-        .ppEnabledExtensionNames = enabled_extensions,
-        .pEnabledFeatures = &features};
-    XrVulkanDeviceCreateInfoKHR xr_device_info = {
-        .type = XR_TYPE_VULKAN_DEVICE_CREATE_INFO_KHR, .systemId = app->system,
-        .pfnGetInstanceProcAddr = vkGetInstanceProcAddr, .vulkanPhysicalDevice = app->physical,
-        .vulkanCreateInfo = &vk_device_info};
-    need_xr("xrCreateVulkanDeviceKHR", create_device(app->xr, &xr_device_info, &app->device, &vk_result));
-    need_vk("xrCreateVulkanDeviceKHR Vulkan", vk_result);
-    vkGetDeviceQueue(app->device, app->queue_family, 0, &app->queue);
-    need(app->queue != VK_NULL_HANDLE, "vkGetDeviceQueue returned null");
-    VkPhysicalDeviceProperties properties;
-    vkGetPhysicalDeviceProperties(app->physical, &properties);
-    printf("openxr_vulkan_device=%s queue_family=%u\n", properties.deviceName, app->queue_family);
-    app->panel_anisotropy = 1.0f;
-    if (features.samplerAnisotropy)
-        app->panel_anisotropy =
-            fminf(8.0f, properties.limits.maxSamplerAnisotropy);
-    app->import_semaphore_fd = (PFN_vkImportSemaphoreFdKHR)
-        vkGetDeviceProcAddr(app->device, "vkImportSemaphoreFdKHR");
-    app->get_memory_fd_properties = (PFN_vkGetMemoryFdPropertiesKHR)
-        vkGetDeviceProcAddr(app->device, "vkGetMemoryFdPropertiesKHR");
-    app->get_modifier_properties = (PFN_vkGetImageDrmFormatModifierPropertiesEXT)
-        vkGetDeviceProcAddr(app->device,
-                            "vkGetImageDrmFormatModifierPropertiesEXT");
-    need(app->import_semaphore_fd && app->get_memory_fd_properties &&
-             app->get_modifier_properties,
-         "required external-memory entry point is missing");
-    if (host_import)
-        app->get_host_pointer_properties =
-            (PFN_vkGetMemoryHostPointerPropertiesEXT)vkGetDeviceProcAddr(
-                app->device, "vkGetMemoryHostPointerPropertiesEXT");
-}
-
-static bool overlay_in_eye_images(void);
-
-static void initialize_swapchain(struct app *app)
-{
-    uint32_t format_count = 0;
-    need_xr("xrEnumerateSwapchainFormats(count)", xrEnumerateSwapchainFormats(app->session, 0, &format_count, NULL));
-    int64_t *formats = calloc(format_count, sizeof(*formats));
-    need(formats != NULL, "allocate swapchain formats");
-    need_xr("xrEnumerateSwapchainFormats(list)", xrEnumerateSwapchainFormats(app->session, format_count, &format_count, formats));
-    app->color_format = VK_FORMAT_B8G8R8A8_SRGB;
-    bool supported = false;
-    for (uint32_t i = 0; i < format_count; ++i) if (formats[i] == app->color_format) supported = true;
-    if (!supported) { app->color_format = (VkFormat)formats[0]; supported = true; }
-    free(formats);
-    XrViewConfigurationView views[2] = {
-        {.type = XR_TYPE_VIEW_CONFIGURATION_VIEW}, {.type = XR_TYPE_VIEW_CONFIGURATION_VIEW}};
-    uint32_t view_count = 0;
-    need_xr("xrEnumerateViewConfigurationViews", xrEnumerateViewConfigurationViews(app->xr, app->system, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 2, &view_count, views));
-    need(view_count == 2, "Steam Frame did not report stereo views");
-    app->width = views[0].recommendedImageRectWidth;
-    app->height = views[0].recommendedImageRectHeight;
-    need(views[1].recommendedImageRectWidth == app->width && views[1].recommendedImageRectHeight == app->height, "eyes have different recommended dimensions");
-    /* On a PC the panels are drawn into the eye images, which at the
-     * recommended size blur them: render larger. Above 1.3 streaming to
-     * the Frame shows the eyes with mismatched perspectives (other players
-     * too). STEREONAUT_RENDER_SCALE (1 to 2) overrides it. */
-    const char *scale_text = getenv("STEREONAUT_RENDER_SCALE");
-    float scale = scale_text ? strtof(scale_text, NULL)
-                             : overlay_in_eye_images() ? PC_RENDER_SCALE
-                                                       : 1.0f;
-    if (scale > 1.0f && scale <= 2.0f) {
-        app->width = (uint32_t)(app->width * scale);
-        app->height = (uint32_t)(app->height * scale);
-        if (app->width > views[0].maxImageRectWidth)
-            app->width = views[0].maxImageRectWidth;
-        if (app->height > views[0].maxImageRectHeight)
-            app->height = views[0].maxImageRectHeight;
-    }
-    XrSwapchainCreateInfo info = {.type = XR_TYPE_SWAPCHAIN_CREATE_INFO,
-        .usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT,
-        .format = app->color_format, .sampleCount = 1, .width = app->width,
-        .height = app->height, .faceCount = 1, .arraySize = 2, .mipCount = 1};
-    need_xr("xrCreateSwapchain", xrCreateSwapchain(app->session, &info, &app->swapchain));
-    need_xr("xrEnumerateSwapchainImages(count)", xrEnumerateSwapchainImages(app->swapchain, 0, &app->image_count, NULL));
-    need(app->image_count > 0 && app->image_count <= MAX_IMAGES, "unexpected OpenXR swapchain image count");
-    for (uint32_t i = 0; i < app->image_count; ++i) app->images[i].type = XR_TYPE_SWAPCHAIN_IMAGE_VULKAN2_KHR;
-    need_xr("xrEnumerateSwapchainImages(list)", xrEnumerateSwapchainImages(app->swapchain, app->image_count, &app->image_count, (XrSwapchainImageBaseHeader *)app->images));
-    printf("openxr_swapchain format=%d dimensions=%ux%u images=%u\n", app->color_format, app->width, app->height, app->image_count);
-}
-
 /* One plane of a two-plane frame as its own image, sampled by the plane
  * shader (tp10-projection.frag) instead of a YCbCr sampler.
  * TP10 (Iris Main10): TP10 packs three 10-bit samples per word, so a plane
@@ -1216,24 +778,24 @@ static void import_plane(struct app *app, struct video_buffer *buffer,
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
     };
     need_vk("vkCreateImage(video plane)",
-            vkCreateImage(app->device, &info, NULL, image));
+            vkCreateImage(app->gpu.device, &info, NULL, image));
     VkImageDrmFormatModifierPropertiesEXT chosen = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_PROPERTIES_EXT,
     };
     need_vk("vkGetImageDrmFormatModifierPropertiesEXT(plane)",
-            app->get_modifier_properties(app->device, *image, &chosen));
+            app->gpu.get_modifier_properties(app->gpu.device, *image, &chosen));
     need(chosen.drmFormatModifier == drm_modifier,
          "Vulkan substituted the video plane modifier");
     VkMemoryRequirements requirements;
-    vkGetImageMemoryRequirements(app->device, *image, &requirements);
+    vkGetImageMemoryRequirements(app->gpu.device, *image, &requirements);
     need(requirements.size <= app->dma_buf_size,
          "video plane layout exceeds the DMA-BUF");
     VkMemoryFdPropertiesKHR fd_properties = {
         .sType = VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR,
     };
     need_vk("vkGetMemoryFdPropertiesKHR(plane)",
-            app->get_memory_fd_properties(
-                app->device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+            app->gpu.get_memory_fd_properties(
+                app->gpu.device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
                 buffer->dma_buf_fd, &fd_properties));
     uint32_t bits = requirements.memoryTypeBits & fd_properties.memoryTypeBits;
     need(bits != 0, "plane DMA-BUF memory-type intersection is empty");
@@ -1251,12 +813,12 @@ static void import_plane(struct app *app, struct video_buffer *buffer,
     VkMemoryAllocateInfo allocation = {
         .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
         .pNext = &dedicated, .allocationSize = app->dma_buf_size,
-        .memoryTypeIndex = memory_type(app->physical, bits, 0),
+        .memoryTypeIndex = memory_type(app->gpu.physical, bits, 0),
     };
     need_vk("vkAllocateMemory(import plane)",
-            vkAllocateMemory(app->device, &allocation, NULL, memory));
+            vkAllocateMemory(app->gpu.device, &allocation, NULL, memory));
     need_vk("vkBindImageMemory(import plane)",
-            vkBindImageMemory(app->device, *image, *memory, 0));
+            vkBindImageMemory(app->gpu.device, *image, *memory, 0));
     VkImageViewCreateInfo view_info = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
         .image = *image, .viewType = VK_IMAGE_VIEW_TYPE_2D, .format = format,
@@ -1264,7 +826,7 @@ static void import_plane(struct app *app, struct video_buffer *buffer,
                              .levelCount = 1, .layerCount = 1},
     };
     need_vk("vkCreateImageView(plane)",
-            vkCreateImageView(app->device, &view_info, NULL, view));
+            vkCreateImageView(app->gpu.device, &view_info, NULL, view));
 }
 
 /* A device-local image the host buffer is copied into: NV12 through the
@@ -1284,20 +846,20 @@ static void create_upload_image(struct app *app, VkFormat format,
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
     };
     need_vk("vkCreateImage(upload)",
-            vkCreateImage(app->device, &info, NULL, image));
+            vkCreateImage(app->gpu.device, &info, NULL, image));
     VkMemoryRequirements requirements;
-    vkGetImageMemoryRequirements(app->device, *image, &requirements);
+    vkGetImageMemoryRequirements(app->gpu.device, *image, &requirements);
     VkMemoryAllocateInfo allocation = {
         .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
         .allocationSize = requirements.size,
-        .memoryTypeIndex = memory_type(app->physical,
+        .memoryTypeIndex = memory_type(app->gpu.physical,
                                        requirements.memoryTypeBits,
                                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
     };
     need_vk("vkAllocateMemory(upload)",
-            vkAllocateMemory(app->device, &allocation, NULL, memory));
+            vkAllocateMemory(app->gpu.device, &allocation, NULL, memory));
     need_vk("vkBindImageMemory(upload)",
-            vkBindImageMemory(app->device, *image, *memory, 0));
+            vkBindImageMemory(app->gpu.device, *image, *memory, 0));
     VkSamplerYcbcrConversionInfo conversion = {
         .sType = VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_INFO,
         .conversion = app->conversion,
@@ -1310,15 +872,13 @@ static void create_upload_image(struct app *app, VkFormat format,
                              .levelCount = 1, .layerCount = 1},
     };
     need_vk("vkCreateImageView(upload)",
-            vkCreateImageView(app->device, &view_info, NULL, view));
+            vkCreateImageView(app->gpu.device, &view_info, NULL, view));
 }
 
 /* NV12_BUFFER_HOST: map the memfd, import the mapping as host memory of a
  * transfer buffer and create the images it is copied into. Sampling
  * device-local images is also much cheaper than reading system memory over
  * PCIe for every eye and display frame. */
-static double monotonic_seconds(void);
-
 static void import_host_buffer(struct app *app, uint32_t i)
 {
     double started = monotonic_seconds();
@@ -1341,18 +901,18 @@ static void import_host_buffer(struct app *app, uint32_t i)
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
     };
     need_vk("vkCreateBuffer(host video)",
-            vkCreateBuffer(app->device, &buffer_info, NULL,
+            vkCreateBuffer(app->gpu.device, &buffer_info, NULL,
                            &buffer->host_buffer));
     VkMemoryHostPointerPropertiesEXT pointer = {
         .sType = VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT,
     };
     need_vk("vkGetMemoryHostPointerPropertiesEXT",
-            app->get_host_pointer_properties(
-                app->device,
+            app->gpu.get_host_pointer_properties(
+                app->gpu.device,
                 VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
                 mapping, &pointer));
     VkMemoryRequirements requirements;
-    vkGetBufferMemoryRequirements(app->device, buffer->host_buffer,
+    vkGetBufferMemoryRequirements(app->gpu.device, buffer->host_buffer,
                                   &requirements);
     uint32_t bits = requirements.memoryTypeBits & pointer.memoryTypeBits;
     need(bits != 0, "host video memory-type intersection is empty");
@@ -1364,13 +924,13 @@ static void import_host_buffer(struct app *app, uint32_t i)
     VkMemoryAllocateInfo allocation = {
         .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .pNext = &import,
         .allocationSize = app->dma_buf_size,
-        .memoryTypeIndex = memory_type(app->physical, bits, 0),
+        .memoryTypeIndex = memory_type(app->gpu.physical, bits, 0),
     };
     need_vk("vkAllocateMemory(import host video)",
-            vkAllocateMemory(app->device, &allocation, NULL,
+            vkAllocateMemory(app->gpu.device, &allocation, NULL,
                              &buffer->host_memory));
     need_vk("vkBindBufferMemory(host video)",
-            vkBindBufferMemory(app->device, buffer->host_buffer,
+            vkBindBufferMemory(app->gpu.device, buffer->host_buffer,
                                buffer->host_memory, 0));
     if (p010) {
         create_upload_image(app, VK_FORMAT_R16_UNORM, app->video_width,
@@ -1491,7 +1051,7 @@ static void import_video_buffer(struct app *app, uint32_t i)
             .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
         };
         need_vk("vkCreateSemaphore(producer)",
-                vkCreateSemaphore(app->device, &semaphore, NULL,
+                vkCreateSemaphore(app->gpu.device, &semaphore, NULL,
                                   &tp10_buffer->producer_semaphore));
         printf("%s_import index=%u coded=%ux%u\n", p010 ? "p010" : "tp10",
                i, app->coded_width, app->coded_height);
@@ -1533,30 +1093,30 @@ static void import_video_buffer(struct app *app, uint32_t i)
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
     };
     need_vk("vkCreateImage(NV12 DMA-BUF)",
-            vkCreateImage(app->device, &image, NULL, &buffer->image));
+            vkCreateImage(app->gpu.device, &image, NULL, &buffer->image));
     VkImageDrmFormatModifierPropertiesEXT chosen = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_DRM_FORMAT_MODIFIER_PROPERTIES_EXT,
     };
     need_vk("vkGetImageDrmFormatModifierPropertiesEXT",
-            app->get_modifier_properties(app->device, buffer->image,
+            app->gpu.get_modifier_properties(app->gpu.device, buffer->image,
                                          &chosen));
     need(chosen.drmFormatModifier == DRM_FORMAT_MOD_LINEAR,
          "Vulkan substituted the NV12 modifier");
     VkMemoryRequirements requirements;
-    vkGetImageMemoryRequirements(app->device, buffer->image, &requirements);
+    vkGetImageMemoryRequirements(app->gpu.device, buffer->image, &requirements);
     need(requirements.size <= app->dma_buf_size,
          "NV12 Vulkan memory requirement exceeds DMA-BUF");
     VkMemoryFdPropertiesKHR fd_properties = {
         .sType = VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR,
     };
     need_vk("vkGetMemoryFdPropertiesKHR",
-            app->get_memory_fd_properties(
-                app->device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
+            app->gpu.get_memory_fd_properties(
+                app->gpu.device, VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT,
                 buffer->dma_buf_fd, &fd_properties));
     uint32_t bits =
         requirements.memoryTypeBits & fd_properties.memoryTypeBits;
     need(bits != 0, "NV12 DMA-BUF memory-type intersection is empty");
-    uint32_t type = memory_type(app->physical, bits, 0);
+    uint32_t type = memory_type(app->gpu.physical, bits, 0);
     int imported_fd = dup(buffer->dma_buf_fd);
     if (imported_fd < 0) { perror("dup NV12 DMA-BUF"); exit(2); }
     VkImportMemoryFdInfoKHR import = {
@@ -1574,10 +1134,10 @@ static void import_video_buffer(struct app *app, uint32_t i)
         .memoryTypeIndex = type,
     };
     need_vk("vkAllocateMemory(import NV12)",
-            vkAllocateMemory(app->device, &allocation, NULL,
+            vkAllocateMemory(app->gpu.device, &allocation, NULL,
                              &buffer->memory));
     need_vk("vkBindImageMemory(import NV12)",
-            vkBindImageMemory(app->device, buffer->image,
+            vkBindImageMemory(app->gpu.device, buffer->image,
                               buffer->memory, 0));
     VkImageViewCreateInfo view = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
@@ -1588,12 +1148,12 @@ static void import_video_buffer(struct app *app, uint32_t i)
                              .levelCount = 1, .layerCount = 1},
     };
     need_vk("vkCreateImageView(NV12)",
-            vkCreateImageView(app->device, &view, NULL, &buffer->view));
+            vkCreateImageView(app->gpu.device, &view, NULL, &buffer->view));
     VkSemaphoreCreateInfo semaphore = {
         .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
     };
     need_vk("vkCreateSemaphore(producer)",
-            vkCreateSemaphore(app->device, &semaphore, NULL,
+            vkCreateSemaphore(app->gpu.device, &semaphore, NULL,
                               &buffer->producer_semaphore));
     printf("nv12_import index=%u memory_type=%u\n", i, type);
 }
@@ -1623,7 +1183,7 @@ static void create_video_sampler(struct app *app)
         .sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2, .pNext = &list,
     };
     vkGetPhysicalDeviceFormatProperties2(
-        app->physical, VK_FORMAT_G8_B8R8_2PLANE_420_UNORM,
+        app->gpu.physical, VK_FORMAT_G8_B8R8_2PLANE_420_UNORM,
         &format_properties);
     need(list.drmFormatModifierCount > 0, "NV12 exposes no DRM modifiers");
     list.pDrmFormatModifierProperties =
@@ -1632,7 +1192,7 @@ static void create_video_sampler(struct app *app)
     need(list.pDrmFormatModifierProperties != NULL,
          "allocate NV12 modifier properties");
     vkGetPhysicalDeviceFormatProperties2(
-        app->physical, VK_FORMAT_G8_B8R8_2PLANE_420_UNORM,
+        app->gpu.physical, VK_FORMAT_G8_B8R8_2PLANE_420_UNORM,
         &format_properties);
     VkFormatFeatureFlags features = 0;
     for (uint32_t i = 0; i < list.drmFormatModifierCount; ++i) {
@@ -1648,7 +1208,7 @@ static void create_video_sampler(struct app *app)
     need(features &
              VK_FORMAT_FEATURE_SAMPLED_IMAGE_YCBCR_CONVERSION_LINEAR_FILTER_BIT,
          "linear-filtered NV12 YCbCr conversion is unsupported");
-    VkChromaLocation chroma_location;
+    VkChromaLocation chroma_location = VK_CHROMA_LOCATION_COSITED_EVEN;
     if (features & VK_FORMAT_FEATURE_MIDPOINT_CHROMA_SAMPLES_BIT)
         chroma_location = VK_CHROMA_LOCATION_MIDPOINT;
     else if (features & VK_FORMAT_FEATURE_COSITED_CHROMA_SAMPLES_BIT)
@@ -1670,7 +1230,7 @@ static void create_video_sampler(struct app *app)
         .chromaFilter = VK_FILTER_LINEAR,
     };
     need_vk("vkCreateSamplerYcbcrConversion",
-            vkCreateSamplerYcbcrConversion(app->device, &conversion, NULL,
+            vkCreateSamplerYcbcrConversion(app->gpu.device, &conversion, NULL,
                                            &app->conversion));
     VkSamplerYcbcrConversionInfo conversion_info = {
         .sType = VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_INFO,
@@ -1687,12 +1247,12 @@ static void create_video_sampler(struct app *app)
         .maxLod = 0.0f,
     };
     need_vk("vkCreateSampler(NV12)",
-            vkCreateSampler(app->device, &sampler, NULL,
+            vkCreateSampler(app->gpu.device, &sampler, NULL,
                             &app->video_sampler));
     VkSamplerCreateInfo plane_sampler = sampler;
     plane_sampler.pNext = NULL;
     need_vk("vkCreateSampler(TP10)",
-            vkCreateSampler(app->device, &plane_sampler, NULL,
+            vkCreateSampler(app->gpu.device, &plane_sampler, NULL,
                             &app->plane_sampler));
 
     printf("nv12_sampler format=%d model=rgb_identity levels=shader"
@@ -1704,7 +1264,7 @@ static void create_video_sampler(struct app *app)
 
 static void create_pipeline(struct app *app)
 {
-    VkAttachmentDescription attachment = {.format = app->color_format, .samples = VK_SAMPLE_COUNT_1_BIT,
+    VkAttachmentDescription attachment = {.format = app->xr.color_format, .samples = VK_SAMPLE_COUNT_1_BIT,
         .loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR, .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
         .initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, .finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
     VkAttachmentReference reference = {.attachment = 0, .layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
@@ -1712,15 +1272,15 @@ static void create_pipeline(struct app *app)
         .colorAttachmentCount = 1, .pColorAttachments = &reference};
     VkRenderPassCreateInfo render_info = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO,
         .attachmentCount = 1, .pAttachments = &attachment, .subpassCount = 1, .pSubpasses = &subpass};
-    need_vk("vkCreateRenderPass", vkCreateRenderPass(app->device, &render_info, NULL, &app->render_pass));
-    for (uint32_t image = 0; image < app->image_count; ++image) for (uint32_t eye = 0; eye < 2; ++eye) {
-        VkImageViewCreateInfo view = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .image = app->images[image].image,
-            .viewType = VK_IMAGE_VIEW_TYPE_2D, .format = app->color_format,
+    need_vk("vkCreateRenderPass", vkCreateRenderPass(app->gpu.device, &render_info, NULL, &app->render_pass));
+    for (uint32_t image = 0; image < app->xr.image_count; ++image) for (uint32_t eye = 0; eye < 2; ++eye) {
+        VkImageViewCreateInfo view = {.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .image = app->xr.images[image].image,
+            .viewType = VK_IMAGE_VIEW_TYPE_2D, .format = app->xr.color_format,
             .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .levelCount = 1, .baseArrayLayer = eye, .layerCount = 1}};
-        need_vk("vkCreateImageView", vkCreateImageView(app->device, &view, NULL, &app->image_views[image][eye]));
+        need_vk("vkCreateImageView", vkCreateImageView(app->gpu.device, &view, NULL, &app->image_views[image][eye]));
         VkFramebufferCreateInfo fb = {.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO,
-            .renderPass = app->render_pass, .attachmentCount = 1, .pAttachments = &app->image_views[image][eye], .width = app->width, .height = app->height, .layers = 1};
-        need_vk("vkCreateFramebuffer", vkCreateFramebuffer(app->device, &fb, NULL, &app->framebuffers[image][eye]));
+            .renderPass = app->render_pass, .attachmentCount = 1, .pAttachments = &app->image_views[image][eye], .width = app->xr.width, .height = app->xr.height, .layers = 1};
+        need_vk("vkCreateFramebuffer", vkCreateFramebuffer(app->gpu.device, &fb, NULL, &app->framebuffers[image][eye]));
     }
     /* Binding 1 is the NV12 frame (immutable YCbCr sampler), 2 and 3 the
      * TP10 luma and chroma planes; each pipeline uses only its own. */
@@ -1748,32 +1308,32 @@ static void create_pipeline(struct app *app)
          .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT},
     };
     VkDescriptorSetLayoutCreateInfo layout = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 5, .pBindings = bindings};
-    need_vk("vkCreateDescriptorSetLayout", vkCreateDescriptorSetLayout(app->device, &layout, NULL, &app->descriptor_layout));
+    need_vk("vkCreateDescriptorSetLayout", vkCreateDescriptorSetLayout(app->gpu.device, &layout, NULL, &app->descriptor_layout));
     VkPushConstantRange disparity_push = {
         .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT,
         .size = sizeof(struct disparity_push),
     };
     VkPipelineLayoutCreateInfo pipeline_layout = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, .setLayoutCount = 1, .pSetLayouts = &app->descriptor_layout,
         .pushConstantRangeCount = 1, .pPushConstantRanges = &disparity_push};
-    need_vk("vkCreatePipelineLayout", vkCreatePipelineLayout(app->device, &pipeline_layout, NULL, &app->pipeline_layout));
-    VkShaderModule vert = shader(app->device, "video-projection.vert.spv"), frag = shader(app->device, "nv12-projection.frag.spv");
+    need_vk("vkCreatePipelineLayout", vkCreatePipelineLayout(app->gpu.device, &pipeline_layout, NULL, &app->pipeline_layout));
+    VkShaderModule vert = shader(app->gpu.device, "video-projection.vert.spv"), frag = shader(app->gpu.device, "nv12-projection.frag.spv");
     VkPipelineShaderStageCreateInfo stages[2] = {{.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = vert, .pName = "main"}, {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = frag, .pName = "main"}};
     VkPipelineVertexInputStateCreateInfo vertex = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
     VkPipelineInputAssemblyStateCreateInfo assembly = {.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO, .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP};
-    VkViewport viewport = {.width = (float)app->width, .height = (float)app->height, .minDepth = 0, .maxDepth = 1};
-    VkRect2D scissor = {.extent = {app->width, app->height}};
+    VkViewport viewport = {.width = (float)app->xr.width, .height = (float)app->xr.height, .minDepth = 0, .maxDepth = 1};
+    VkRect2D scissor = {.extent = {app->xr.width, app->xr.height}};
     VkPipelineViewportStateCreateInfo view = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, .viewportCount = 1, .pViewports = &viewport, .scissorCount = 1, .pScissors = &scissor};
     VkPipelineRasterizationStateCreateInfo raster = {.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO, .polygonMode = VK_POLYGON_MODE_FILL, .cullMode = VK_CULL_MODE_NONE, .frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE, .lineWidth = 1};
     VkPipelineMultisampleStateCreateInfo multisample = {.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO, .rasterizationSamples = VK_SAMPLE_COUNT_1_BIT};
     VkPipelineColorBlendAttachmentState blend_attachment = {.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT};
     VkPipelineColorBlendStateCreateInfo blend = {.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO, .attachmentCount = 1, .pAttachments = &blend_attachment};
     VkGraphicsPipelineCreateInfo pipeline = {.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, .stageCount = 2, .pStages = stages, .pVertexInputState = &vertex, .pInputAssemblyState = &assembly, .pViewportState = &view, .pRasterizationState = &raster, .pMultisampleState = &multisample, .pColorBlendState = &blend, .layout = app->pipeline_layout, .renderPass = app->render_pass};
-    need_vk("vkCreateGraphicsPipelines", vkCreateGraphicsPipelines(app->device, VK_NULL_HANDLE, 1, &pipeline, NULL, &app->pipeline));
-    VkShaderModule tp10_frag = shader(app->device, "tp10-projection.frag.spv");
+    need_vk("vkCreateGraphicsPipelines", vkCreateGraphicsPipelines(app->gpu.device, VK_NULL_HANDLE, 1, &pipeline, NULL, &app->pipeline));
+    VkShaderModule tp10_frag = shader(app->gpu.device, "tp10-projection.frag.spv");
     stages[1].module = tp10_frag;
-    need_vk("vkCreateGraphicsPipelines(TP10)", vkCreateGraphicsPipelines(app->device, VK_NULL_HANDLE, 1, &pipeline, NULL, &app->pipeline_tp10));
-    vkDestroyShaderModule(app->device, vert, NULL); vkDestroyShaderModule(app->device, frag, NULL);
-    vkDestroyShaderModule(app->device, tp10_frag, NULL);
+    need_vk("vkCreateGraphicsPipelines(TP10)", vkCreateGraphicsPipelines(app->gpu.device, VK_NULL_HANDLE, 1, &pipeline, NULL, &app->pipeline_tp10));
+    vkDestroyShaderModule(app->gpu.device, vert, NULL); vkDestroyShaderModule(app->gpu.device, frag, NULL);
+    vkDestroyShaderModule(app->gpu.device, tp10_frag, NULL);
     const char *const disparity_shaders[2] = {
         "stereo-disparity.comp.spv", "stereo-disparity-tp10.comp.spv",
     };
@@ -1781,7 +1341,7 @@ static void create_pipeline(struct app *app)
         &app->disparity_pipeline, &app->disparity_pipeline_tp10,
     };
     for (int i = 0; i < 2; ++i) {
-        VkShaderModule module = shader(app->device, disparity_shaders[i]);
+        VkShaderModule module = shader(app->gpu.device, disparity_shaders[i]);
         VkComputePipelineCreateInfo compute = {
             .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
             .stage = {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
@@ -1790,10 +1350,10 @@ static void create_pipeline(struct app *app)
             .layout = app->pipeline_layout,
         };
         need_vk("vkCreateComputePipelines(disparity)",
-                vkCreateComputePipelines(app->device, VK_NULL_HANDLE, 1,
+                vkCreateComputePipelines(app->gpu.device, VK_NULL_HANDLE, 1,
                                          &compute, NULL,
                                          disparity_pipelines[i]));
-        vkDestroyShaderModule(app->device, module, NULL);
+        vkDestroyShaderModule(app->gpu.device, module, NULL);
     }
 }
 
@@ -1871,7 +1431,7 @@ static struct player_ui_state player_state(const struct app *app)
         .focus_threshold = app->focus_threshold,
         .av1_software = app->av1_software,
         .passthrough = app->passthrough,
-        .passthrough_supported = app->alpha_blend_supported,
+        .passthrough_supported = app->xr.alpha_blend_supported,
         .key_picking = app->key_picking,
         .language = i18n_choice(),
         .system_language = app->system_language,
@@ -1953,7 +1513,7 @@ static XrSwapchain create_ui_texture(struct app *app,
             .mipCount = 1,
         };
         XrSwapchain swapchain = XR_NULL_HANDLE;
-        need_xr(what, xrCreateSwapchain(app->session, &info, &swapchain));
+        need_xr(what, xrCreateSwapchain(app->xr.session, &info, &swapchain));
         return swapchain;
     }
     uint32_t size = width > height ? width : height;
@@ -1972,21 +1532,21 @@ static XrSwapchain create_ui_texture(struct app *app,
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
     };
     need_vk("vkCreateImage(panel)",
-            vkCreateImage(app->device, &image, NULL, &texture->image));
+            vkCreateImage(app->gpu.device, &image, NULL, &texture->image));
     VkMemoryRequirements requirements;
-    vkGetImageMemoryRequirements(app->device, texture->image, &requirements);
+    vkGetImageMemoryRequirements(app->gpu.device, texture->image, &requirements);
     VkMemoryAllocateInfo allocation = {
         .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
         .allocationSize = requirements.size,
-        .memoryTypeIndex = memory_type(app->physical,
+        .memoryTypeIndex = memory_type(app->gpu.physical,
                                        requirements.memoryTypeBits,
                                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
     };
     need_vk("vkAllocateMemory(panel)",
-            vkAllocateMemory(app->device, &allocation, NULL,
+            vkAllocateMemory(app->gpu.device, &allocation, NULL,
                              &texture->memory));
     need_vk("vkBindImageMemory(panel)",
-            vkBindImageMemory(app->device, texture->image, texture->memory,
+            vkBindImageMemory(app->gpu.device, texture->image, texture->memory,
                               0));
     VkImageViewCreateInfo view = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
@@ -1997,7 +1557,7 @@ static XrSwapchain create_ui_texture(struct app *app,
                              .layerCount = 1},
     };
     need_vk("vkCreateImageView(panel)",
-            vkCreateImageView(app->device, &view, NULL, &texture->view));
+            vkCreateImageView(app->gpu.device, &view, NULL, &texture->view));
     return XR_NULL_HANDLE;
 }
 
@@ -2094,11 +1654,11 @@ static void create_ui_swapchain(struct app *app)
 {
     uint32_t count = 0;
     need_xr("xrEnumerateSwapchainFormats(UI count)",
-            xrEnumerateSwapchainFormats(app->session, 0, &count, NULL));
+            xrEnumerateSwapchainFormats(app->xr.session, 0, &count, NULL));
     int64_t *formats = calloc(count, sizeof(*formats));
     need(formats != NULL, "allocate UI swapchain formats");
     need_xr("xrEnumerateSwapchainFormats(UI list)",
-            xrEnumerateSwapchainFormats(app->session, count, &count, formats));
+            xrEnumerateSwapchainFormats(app->xr.session, count, &count, formats));
     VkFormat preferred[] = {
         VK_FORMAT_R8G8B8A8_SRGB, VK_FORMAT_B8G8R8A8_SRGB,
         VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_B8G8R8A8_UNORM,
@@ -2143,14 +1703,14 @@ static void create_ui_resources(struct app *app)
         .commandBufferCount = 1,
     };
     need_vk("vkAllocateCommandBuffers(UI)",
-            vkAllocateCommandBuffers(app->device, &commands,
+            vkAllocateCommandBuffers(app->gpu.device, &commands,
                                      &app->ui_command));
     VkFenceCreateInfo fence = {
         .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
         .flags = VK_FENCE_CREATE_SIGNALED_BIT,
     };
     need_vk("vkCreateFence(UI)",
-            vkCreateFence(app->device, &fence, NULL, &app->ui_fence));
+            vkCreateFence(app->gpu.device, &fence, NULL, &app->ui_fence));
     VkBufferCreateInfo buffer = {
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .size = UI_BYTES,
@@ -2158,27 +1718,27 @@ static void create_ui_resources(struct app *app)
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
     };
     need_vk("vkCreateBuffer(UI staging)",
-            vkCreateBuffer(app->device, &buffer, NULL,
+            vkCreateBuffer(app->gpu.device, &buffer, NULL,
                            &app->ui_staging_buffer));
     VkMemoryRequirements memory;
-    vkGetBufferMemoryRequirements(app->device,
+    vkGetBufferMemoryRequirements(app->gpu.device,
                                   app->ui_staging_buffer, &memory);
     VkMemoryAllocateInfo allocation = {
         .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
         .allocationSize = memory.size,
         .memoryTypeIndex = memory_type(
-            app->physical, memory.memoryTypeBits,
+            app->gpu.physical, memory.memoryTypeBits,
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
     };
     need_vk("vkAllocateMemory(UI staging)",
-            vkAllocateMemory(app->device, &allocation, NULL,
+            vkAllocateMemory(app->gpu.device, &allocation, NULL,
                              &app->ui_staging_memory));
     need_vk("vkBindBufferMemory(UI staging)",
-            vkBindBufferMemory(app->device, app->ui_staging_buffer,
+            vkBindBufferMemory(app->gpu.device, app->ui_staging_buffer,
                                app->ui_staging_memory, 0));
     need_vk("vkMapMemory(UI staging)",
-            vkMapMemory(app->device, app->ui_staging_memory, 0,
+            vkMapMemory(app->gpu.device, app->ui_staging_memory, 0,
                         UI_BYTES, 0, (void **)&app->ui_pixels));
     app->ui_dirty = true;
 }
@@ -2202,10 +1762,10 @@ static void upload_ui(struct app *app, const uint32_t *pixels)
         need(index < app->ui_image_count, "invalid UI swapchain index");
     }
     need_vk("vkWaitForFences(UI)",
-            vkWaitForFences(app->device, 1, &app->ui_fence,
+            vkWaitForFences(app->gpu.device, 1, &app->ui_fence,
                             VK_TRUE, UINT64_C(5000000000)));
     need_vk("vkResetFences(UI)",
-            vkResetFences(app->device, 1, &app->ui_fence));
+            vkResetFences(app->gpu.device, 1, &app->ui_fence));
     memcpy(app->ui_pixels, pixels, UI_BYTES);
     need_vk("vkResetCommandBuffer(UI)",
             vkResetCommandBuffer(app->ui_command, 0));
@@ -2226,9 +1786,9 @@ static void upload_ui(struct app *app, const uint32_t *pixels)
         .pCommandBuffers = &app->ui_command,
     };
     need_vk("vkQueueSubmit(UI)",
-            vkQueueSubmit(app->queue, 1, &submit, app->ui_fence));
+            vkQueueSubmit(app->gpu.queue, 1, &submit, app->ui_fence));
     need_vk("vkWaitForFences(UI completion)",
-            vkWaitForFences(app->device, 1, &app->ui_fence,
+            vkWaitForFences(app->gpu.device, 1, &app->ui_fence,
                             VK_TRUE, UINT64_C(5000000000)));
     app->ui_image_initialized[index] = true;
     XrSwapchainImageReleaseInfo release = {
@@ -2239,7 +1799,6 @@ static void upload_ui(struct app *app, const uint32_t *pixels)
                 xrReleaseSwapchainImage(app->ui_swapchain, &release));
 }
 
-static double monotonic_seconds(void);
 static void timing_ui(struct app *app, double started);
 
 static void *panel_worker(void *argument)
@@ -2413,51 +1972,51 @@ static void write_video_descriptor(struct app *app, VkDescriptorSet set,
          .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
          .pBufferInfo = &disparity},
     };
-    vkUpdateDescriptorSets(app->device, 1, &writes[3], 0, NULL);
+    vkUpdateDescriptorSets(app->gpu.device, 1, &writes[3], 0, NULL);
     if (buffer->tp10) {
-        vkUpdateDescriptorSets(app->device, 1, &writes[0], 0, NULL);
-        vkUpdateDescriptorSets(app->device, 1, &writes[2], 0, NULL);
+        vkUpdateDescriptorSets(app->gpu.device, 1, &writes[0], 0, NULL);
+        vkUpdateDescriptorSets(app->gpu.device, 1, &writes[2], 0, NULL);
     } else {
-        vkUpdateDescriptorSets(app->device, 2, writes, 0, NULL);
+        vkUpdateDescriptorSets(app->gpu.device, 2, writes, 0, NULL);
     }
 }
 
 static void create_render_resources(struct app *app)
 {
     VkCommandPoolCreateInfo pool = {.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
-        .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT, .queueFamilyIndex = app->queue_family};
-    need_vk("vkCreateCommandPool", vkCreateCommandPool(app->device, &pool, NULL, &app->command_pool));
+        .flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT, .queueFamilyIndex = app->gpu.queue_family};
+    need_vk("vkCreateCommandPool", vkCreateCommandPool(app->gpu.device, &pool, NULL, &app->command_pool));
     VkCommandBufferAllocateInfo commands = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
         .commandPool = app->command_pool, .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY, .commandBufferCount = 1};
-    need_vk("vkAllocateCommandBuffers", vkAllocateCommandBuffers(app->device, &commands, &app->command));
+    need_vk("vkAllocateCommandBuffers", vkAllocateCommandBuffers(app->gpu.device, &commands, &app->command));
     VkFenceCreateInfo fence = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO, .flags = VK_FENCE_CREATE_SIGNALED_BIT};
-    need_vk("vkCreateFence", vkCreateFence(app->device, &fence, NULL, &app->fence));
+    need_vk("vkCreateFence", vkCreateFence(app->gpu.device, &fence, NULL, &app->fence));
     create_pipeline(app);
     VkBufferCreateInfo buffer = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .size = 2 * UBO_STRIDE, .usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
-    need_vk("vkCreateBuffer(uniform)", vkCreateBuffer(app->device, &buffer, NULL, &app->uniform_buffer));
+    need_vk("vkCreateBuffer(uniform)", vkCreateBuffer(app->gpu.device, &buffer, NULL, &app->uniform_buffer));
     VkMemoryRequirements requirements;
-    vkGetBufferMemoryRequirements(app->device, app->uniform_buffer, &requirements);
+    vkGetBufferMemoryRequirements(app->gpu.device, app->uniform_buffer, &requirements);
     VkMemoryAllocateInfo allocation = {.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
         .allocationSize = requirements.size,
-        .memoryTypeIndex = memory_type(app->physical, requirements.memoryTypeBits,
+        .memoryTypeIndex = memory_type(app->gpu.physical, requirements.memoryTypeBits,
                                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)};
-    need_vk("vkAllocateMemory(uniform)", vkAllocateMemory(app->device, &allocation, NULL, &app->uniform_memory));
-    need_vk("vkBindBufferMemory(uniform)", vkBindBufferMemory(app->device, app->uniform_buffer, app->uniform_memory, 0));
-    need_vk("vkMapMemory(uniform)", vkMapMemory(app->device, app->uniform_memory, 0, VK_WHOLE_SIZE, 0, &app->uniform_mapping));
+    need_vk("vkAllocateMemory(uniform)", vkAllocateMemory(app->gpu.device, &allocation, NULL, &app->uniform_memory));
+    need_vk("vkBindBufferMemory(uniform)", vkBindBufferMemory(app->gpu.device, app->uniform_buffer, app->uniform_memory, 0));
+    need_vk("vkMapMemory(uniform)", vkMapMemory(app->gpu.device, app->uniform_memory, 0, VK_WHOLE_SIZE, 0, &app->uniform_mapping));
     VkBufferCreateInfo disparity = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .size = sizeof(struct disparity_result),
         .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE};
-    need_vk("vkCreateBuffer(disparity)", vkCreateBuffer(app->device, &disparity, NULL, &app->disparity_buffer));
-    vkGetBufferMemoryRequirements(app->device, app->disparity_buffer, &requirements);
+    need_vk("vkCreateBuffer(disparity)", vkCreateBuffer(app->gpu.device, &disparity, NULL, &app->disparity_buffer));
+    vkGetBufferMemoryRequirements(app->gpu.device, app->disparity_buffer, &requirements);
     allocation.allocationSize = requirements.size;
-    allocation.memoryTypeIndex = memory_type(app->physical, requirements.memoryTypeBits,
+    allocation.memoryTypeIndex = memory_type(app->gpu.physical, requirements.memoryTypeBits,
         VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    need_vk("vkAllocateMemory(disparity)", vkAllocateMemory(app->device, &allocation, NULL, &app->disparity_memory));
-    need_vk("vkBindBufferMemory(disparity)", vkBindBufferMemory(app->device, app->disparity_buffer, app->disparity_memory, 0));
-    need_vk("vkMapMemory(disparity)", vkMapMemory(app->device, app->disparity_memory, 0, VK_WHOLE_SIZE, 0, &app->disparity_mapping));
+    need_vk("vkAllocateMemory(disparity)", vkAllocateMemory(app->gpu.device, &allocation, NULL, &app->disparity_memory));
+    need_vk("vkBindBufferMemory(disparity)", vkBindBufferMemory(app->gpu.device, app->disparity_buffer, app->disparity_memory, 0));
+    need_vk("vkMapMemory(disparity)", vkMapMemory(app->gpu.device, app->disparity_memory, 0, VK_WHOLE_SIZE, 0, &app->disparity_mapping));
     /* A set for every possible buffer (the count varies per stream) plus
      * one extra, which keeps a frame on screen across a session restart
      * while the regular buffers are imported again. */
@@ -2473,7 +2032,7 @@ static void create_render_resources(struct app *app)
     VkDescriptorPoolCreateInfo descriptor_pool = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
         .maxSets = set_count, .poolSizeCount = 3,
         .pPoolSizes = sizes};
-    need_vk("vkCreateDescriptorPool", vkCreateDescriptorPool(app->device, &descriptor_pool, NULL, &app->descriptor_pool));
+    need_vk("vkCreateDescriptorPool", vkCreateDescriptorPool(app->gpu.device, &descriptor_pool, NULL, &app->descriptor_pool));
     VkDescriptorSetLayout layouts[NV12_IPC_MAX_BUFFERS + 1U];
     VkDescriptorSet sets[NV12_IPC_MAX_BUFFERS + 1U];
     for (uint32_t i = 0; i < set_count; ++i)
@@ -2483,7 +2042,7 @@ static void create_render_resources(struct app *app)
         .descriptorSetCount = set_count,
         .pSetLayouts = layouts};
     need_vk("vkAllocateDescriptorSets",
-            vkAllocateDescriptorSets(app->device, &descriptor_allocate,
+            vkAllocateDescriptorSets(app->gpu.device, &descriptor_allocate,
                                      sets));
     for (uint32_t i = 0; i < NV12_IPC_MAX_BUFFERS; ++i)
         app->video_buffers[i].descriptor_set = sets[i];
@@ -2494,23 +2053,23 @@ static void destroy_video_buffer(struct app *app, struct video_buffer *buffer)
 {
     VkDescriptorSet set = buffer->descriptor_set;
     if (buffer->producer_semaphore)
-        vkDestroySemaphore(app->device, buffer->producer_semaphore, NULL);
+        vkDestroySemaphore(app->gpu.device, buffer->producer_semaphore, NULL);
     if (buffer->view)
-        vkDestroyImageView(app->device, buffer->view, NULL);
+        vkDestroyImageView(app->gpu.device, buffer->view, NULL);
     if (buffer->image)
-        vkDestroyImage(app->device, buffer->image, NULL);
+        vkDestroyImage(app->gpu.device, buffer->image, NULL);
     if (buffer->memory)
-        vkFreeMemory(app->device, buffer->memory, NULL);
+        vkFreeMemory(app->gpu.device, buffer->memory, NULL);
     if (buffer->view_uv)
-        vkDestroyImageView(app->device, buffer->view_uv, NULL);
+        vkDestroyImageView(app->gpu.device, buffer->view_uv, NULL);
     if (buffer->image_uv)
-        vkDestroyImage(app->device, buffer->image_uv, NULL);
+        vkDestroyImage(app->gpu.device, buffer->image_uv, NULL);
     if (buffer->memory_uv)
-        vkFreeMemory(app->device, buffer->memory_uv, NULL);
+        vkFreeMemory(app->gpu.device, buffer->memory_uv, NULL);
     if (buffer->host_buffer)
-        vkDestroyBuffer(app->device, buffer->host_buffer, NULL);
+        vkDestroyBuffer(app->gpu.device, buffer->host_buffer, NULL);
     if (buffer->host_memory)
-        vkFreeMemory(app->device, buffer->host_memory, NULL);
+        vkFreeMemory(app->gpu.device, buffer->host_memory, NULL);
     if (buffer->host_mapping)
         munmap(buffer->host_mapping, buffer->host_size);
     if (buffer->dma_buf_fd >= 0)
@@ -2523,7 +2082,7 @@ static void destroy_video_buffer(struct app *app, struct video_buffer *buffer)
  * presenting the held frame until the first frame of the new stream. */
 static void hold_current_frame(struct app *app)
 {
-    need_vk("vkDeviceWaitIdle(hold)", vkDeviceWaitIdle(app->device));
+    need_vk("vkDeviceWaitIdle(hold)", vkDeviceWaitIdle(app->gpu.device));
     int keep = app->current_video_index;
     if (keep >= 0) {
         discard_held_frame(app);
@@ -2548,7 +2107,7 @@ static void discard_held_frame(struct app *app)
 {
     if (!app->has_held)
         return;
-    need_vk("vkDeviceWaitIdle(discard held)", vkDeviceWaitIdle(app->device));
+    need_vk("vkDeviceWaitIdle(discard held)", vkDeviceWaitIdle(app->gpu.device));
     VkDescriptorSet set = app->held.descriptor_set;
     destroy_video_buffer(app, &app->held);
     app->spare_set = set;
@@ -2715,7 +2274,7 @@ static void read_boolean(struct app *app, XrAction action, XrPath hand,
     };
     *state = (XrActionStateBoolean){.type = XR_TYPE_ACTION_STATE_BOOLEAN};
     need_xr("xrGetActionStateBoolean",
-            xrGetActionStateBoolean(app->session, &info, state));
+            xrGetActionStateBoolean(app->xr.session, &info, state));
 }
 
 /* Horizontal thumbstick flicks: -1/+1 once per deflection past the
@@ -2729,7 +2288,7 @@ static int read_stick(struct app *app, unsigned hand)
     };
     XrActionStateVector2f state = {.type = XR_TYPE_ACTION_STATE_VECTOR2F};
     need_xr("xrGetActionStateVector2f",
-            xrGetActionStateVector2f(app->session, &info, &state));
+            xrGetActionStateVector2f(app->xr.session, &info, &state));
     float x = state.isActive ? state.currentState.x : 0.0f;
     float y = state.isActive ? state.currentState.y : 0.0f;
     int direction = app->stick_direction[hand];
@@ -2777,7 +2336,7 @@ static void read_select(struct app *app, unsigned hand,
     };
     XrActionStateFloat state = {.type = XR_TYPE_ACTION_STATE_FLOAT};
     need_xr("xrGetActionStateFloat",
-            xrGetActionStateFloat(app->session, &info, &state));
+            xrGetActionStateFloat(app->xr.session, &info, &state));
     input->select_edge = button_update(&app->select[hand], state.isActive,
                                        state.currentState,
                                        &input->select_held);
@@ -2796,8 +2355,6 @@ static bool held(const XrActionStateBoolean *state)
 
 /* Show the panel again. If it is far outside the gaze cone it is moved in
  * front of the viewer, otherwise it keeps its world position. */
-static double monotonic_seconds(void);
-
 static void show_panel(struct app *app, const XrSpaceLocation *head,
                        bool head_valid)
 {
@@ -2886,7 +2443,7 @@ static void read_stick_directions(struct app *app, unsigned hand,
     };
     XrActionStateVector2f state = {.type = XR_TYPE_ACTION_STATE_VECTOR2F};
     need_xr("xrGetActionStateVector2f",
-            xrGetActionStateVector2f(app->session, &info, &state));
+            xrGetActionStateVector2f(app->xr.session, &info, &state));
     float x = state.isActive ? state.currentState.x : 0.0f;
     float y = state.isActive ? state.currentState.y : 0.0f;
     const float values[4] = {-x, x, y, -y}; /* left, right, up, down */
@@ -3142,7 +2699,7 @@ static void read_grips(struct app *app, const struct hand_input hands[2],
         };
         XrActionStateFloat state = {.type = XR_TYPE_ACTION_STATE_FLOAT};
         need_xr("xrGetActionStateFloat(grip)",
-                xrGetActionStateFloat(app->session, &info, &state));
+                xrGetActionStateFloat(app->xr.session, &info, &state));
         float value = state.isActive ? state.currentState : 0.0f;
         app->grip_value[hand] = value;
         app->grip_value_down[hand] =
@@ -3261,7 +2818,7 @@ static bool apply_setting(struct app *app, int action)
         app->passthrough = action == PLAYER_UI_PASSTHROUGH + 1;
         settings_set_bool("passthrough", app->passthrough);
         printf("passthrough=%d supported=%d\n", app->passthrough,
-               app->alpha_blend_supported);
+               app->xr.alpha_blend_supported);
     } else if (action == PLAYER_UI_KEY_PICK) {
         app->key_picking = !app->key_picking;
         app->key_pick_request = false;
@@ -3277,7 +2834,7 @@ static bool apply_setting(struct app *app, int action)
         app->passthrough = !app->passthrough;
         settings_set_bool("passthrough", app->passthrough);
         printf("passthrough=%d supported=%d\n", app->passthrough,
-               app->alpha_blend_supported);
+               app->xr.alpha_blend_supported);
     } else if ((action >= PLAYER_UI_PREVIEW_MODE &&
                 action <= PLAYER_UI_PREVIEW_MODE + 1) ||
                (action >= PLAYER_UI_PREVIEW_FOV &&
@@ -3324,10 +2881,10 @@ static void sync_player_input(struct app *app, XrTime time)
         .countActiveActionSets = 1,
         .activeActionSets = &active,
     };
-    need_xr("xrSyncActions", xrSyncActions(app->session, &sync));
+    need_xr("xrSyncActions", xrSyncActions(app->xr.session, &sync));
     XrSpaceLocation head = {.type = XR_TYPE_SPACE_LOCATION};
     need_xr("xrLocateSpace(player head)",
-            xrLocateSpace(app->view_space, app->space, time, &head));
+            xrLocateSpace(app->xr.view_space, app->xr.space, time, &head));
     const XrSpaceLocationFlags valid =
         XR_SPACE_LOCATION_POSITION_VALID_BIT |
         XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
@@ -3342,11 +2899,11 @@ static void sync_player_input(struct app *app, XrTime time)
         };
         XrActionStatePose pose = {.type = XR_TYPE_ACTION_STATE_POSE};
         need_xr("xrGetActionStatePose",
-                xrGetActionStatePose(app->session, &pose_info, &pose));
+                xrGetActionStatePose(app->xr.session, &pose_info, &pose));
         if (pose.isActive) {
             XrSpaceLocation location = {.type = XR_TYPE_SPACE_LOCATION};
             need_xr("xrLocateSpace(player aim)",
-                    xrLocateSpace(app->aim_spaces[hand], app->space,
+                    xrLocateSpace(app->aim_spaces[hand], app->xr.space,
                                   time, &location));
             if ((location.locationFlags & valid) == valid) {
                 hands[hand].aim_valid = true;
@@ -3619,7 +3176,7 @@ static XrCompositionLayerQuad make_ui_layer(const struct app *app)
     return (XrCompositionLayerQuad){
         .type = XR_TYPE_COMPOSITION_LAYER_QUAD,
         .layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT,
-        .space = app->space,
+        .space = app->xr.space,
         .eyeVisibility = XR_EYE_VISIBILITY_BOTH,
         .subImage = {
             .swapchain = app->ui_swapchain,
@@ -3673,14 +3230,14 @@ static void create_browser_texture(struct app *app)
         .commandBufferCount = 1,
     };
     need_vk("vkAllocateCommandBuffers(browser)",
-            vkAllocateCommandBuffers(app->device, &commands,
+            vkAllocateCommandBuffers(app->gpu.device, &commands,
                                      &app->browser_command));
     VkFenceCreateInfo fence = {
         .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
         .flags = VK_FENCE_CREATE_SIGNALED_BIT,
     };
     need_vk("vkCreateFence(browser)",
-            vkCreateFence(app->device, &fence, NULL, &app->browser_fence));
+            vkCreateFence(app->gpu.device, &fence, NULL, &app->browser_fence));
     const VkDeviceSize bytes = (VkDeviceSize)BROWSER_UI_WIDTH *
                                BROWSER_UI_HEIGHT * 4U;
     VkBufferCreateInfo buffer = {
@@ -3690,27 +3247,27 @@ static void create_browser_texture(struct app *app)
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
     };
     need_vk("vkCreateBuffer(browser staging)",
-            vkCreateBuffer(app->device, &buffer, NULL,
+            vkCreateBuffer(app->gpu.device, &buffer, NULL,
                            &app->browser_staging_buffer));
     VkMemoryRequirements memory;
-    vkGetBufferMemoryRequirements(app->device, app->browser_staging_buffer,
+    vkGetBufferMemoryRequirements(app->gpu.device, app->browser_staging_buffer,
                                   &memory);
     VkMemoryAllocateInfo allocation = {
         .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
         .allocationSize = memory.size,
         .memoryTypeIndex = memory_type(
-            app->physical, memory.memoryTypeBits,
+            app->gpu.physical, memory.memoryTypeBits,
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
     };
     need_vk("vkAllocateMemory(browser staging)",
-            vkAllocateMemory(app->device, &allocation, NULL,
+            vkAllocateMemory(app->gpu.device, &allocation, NULL,
                              &app->browser_staging_memory));
     need_vk("vkBindBufferMemory(browser staging)",
-            vkBindBufferMemory(app->device, app->browser_staging_buffer,
+            vkBindBufferMemory(app->gpu.device, app->browser_staging_buffer,
                                app->browser_staging_memory, 0));
     need_vk("vkMapMemory(browser staging)",
-            vkMapMemory(app->device, app->browser_staging_memory, 0, bytes, 0,
+            vkMapMemory(app->gpu.device, app->browser_staging_memory, 0, bytes, 0,
                         (void **)&app->browser_pixels));
     app->browser_cpu = calloc(1, (size_t)bytes);
     need(app->browser_cpu != NULL, "allocate browser pixels");
@@ -3743,25 +3300,25 @@ static void fill_static_swapchain(struct app *app, XrSwapchain swapchain,
     };
     VkBuffer buffer;
     need_vk("vkCreateBuffer(static)",
-            vkCreateBuffer(app->device, &buffer_info, NULL, &buffer));
+            vkCreateBuffer(app->gpu.device, &buffer_info, NULL, &buffer));
     VkMemoryRequirements requirements;
-    vkGetBufferMemoryRequirements(app->device, buffer, &requirements);
+    vkGetBufferMemoryRequirements(app->gpu.device, buffer, &requirements);
     VkMemoryAllocateInfo allocation = {
         .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
         .allocationSize = requirements.size,
         .memoryTypeIndex = memory_type(
-            app->physical, requirements.memoryTypeBits,
+            app->gpu.physical, requirements.memoryTypeBits,
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
     };
     VkDeviceMemory memory;
     need_vk("vkAllocateMemory(static)",
-            vkAllocateMemory(app->device, &allocation, NULL, &memory));
+            vkAllocateMemory(app->gpu.device, &allocation, NULL, &memory));
     need_vk("vkBindBufferMemory(static)",
-            vkBindBufferMemory(app->device, buffer, memory, 0));
+            vkBindBufferMemory(app->gpu.device, buffer, memory, 0));
     void *mapping;
     need_vk("vkMapMemory(static)",
-            vkMapMemory(app->device, memory, 0, bytes, 0, &mapping));
+            vkMapMemory(app->gpu.device, memory, 0, bytes, 0, &mapping));
     memcpy(mapping, pixels, (size_t)bytes);
     VkCommandBufferAllocateInfo commands = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
@@ -3771,11 +3328,11 @@ static void fill_static_swapchain(struct app *app, XrSwapchain swapchain,
     };
     VkCommandBuffer command;
     need_vk("vkAllocateCommandBuffers(static)",
-            vkAllocateCommandBuffers(app->device, &commands, &command));
+            vkAllocateCommandBuffers(app->gpu.device, &commands, &command));
     VkFenceCreateInfo fence_info = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
     VkFence fence;
     need_vk("vkCreateFence(static)",
-            vkCreateFence(app->device, &fence_info, NULL, &fence));
+            vkCreateFence(app->gpu.device, &fence_info, NULL, &fence));
     for (uint32_t n = 0; n < count; ++n) {
         XrSwapchainImageAcquireInfo acquire = {
             .type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
@@ -3824,12 +3381,12 @@ static void fill_static_swapchain(struct app *app, XrSwapchain swapchain,
                                .commandBufferCount = 1,
                                .pCommandBuffers = &command};
         need_vk("vkQueueSubmit(static)",
-                vkQueueSubmit(app->queue, 1, &submit, fence));
+                vkQueueSubmit(app->gpu.queue, 1, &submit, fence));
         need_vk("vkWaitForFences(static)",
-                vkWaitForFences(app->device, 1, &fence, VK_TRUE,
+                vkWaitForFences(app->gpu.device, 1, &fence, VK_TRUE,
                                 UINT64_C(5000000000)));
         need_vk("vkResetFences(static)",
-                vkResetFences(app->device, 1, &fence));
+                vkResetFences(app->gpu.device, 1, &fence));
         need_vk("vkResetCommandBuffer(static)",
                 vkResetCommandBuffer(command, 0));
         XrSwapchainImageReleaseInfo release = {
@@ -3837,11 +3394,11 @@ static void fill_static_swapchain(struct app *app, XrSwapchain swapchain,
         need_xr("xrReleaseSwapchainImage(static)",
                 xrReleaseSwapchainImage(swapchain, &release));
     }
-    vkDestroyFence(app->device, fence, NULL);
-    vkFreeCommandBuffers(app->device, app->command_pool, 1, &command);
-    vkUnmapMemory(app->device, memory);
-    vkDestroyBuffer(app->device, buffer, NULL);
-    vkFreeMemory(app->device, memory, NULL);
+    vkDestroyFence(app->gpu.device, fence, NULL);
+    vkFreeCommandBuffers(app->gpu.device, app->command_pool, 1, &command);
+    vkUnmapMemory(app->gpu.device, memory);
+    vkDestroyBuffer(app->gpu.device, buffer, NULL);
+    vkFreeMemory(app->gpu.device, memory, NULL);
 }
 
 #define POINTER_PIXELS 64U
@@ -3859,12 +3416,12 @@ static void create_panel_pipeline(struct app *app)
         .addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
         .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
         .addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
-        .anisotropyEnable = app->panel_anisotropy > 1.0f,
-        .maxAnisotropy = app->panel_anisotropy,
+        .anisotropyEnable = app->gpu.panel_anisotropy > 1.0f,
+        .maxAnisotropy = app->gpu.panel_anisotropy,
         .maxLod = VK_LOD_CLAMP_NONE,
     };
     need_vk("vkCreateSampler(panel)",
-            vkCreateSampler(app->device, &sampler, NULL,
+            vkCreateSampler(app->gpu.device, &sampler, NULL,
                             &app->panel_sampler));
     VkDescriptorSetLayoutBinding binding = {
         .binding = 0,
@@ -3877,7 +3434,7 @@ static void create_panel_pipeline(struct app *app)
         .bindingCount = 1, .pBindings = &binding,
     };
     need_vk("vkCreateDescriptorSetLayout(panel)",
-            vkCreateDescriptorSetLayout(app->device, &layout, NULL,
+            vkCreateDescriptorSetLayout(app->gpu.device, &layout, NULL,
                                         &app->panel_descriptor_layout));
     VkPushConstantRange push = {
         .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
@@ -3889,7 +3446,7 @@ static void create_panel_pipeline(struct app *app)
         .pushConstantRangeCount = 1, .pPushConstantRanges = &push,
     };
     need_vk("vkCreatePipelineLayout(panel)",
-            vkCreatePipelineLayout(app->device, &pipeline_layout, NULL,
+            vkCreatePipelineLayout(app->gpu.device, &pipeline_layout, NULL,
                                    &app->panel_pipeline_layout));
     VkDescriptorPoolSize size = {
         .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
@@ -3900,7 +3457,7 @@ static void create_panel_pipeline(struct app *app)
         .maxSets = 2, .poolSizeCount = 1, .pPoolSizes = &size,
     };
     need_vk("vkCreateDescriptorPool(panel)",
-            vkCreateDescriptorPool(app->device, &pool, NULL,
+            vkCreateDescriptorPool(app->gpu.device, &pool, NULL,
                                    &app->panel_descriptor_pool));
     struct ui_texture *textures[2] = {&app->ui_texture, &app->browser_texture};
     for (size_t i = 0; i < ARRAY_COUNT(textures); ++i) {
@@ -3911,7 +3468,7 @@ static void create_panel_pipeline(struct app *app)
             .pSetLayouts = &app->panel_descriptor_layout,
         };
         need_vk("vkAllocateDescriptorSets(panel)",
-                vkAllocateDescriptorSets(app->device, &allocate,
+                vkAllocateDescriptorSets(app->gpu.device, &allocate,
                                          &textures[i]->descriptor_set));
         VkDescriptorImageInfo image = {
             .imageView = textures[i]->view,
@@ -3924,10 +3481,10 @@ static void create_panel_pipeline(struct app *app)
             .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
             .pImageInfo = &image,
         };
-        vkUpdateDescriptorSets(app->device, 1, &write, 0, NULL);
+        vkUpdateDescriptorSets(app->gpu.device, 1, &write, 0, NULL);
     }
-    VkShaderModule vert = shader(app->device, "ui-panel.vert.spv");
-    VkShaderModule frag = shader(app->device, "ui-panel.frag.spv");
+    VkShaderModule vert = shader(app->gpu.device, "ui-panel.vert.spv");
+    VkShaderModule frag = shader(app->gpu.device, "ui-panel.frag.spv");
     VkPipelineShaderStageCreateInfo stages[2] = {
         {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
          .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = vert, .pName = "main"},
@@ -3989,10 +3546,10 @@ static void create_panel_pipeline(struct app *app)
         .renderPass = app->overlay_pass,
     };
     need_vk("vkCreateGraphicsPipelines(panel)",
-            vkCreateGraphicsPipelines(app->device, VK_NULL_HANDLE, 1,
+            vkCreateGraphicsPipelines(app->gpu.device, VK_NULL_HANDLE, 1,
                                       &pipeline, NULL, &app->panel_pipeline));
-    vkDestroyShaderModule(app->device, vert, NULL);
-    vkDestroyShaderModule(app->device, frag, NULL);
+    vkDestroyShaderModule(app->gpu.device, vert, NULL);
+    vkDestroyShaderModule(app->gpu.device, frag, NULL);
 }
 
 /* Model matrix of a panel quad (unit square in the shader) with the pose
@@ -4025,7 +3582,7 @@ static void create_pointer_texture(struct app *app)
         .mipCount = 1,
     };
     need_xr("xrCreateSwapchain(pointer)",
-            xrCreateSwapchain(app->session, &info, &app->pointer_swapchain));
+            xrCreateSwapchain(app->xr.session, &info, &app->pointer_swapchain));
     uint8_t pixels[POINTER_PIXELS * POINTER_PIXELS * 4] = {0};
     struct ui_canvas canvas = {pixels, POINTER_PIXELS, POINTER_PIXELS,
                                app->ui_bgra};
@@ -4042,7 +3599,7 @@ static XrCompositionLayerQuad make_pointer_layer(const struct app *app)
     return (XrCompositionLayerQuad){
         .type = XR_TYPE_COMPOSITION_LAYER_QUAD,
         .layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT,
-        .space = app->space,
+        .space = app->xr.space,
         .eyeVisibility = XR_EYE_VISIBILITY_BOTH,
         .subImage = {
             .swapchain = app->pointer_swapchain,
@@ -4076,10 +3633,10 @@ static void upload_browser(struct app *app)
         need(index < app->browser_image_count, "invalid browser swapchain index");
     }
     need_vk("vkWaitForFences(browser)",
-            vkWaitForFences(app->device, 1, &app->browser_fence, VK_TRUE,
+            vkWaitForFences(app->gpu.device, 1, &app->browser_fence, VK_TRUE,
                             UINT64_C(5000000000)));
     need_vk("vkResetFences(browser)",
-            vkResetFences(app->device, 1, &app->browser_fence));
+            vkResetFences(app->gpu.device, 1, &app->browser_fence));
     memcpy(app->browser_pixels, app->browser_cpu,
            (size_t)BROWSER_UI_WIDTH * BROWSER_UI_HEIGHT * 4U);
     need_vk("vkResetCommandBuffer(browser)",
@@ -4104,9 +3661,9 @@ static void upload_browser(struct app *app)
     /* SteamVR samples the image as soon as it is released, so the copy must
      * be complete by then (otherwise it shows stale or empty content). */
     need_vk("vkQueueSubmit(browser)",
-            vkQueueSubmit(app->queue, 1, &submit, app->browser_fence));
+            vkQueueSubmit(app->gpu.queue, 1, &submit, app->browser_fence));
     need_vk("vkWaitForFences(browser completion)",
-            vkWaitForFences(app->device, 1, &app->browser_fence, VK_TRUE,
+            vkWaitForFences(app->gpu.device, 1, &app->browser_fence, VK_TRUE,
                             UINT64_C(5000000000)));
     app->browser_image_initialized[index] = true;
     XrSwapchainImageReleaseInfo release = {
@@ -4122,7 +3679,7 @@ static XrCompositionLayerQuad make_browser_layer(const struct app *app)
     return (XrCompositionLayerQuad){
         .type = XR_TYPE_COMPOSITION_LAYER_QUAD,
         .layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT,
-        .space = app->space,
+        .space = app->xr.space,
         .eyeVisibility = XR_EYE_VISIBILITY_BOTH,
         .subImage = {
             .swapchain = app->browser_swapchain,
@@ -4155,7 +3712,7 @@ static void end_playback(struct app *app)
 {
     app->popup_open = false;
     video_import_pending(app, true);
-    need_vk("vkDeviceWaitIdle(end playback)", vkDeviceWaitIdle(app->device));
+    need_vk("vkDeviceWaitIdle(end playback)", vkDeviceWaitIdle(app->gpu.device));
     discard_held_frame(app);
     for (uint32_t i = 0; i < app->video_buffer_count; ++i)
         destroy_video_buffer(app, &app->video_buffers[i]);
@@ -4345,7 +3902,7 @@ static void sync_browser_input(struct app *app, XrTime time)
         .countActiveActionSets = 1,
         .activeActionSets = &active,
     };
-    need_xr("xrSyncActions(browser)", xrSyncActions(app->session, &sync));
+    need_xr("xrSyncActions(browser)", xrSyncActions(app->xr.session, &sync));
     const XrSpaceLocationFlags valid =
         XR_SPACE_LOCATION_POSITION_VALID_BIT |
         XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
@@ -4363,7 +3920,7 @@ static void sync_browser_input(struct app *app, XrTime time)
         };
         XrActionStatePose pose = {.type = XR_TYPE_ACTION_STATE_POSE};
         need_xr("xrGetActionStatePose(browser)",
-                xrGetActionStatePose(app->session, &pose_info, &pose));
+                xrGetActionStatePose(app->xr.session, &pose_info, &pose));
         read_select(app, hand, &hands[hand]);
         read_boolean(app, app->squeeze_action, app->hands[hand],
                      &hands[hand].squeeze);
@@ -4376,7 +3933,7 @@ static void sync_browser_input(struct app *app, XrTime time)
             continue;
         XrSpaceLocation location = {.type = XR_TYPE_SPACE_LOCATION};
         need_xr("xrLocateSpace(browser aim)",
-                xrLocateSpace(app->aim_spaces[hand], app->space, time,
+                xrLocateSpace(app->aim_spaces[hand], app->xr.space, time,
                               &location));
         if ((location.locationFlags & valid) != valid)
             continue;
@@ -4484,24 +4041,17 @@ static void sync_browser_input(struct app *app, XrTime time)
 #define AUTOFOCUS_MIN_VARIANCE 2e-4f
 #define AUTOFOCUS_EVERY_FRAMES 3U
 
-static double monotonic_seconds(void)
-{
-    struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    return (double)now.tv_sec + (double)now.tv_nsec / 1e9;
-}
-
 /* Gaze ray (eye tracking) or, without it, the head's forward ray. */
 static XrVector3f view_direction(struct app *app, XrPosef head, XrTime time,
                                  bool *gaze)
 {
     *gaze = false;
-    if (app->has_eye_gaze) {
+    if (app->xr.has_eye_gaze) {
         XrSpaceLocation location = {.type = XR_TYPE_SPACE_LOCATION};
         const XrSpaceLocationFlags tracked =
             XR_SPACE_LOCATION_ORIENTATION_VALID_BIT |
             XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
-        if (XR_SUCCEEDED(xrLocateSpace(app->gaze_space, app->space, time,
+        if (XR_SUCCEEDED(xrLocateSpace(app->gaze_space, app->xr.space, time,
                                        &location)) &&
             (location.locationFlags & tracked) == tracked) {
             *gaze = true;
@@ -4696,7 +4246,7 @@ static void create_gaze_markers(struct app *app)
             .faceCount = 1, .arraySize = 1, .mipCount = 1,
         };
         need_xr("xrCreateSwapchain(gaze marker)",
-                xrCreateSwapchain(app->session, &info,
+                xrCreateSwapchain(app->xr.session, &info,
                                   &app->gaze_marker[i]));
         static uint8_t pixels[GAZE_MARKER_WIDTH * GAZE_MARKER_HEIGHT * 4];
         memset(pixels, 0, sizeof(pixels));
@@ -4719,7 +4269,7 @@ static XrCompositionLayerQuad make_gaze_marker_layer(const struct app *app)
     return (XrCompositionLayerQuad){
         .type = XR_TYPE_COMPOSITION_LAYER_QUAD,
         .layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT,
-        .space = app->space,
+        .space = app->xr.space,
         .eyeVisibility = XR_EYE_VISIBILITY_BOTH,
         .subImage = {
             .swapchain = app->gaze_marker[app->autofocus_gaze ? 0 : 1],
@@ -4742,7 +4292,7 @@ static void update_debug_text(struct app *app)
     app->debug_text_time = now;
     char text[sizeof(app->debug_text)];
     const char *source = app->autofocus_gaze ? tr("eye")
-                         : app->has_eye_gaze ? tr("head (no gaze)")
+                         : app->xr.has_eye_gaze ? tr("head (no gaze)")
                                              : tr("head (no eye tracking)");
     char focus[24];
     snprintf(focus, sizeof(focus), "%s", tr("off"));
@@ -4809,31 +4359,31 @@ static void make_buffer(struct app *app, VkDeviceSize size,
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
     };
     need_vk("vkCreateBuffer(overlay)",
-            vkCreateBuffer(app->device, &info, NULL, buffer));
+            vkCreateBuffer(app->gpu.device, &info, NULL, buffer));
     VkMemoryRequirements requirements;
-    vkGetBufferMemoryRequirements(app->device, *buffer, &requirements);
+    vkGetBufferMemoryRequirements(app->gpu.device, *buffer, &requirements);
     VkMemoryAllocateInfo allocation = {
         .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
         .allocationSize = requirements.size,
         .memoryTypeIndex = memory_type(
-            app->physical, requirements.memoryTypeBits,
+            app->gpu.physical, requirements.memoryTypeBits,
             VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
                 VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
     };
     need_vk("vkAllocateMemory(overlay buffer)",
-            vkAllocateMemory(app->device, &allocation, NULL, memory));
+            vkAllocateMemory(app->gpu.device, &allocation, NULL, memory));
     need_vk("vkBindBufferMemory(overlay)",
-            vkBindBufferMemory(app->device, *buffer, *memory, 0));
+            vkBindBufferMemory(app->gpu.device, *buffer, *memory, 0));
     need_vk("vkMapMemory(overlay)",
-            vkMapMemory(app->device, *memory, 0, size, 0, mapping));
+            vkMapMemory(app->gpu.device, *memory, 0, size, 0, mapping));
 }
 
 static VkPipeline overlay_pipeline(struct app *app, const char *vertex_path,
                                    const char *fragment_path,
                                    VkPipelineLayout layout, bool mesh)
 {
-    VkShaderModule vert = shader(app->device, vertex_path);
-    VkShaderModule frag = shader(app->device, fragment_path);
+    VkShaderModule vert = shader(app->gpu.device, vertex_path);
+    VkShaderModule frag = shader(app->gpu.device, fragment_path);
     VkPipelineShaderStageCreateInfo stages[2] = {
         {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
          .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = vert, .pName = "main"},
@@ -4913,10 +4463,10 @@ static VkPipeline overlay_pipeline(struct app *app, const char *vertex_path,
     };
     VkPipeline pipeline = VK_NULL_HANDLE;
     need_vk("vkCreateGraphicsPipelines(overlay)",
-            vkCreateGraphicsPipelines(app->device, VK_NULL_HANDLE, 1, &info,
+            vkCreateGraphicsPipelines(app->gpu.device, VK_NULL_HANDLE, 1, &info,
                                       NULL, &pipeline));
-    vkDestroyShaderModule(app->device, vert, NULL);
-    vkDestroyShaderModule(app->device, frag, NULL);
+    vkDestroyShaderModule(app->gpu.device, vert, NULL);
+    vkDestroyShaderModule(app->gpu.device, frag, NULL);
     return pipeline;
 }
 
@@ -4924,7 +4474,7 @@ static VkPipeline overlay_pipeline(struct app *app, const char *vertex_path,
  * stayed black): there the overlay is drawn into the eye images, at their
  * resolution, after the video. The Frame (with the Iris decoder) composites
  * the sharper overlay layer. */
-static bool overlay_in_eye_images(void)
+bool overlay_in_eye_images(void)
 {
     return access(DECODED_VIDEO_IRIS_DEVICE, F_OK) != 0;
 }
@@ -4942,30 +4492,30 @@ static void create_overlay(struct app *app)
     uint32_t limit_count = 0;
     need_xr("xrEnumerateViewConfigurationViews(overlay)",
             xrEnumerateViewConfigurationViews(
-                app->xr, app->system,
+                app->xr.instance, app->xr.system,
                 XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO, 2, &limit_count,
                 limits));
     app->overlay_in_eye_images = overlay_in_eye_images();
     if (app->overlay_in_eye_images)
         scale = 1.0f;
-    app->overlay_width = (uint32_t)((float)app->width * scale + 0.5f);
-    app->overlay_height = (uint32_t)((float)app->height * scale + 0.5f);
+    app->overlay_width = (uint32_t)((float)app->xr.width * scale + 0.5f);
+    app->overlay_height = (uint32_t)((float)app->xr.height * scale + 0.5f);
     if (app->overlay_width > limits[0].maxImageRectWidth)
         app->overlay_width = limits[0].maxImageRectWidth;
     if (app->overlay_height > limits[0].maxImageRectHeight)
         app->overlay_height = limits[0].maxImageRectHeight;
     for (uint32_t eye = 0; eye < 2 && app->overlay_in_eye_images; ++eye)
-        app->overlay_image_counts[eye] = app->image_count;
+        app->overlay_image_counts[eye] = app->xr.image_count;
     for (uint32_t eye = 0; eye < 2 && !app->overlay_in_eye_images; ++eye) {
         XrSwapchainCreateInfo swapchain = {
             .type = XR_TYPE_SWAPCHAIN_CREATE_INFO,
             .usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT,
-            .format = app->color_format, .sampleCount = 1,
+            .format = app->xr.color_format, .sampleCount = 1,
             .width = app->overlay_width, .height = app->overlay_height, .faceCount = 1,
             .arraySize = 1, .mipCount = 1,
         };
         need_xr("xrCreateSwapchain(overlay)",
-                xrCreateSwapchain(app->session, &swapchain,
+                xrCreateSwapchain(app->xr.session, &swapchain,
                                   &app->overlay_swapchains[eye]));
         uint32_t *count = &app->overlay_image_counts[eye];
         need_xr("xrEnumerateSwapchainImages(overlay count)",
@@ -4993,27 +4543,27 @@ static void create_overlay(struct app *app)
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
     };
     need_vk("vkCreateImage(overlay depth)",
-            vkCreateImage(app->device, &depth, NULL, &app->overlay_depth));
+            vkCreateImage(app->gpu.device, &depth, NULL, &app->overlay_depth));
     VkMemoryRequirements requirements;
-    vkGetImageMemoryRequirements(app->device, app->overlay_depth,
+    vkGetImageMemoryRequirements(app->gpu.device, app->overlay_depth,
                                  &requirements);
     VkMemoryAllocateInfo allocation = {
         .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
         .allocationSize = requirements.size,
-        .memoryTypeIndex = memory_type(app->physical,
+        .memoryTypeIndex = memory_type(app->gpu.physical,
                                        requirements.memoryTypeBits,
                                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
     };
     need_vk("vkAllocateMemory(overlay depth)",
-            vkAllocateMemory(app->device, &allocation, NULL,
+            vkAllocateMemory(app->gpu.device, &allocation, NULL,
                              &app->overlay_depth_memory));
     need_vk("vkBindImageMemory(overlay depth)",
-            vkBindImageMemory(app->device, app->overlay_depth,
+            vkBindImageMemory(app->gpu.device, app->overlay_depth,
                               app->overlay_depth_memory, 0));
 
     /* Into the eye images the video drawn before stays (load). */
     VkAttachmentDescription attachments[2] = {
-        {.format = app->color_format, .samples = VK_SAMPLE_COUNT_1_BIT,
+        {.format = app->xr.color_format, .samples = VK_SAMPLE_COUNT_1_BIT,
          .loadOp = app->overlay_in_eye_images ? VK_ATTACHMENT_LOAD_OP_LOAD
                                               : VK_ATTACHMENT_LOAD_OP_CLEAR,
          .storeOp = VK_ATTACHMENT_STORE_OP_STORE,
@@ -5065,7 +4615,7 @@ static void create_overlay(struct app *app)
         .dependencyCount = 1, .pDependencies = &dependency,
     };
     need_vk("vkCreateRenderPass(overlay)",
-            vkCreateRenderPass(app->device, &pass, NULL, &app->overlay_pass));
+            vkCreateRenderPass(app->gpu.device, &pass, NULL, &app->overlay_pass));
     for (uint32_t eye = 0; eye < 2; ++eye) {
         VkImageViewCreateInfo view = {
             .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
@@ -5076,7 +4626,7 @@ static void create_overlay(struct app *app)
                                  .layerCount = 1},
         };
         need_vk("vkCreateImageView(overlay depth)",
-                vkCreateImageView(app->device, &view, NULL,
+                vkCreateImageView(app->gpu.device, &view, NULL,
                                   &app->overlay_depth_views[eye]));
     }
     for (uint32_t eye = 0; eye < 2; ++eye)
@@ -5093,7 +4643,7 @@ static void create_overlay(struct app *app)
                 };
                 need_vk("vkCreateFramebuffer(overlay in eye image)",
                         vkCreateFramebuffer(
-                            app->device, &framebuffer, NULL,
+                            app->gpu.device, &framebuffer, NULL,
                             &app->overlay_framebuffers[eye][image]));
                 continue;
             }
@@ -5101,12 +4651,12 @@ static void create_overlay(struct app *app)
                 .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
                 .image = app->overlay_images[eye][image].image,
                 .viewType = VK_IMAGE_VIEW_TYPE_2D,
-                .format = app->color_format,
+                .format = app->xr.color_format,
                 .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                                      .levelCount = 1, .layerCount = 1},
             };
             need_vk("vkCreateImageView(overlay)",
-                    vkCreateImageView(app->device, &view, NULL,
+                    vkCreateImageView(app->gpu.device, &view, NULL,
                                       &app->overlay_views[eye][image]));
             VkImageView views[2] = {app->overlay_views[eye][image],
                                     app->overlay_depth_views[eye]};
@@ -5117,7 +4667,7 @@ static void create_overlay(struct app *app)
                 .height = app->overlay_height, .layers = 1,
             };
             need_vk("vkCreateFramebuffer(overlay)",
-                    vkCreateFramebuffer(app->device, &framebuffer, NULL,
+                    vkCreateFramebuffer(app->gpu.device, &framebuffer, NULL,
                                         &app->overlay_framebuffers[eye][image]));
         }
 
@@ -5131,7 +4681,7 @@ static void create_overlay(struct app *app)
         .maxLod = VK_LOD_CLAMP_NONE,
     };
     need_vk("vkCreateSampler(model)",
-            vkCreateSampler(app->device, &sampler, NULL,
+            vkCreateSampler(app->gpu.device, &sampler, NULL,
                             &app->model_sampler));
     VkDescriptorSetLayoutBinding binding = {
         .binding = 0,
@@ -5144,7 +4694,7 @@ static void create_overlay(struct app *app)
         .bindingCount = 1, .pBindings = &binding,
     };
     need_vk("vkCreateDescriptorSetLayout(model)",
-            vkCreateDescriptorSetLayout(app->device, &layout, NULL,
+            vkCreateDescriptorSetLayout(app->gpu.device, &layout, NULL,
                                         &app->model_descriptor_layout));
     VkDescriptorPoolSize size = {
         .type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
@@ -5156,7 +4706,7 @@ static void create_overlay(struct app *app)
         .pPoolSizes = &size,
     };
     need_vk("vkCreateDescriptorPool(model)",
-            vkCreateDescriptorPool(app->device, &pool, NULL,
+            vkCreateDescriptorPool(app->gpu.device, &pool, NULL,
                                    &app->model_descriptor_pool));
     VkPushConstantRange model_push = {
         .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -5168,7 +4718,7 @@ static void create_overlay(struct app *app)
         .pushConstantRangeCount = 1, .pPushConstantRanges = &model_push,
     };
     need_vk("vkCreatePipelineLayout(model)",
-            vkCreatePipelineLayout(app->device, &model_layout, NULL,
+            vkCreatePipelineLayout(app->gpu.device, &model_layout, NULL,
                                    &app->model_pipeline_layout));
     VkPushConstantRange beam_push = {
         .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -5179,7 +4729,7 @@ static void create_overlay(struct app *app)
         .pushConstantRangeCount = 1, .pPushConstantRanges = &beam_push,
     };
     need_vk("vkCreatePipelineLayout(beam)",
-            vkCreatePipelineLayout(app->device, &beam_layout, NULL,
+            vkCreatePipelineLayout(app->gpu.device, &beam_layout, NULL,
                                    &app->beam_pipeline_layout));
     app->model_pipeline = overlay_pipeline(
         app, "controller-model.vert.spv", "controller-model.frag.spv",
@@ -5199,19 +4749,19 @@ static void create_overlay(struct app *app)
 static void destroy_gpu_model(struct app *app, struct gpu_model *model)
 {
     if (model->texture_view)
-        vkDestroyImageView(app->device, model->texture_view, NULL);
+        vkDestroyImageView(app->gpu.device, model->texture_view, NULL);
     if (model->texture)
-        vkDestroyImage(app->device, model->texture, NULL);
+        vkDestroyImage(app->gpu.device, model->texture, NULL);
     if (model->texture_memory)
-        vkFreeMemory(app->device, model->texture_memory, NULL);
+        vkFreeMemory(app->gpu.device, model->texture_memory, NULL);
     if (model->vertices)
-        vkDestroyBuffer(app->device, model->vertices, NULL);
+        vkDestroyBuffer(app->gpu.device, model->vertices, NULL);
     if (model->vertex_memory)
-        vkFreeMemory(app->device, model->vertex_memory, NULL);
+        vkFreeMemory(app->gpu.device, model->vertex_memory, NULL);
     if (model->indices)
-        vkDestroyBuffer(app->device, model->indices, NULL);
+        vkDestroyBuffer(app->gpu.device, model->indices, NULL);
     if (model->index_memory)
-        vkFreeMemory(app->device, model->index_memory, NULL);
+        vkFreeMemory(app->gpu.device, model->index_memory, NULL);
     free(model->animation);
     gltf_model_free(&model->mesh);
     *model = (struct gpu_model){0};
@@ -5238,21 +4788,21 @@ static bool upload_model_texture(struct app *app, struct gpu_model *model)
         .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
     };
     need_vk("vkCreateImage(model texture)",
-            vkCreateImage(app->device, &image, NULL, &model->texture));
+            vkCreateImage(app->gpu.device, &image, NULL, &model->texture));
     VkMemoryRequirements requirements;
-    vkGetImageMemoryRequirements(app->device, model->texture, &requirements);
+    vkGetImageMemoryRequirements(app->gpu.device, model->texture, &requirements);
     VkMemoryAllocateInfo allocation = {
         .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
         .allocationSize = requirements.size,
-        .memoryTypeIndex = memory_type(app->physical,
+        .memoryTypeIndex = memory_type(app->gpu.physical,
                                        requirements.memoryTypeBits,
                                        VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
     };
     need_vk("vkAllocateMemory(model texture)",
-            vkAllocateMemory(app->device, &allocation, NULL,
+            vkAllocateMemory(app->gpu.device, &allocation, NULL,
                              &model->texture_memory));
     need_vk("vkBindImageMemory(model texture)",
-            vkBindImageMemory(app->device, model->texture,
+            vkBindImageMemory(app->gpu.device, model->texture,
                               model->texture_memory, 0));
     VkDeviceSize bytes = (VkDeviceSize)texture->width * texture->height * 4U;
     VkBuffer staging;
@@ -5268,7 +4818,7 @@ static bool upload_model_texture(struct app *app, struct gpu_model *model)
     };
     VkCommandBuffer command;
     need_vk("vkAllocateCommandBuffers(model)",
-            vkAllocateCommandBuffers(app->device, &allocate, &command));
+            vkAllocateCommandBuffers(app->gpu.device, &allocate, &command));
     VkCommandBufferBeginInfo begin = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
         .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT,
@@ -5284,20 +4834,20 @@ static bool upload_model_texture(struct app *app, struct gpu_model *model)
     VkFenceCreateInfo fence_info = {.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
     VkFence fence;
     need_vk("vkCreateFence(model)",
-            vkCreateFence(app->device, &fence_info, NULL, &fence));
+            vkCreateFence(app->gpu.device, &fence_info, NULL, &fence));
     VkSubmitInfo submit = {
         .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
         .commandBufferCount = 1, .pCommandBuffers = &command,
     };
     need_vk("vkQueueSubmit(model)",
-            vkQueueSubmit(app->queue, 1, &submit, fence));
+            vkQueueSubmit(app->gpu.queue, 1, &submit, fence));
     need_vk("vkWaitForFences(model)",
-            vkWaitForFences(app->device, 1, &fence, VK_TRUE,
+            vkWaitForFences(app->gpu.device, 1, &fence, VK_TRUE,
                             UINT64_C(5000000000)));
-    vkDestroyFence(app->device, fence, NULL);
-    vkFreeCommandBuffers(app->device, app->command_pool, 1, &command);
-    vkDestroyBuffer(app->device, staging, NULL);
-    vkFreeMemory(app->device, staging_memory, NULL);
+    vkDestroyFence(app->gpu.device, fence, NULL);
+    vkFreeCommandBuffers(app->gpu.device, app->command_pool, 1, &command);
+    vkDestroyBuffer(app->gpu.device, staging, NULL);
+    vkFreeMemory(app->gpu.device, staging_memory, NULL);
     VkImageViewCreateInfo view = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
         .image = model->texture, .viewType = VK_IMAGE_VIEW_TYPE_2D,
@@ -5306,7 +4856,7 @@ static bool upload_model_texture(struct app *app, struct gpu_model *model)
                              .levelCount = levels, .layerCount = 1},
     };
     need_vk("vkCreateImageView(model texture)",
-            vkCreateImageView(app->device, &view, NULL,
+            vkCreateImageView(app->gpu.device, &view, NULL,
                               &model->texture_view));
     VkDescriptorSetAllocateInfo set = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
@@ -5315,7 +4865,7 @@ static bool upload_model_texture(struct app *app, struct gpu_model *model)
         .pSetLayouts = &app->model_descriptor_layout,
     };
     need_vk("vkAllocateDescriptorSets(model)",
-            vkAllocateDescriptorSets(app->device, &set, &model->set));
+            vkAllocateDescriptorSets(app->gpu.device, &set, &model->set));
     VkDescriptorImageInfo descriptor = {
         .imageView = model->texture_view,
         .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
@@ -5326,7 +4876,7 @@ static bool upload_model_texture(struct app *app, struct gpu_model *model)
         .descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
         .pImageInfo = &descriptor,
     };
-    vkUpdateDescriptorSets(app->device, 1, &write, 0, NULL);
+    vkUpdateDescriptorSets(app->gpu.device, 1, &write, 0, NULL);
     return true;
 }
 
@@ -5334,12 +4884,12 @@ static bool upload_model_texture(struct app *app, struct gpu_model *model)
  * textures; replaces the previous ones. */
 static void upload_render_models(struct app *app)
 {
-    need_vk("vkDeviceWaitIdle(models)", vkDeviceWaitIdle(app->device));
+    need_vk("vkDeviceWaitIdle(models)", vkDeviceWaitIdle(app->gpu.device));
     for (uint32_t i = 0; i < app->gpu_model_count; ++i)
         destroy_gpu_model(app, &app->gpu_models[i]);
     app->gpu_model_count = 0;
     need_vk("vkResetDescriptorPool(models)",
-            vkResetDescriptorPool(app->device, app->model_descriptor_pool, 0));
+            vkResetDescriptorPool(app->gpu.device, app->model_descriptor_pool, 0));
     for (uint32_t i = 0; i < app->render_models.count; ++i) {
         const struct render_model *source = &app->render_models.models[i];
         struct gpu_model *model = &app->gpu_models[app->gpu_model_count];
@@ -5403,7 +4953,7 @@ static void record_overlay(struct app *app, VkCommandBuffer command,
         const XrSpaceLocationFlags valid =
             XR_SPACE_LOCATION_POSITION_VALID_BIT |
             XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
-        if (XR_SUCCEEDED(xrLocateSpace(source->space, app->space, time,
+        if (XR_SUCCEEDED(xrLocateSpace(source->space, app->xr.space, time,
                                        &location)) &&
             (location.locationFlags & valid) == valid) {
             model_world[i] = pose_matrix(location.pose);
@@ -5540,7 +5090,7 @@ static void record_overlay(struct app *app, VkCommandBuffer command,
  * update of 2026-10-10; not the PC streaming to it). */
 static bool passthrough_active(const struct app *app)
 {
-    return app->passthrough && app->alpha_blend_supported;
+    return app->passthrough && app->xr.alpha_blend_supported;
 }
 
 /* Premultiplied colour where there is no video (clear colour, outside the
@@ -5755,7 +5305,7 @@ static void update_home(struct app *app, XrTime time)
         return;
     XrSpaceLocation head = {.type = XR_TYPE_SPACE_LOCATION};
     need_xr("xrLocateSpace(home)",
-            xrLocateSpace(app->view_space, app->space, time, &head));
+            xrLocateSpace(app->xr.view_space, app->xr.space, time, &head));
     const XrSpaceLocationFlags valid =
         XR_SPACE_LOCATION_POSITION_VALID_BIT |
         XR_SPACE_LOCATION_ORIENTATION_VALID_BIT;
@@ -5828,21 +5378,21 @@ static void render_frame(struct app *app)
 {
     if (app->render_models_dirty) {
         app->render_models_dirty = false;
-        render_models_load(&app->render_models, app->xr, app->session,
+        render_models_load(&app->render_models, app->xr.instance, app->xr.session,
                            app->hands);
         upload_render_models(app);
     }
     XrFrameState frame_state = {.type = XR_TYPE_FRAME_STATE};
     XrFrameWaitInfo wait = {.type = XR_TYPE_FRAME_WAIT_INFO};
     double waiting = monotonic_seconds();
-    need_xr("xrWaitFrame", xrWaitFrame(app->session, &wait, &frame_state));
+    need_xr("xrWaitFrame", xrWaitFrame(app->xr.session, &wait, &frame_state));
     double frame_started = monotonic_seconds();
     timing_frame(app, &frame_state, (frame_started - waiting) * 1e3);
     bool copied_video = false;
     XrFrameBeginInfo begin = {.type = XR_TYPE_FRAME_BEGIN_INFO};
-    need_xr("xrBeginFrame", xrBeginFrame(app->session, &begin));
+    need_xr("xrBeginFrame", xrBeginFrame(app->xr.session, &begin));
     ++app->xr_frames;
-    app->xr_should_render = frame_state.shouldRender;
+    app->xr.should_render = frame_state.shouldRender;
     update_home(app, frame_state.predictedDisplayTime);
     if (app->playing) {
         sync_player_input(app, frame_state.predictedDisplayTime);
@@ -5859,7 +5409,7 @@ static void render_frame(struct app *app)
     if (!frame_state.shouldRender) {
         XrFrameEndInfo end = {.type = XR_TYPE_FRAME_END_INFO, .displayTime = frame_state.predictedDisplayTime,
             .environmentBlendMode = environment_blend_mode(app)};
-        need_xr("xrEndFrame(empty)", xrEndFrame(app->session, &end));
+        need_xr("xrEndFrame(empty)", xrEndFrame(app->xr.session, &end));
         return;
     }
     /* Without a decoded frame (browser, start, seek preroll) only the clear
@@ -5875,17 +5425,17 @@ static void render_frame(struct app *app)
     uint32_t count = 0;
     XrViewLocateInfo locate = {.type = XR_TYPE_VIEW_LOCATE_INFO,
         .viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
-        .displayTime = frame_state.predictedDisplayTime, .space = app->space};
-    need_xr("xrLocateViews", xrLocateViews(app->session, &locate, &view_state, 2, &count, views));
+        .displayTime = frame_state.predictedDisplayTime, .space = app->xr.space};
+    need_xr("xrLocateViews", xrLocateViews(app->xr.session, &locate, &view_state, 2, &count, views));
     need(count == 2 && (view_state.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT) &&
              (view_state.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT), "OpenXR returned no valid stereo pose");
     XrSpaceLocation center = {.type = XR_TYPE_SPACE_LOCATION};
     need_xr("xrLocateSpace(VIEW)",
-            xrLocateSpace(app->view_space, app->space,
+            xrLocateSpace(app->xr.view_space, app->xr.space,
                           frame_state.predictedDisplayTime, &center));
     need((center.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0,
          "OpenXR returned no valid VIEW orientation");
-    if (!app->view_geometry_logged) {
+    if (!app->xr.view_geometry_logged) {
         printf("openxr_view_geometry"
                " left_pose=(%.9f,%.9f,%.9f;%.9f,%.9f,%.9f,%.9f)"
                " left_fov=(%.9f,%.9f,%.9f,%.9f)"
@@ -5907,14 +5457,14 @@ static void render_frame(struct app *app)
                center.pose.position.z, center.pose.orientation.x,
                center.pose.orientation.y, center.pose.orientation.z,
                center.pose.orientation.w);
-        app->view_geometry_logged = true;
+        app->xr.view_geometry_logged = true;
     }
     XrSwapchainImageAcquireInfo acquire = {.type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
     uint32_t image_index = 0;
-    need_xr("xrAcquireSwapchainImage", xrAcquireSwapchainImage(app->swapchain, &acquire, &image_index));
+    need_xr("xrAcquireSwapchainImage", xrAcquireSwapchainImage(app->xr.swapchain, &acquire, &image_index));
     XrSwapchainImageWaitInfo image_wait = {.type = XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, .timeout = XR_INFINITE_DURATION};
-    need_xr("xrWaitSwapchainImage", xrWaitSwapchainImage(app->swapchain, &image_wait));
-    need(image_index < app->image_count, "invalid OpenXR swapchain index");
+    need_xr("xrWaitSwapchainImage", xrWaitSwapchainImage(app->xr.swapchain, &image_wait));
+    need(image_index < app->xr.image_count, "invalid OpenXR swapchain index");
     double acquired = monotonic_seconds();
     /* Dome placement: centred on the head of the first frame (or of
      * "zentrieren"), turned by the gaze yaw and the viewer's rotation.
@@ -6089,8 +5639,8 @@ static void render_frame(struct app *app)
         memcpy((uint8_t *)app->uniform_mapping + eye * UBO_STRIDE,
                &uniform, sizeof(uniform));
     }
-    need_vk("vkWaitForFences(render)", vkWaitForFences(app->device, 1, &app->fence, VK_TRUE, UINT64_C(5000000000)));
-    need_vk("vkResetFences(render)", vkResetFences(app->device, 1, &app->fence));
+    need_vk("vkWaitForFences(render)", vkWaitForFences(app->gpu.device, 1, &app->fence, VK_TRUE, UINT64_C(5000000000)));
+    need_vk("vkResetFences(render)", vkResetFences(app->gpu.device, 1, &app->fence));
     double fenced = monotonic_seconds();
     if (app->key_sample_pending) {
         app->key_sample_pending = false;
@@ -6099,13 +5649,13 @@ static void render_frame(struct app *app)
         app->disparity_pending = false;
         update_autofocus(app);
     }
-    need_vk("vkResetCommandPool(render)", vkResetCommandPool(app->device, app->command_pool, 0));
+    need_vk("vkResetCommandPool(render)", vkResetCommandPool(app->gpu.device, app->command_pool, 0));
     VkCommandBufferBeginInfo command_begin = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     need_vk("vkBeginCommandBuffer(render)", vkBeginCommandBuffer(app->command, &command_begin));
     VkImageMemoryBarrier barrier = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
         .srcAccessMask = 0, .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
         .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED, .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
-        .image = app->images[image_index].image, .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .levelCount = 1, .layerCount = 2}};
+        .image = app->xr.images[image_index].image, .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .levelCount = 1, .layerCount = 2}};
     vkCmdPipelineBarrier(app->command, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, NULL, 0, NULL, 1, &barrier);
     VkImageMemoryBarrier video_acquire = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
@@ -6114,7 +5664,7 @@ static void render_frame(struct app *app)
         .oldLayout = VK_IMAGE_LAYOUT_GENERAL,
         .newLayout = VK_IMAGE_LAYOUT_GENERAL,
         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT,
-        .dstQueueFamilyIndex = app->queue_family,
+        .dstQueueFamilyIndex = app->gpu.queue_family,
         .image = video ? video->image : VK_NULL_HANDLE,
         .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
                              .levelCount = 1, .layerCount = 1},
@@ -6176,7 +5726,7 @@ static void render_frame(struct app *app)
         background_color(app, clear.color.float32);
         VkRenderPassBeginInfo pass = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO,
             .renderPass = app->render_pass, .framebuffer = app->framebuffers[image_index][eye],
-            .renderArea = {.extent = {app->width, app->height}}, .clearValueCount = 1, .pClearValues = &clear};
+            .renderArea = {.extent = {app->xr.width, app->xr.height}}, .clearValueCount = 1, .pClearValues = &clear};
         vkCmdBeginRenderPass(app->command, &pass, VK_SUBPASS_CONTENTS_INLINE);
         if (video) {
             vkCmdBindPipeline(app->command, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -6193,7 +5743,7 @@ static void render_frame(struct app *app)
     video_release.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
     video_release.dstAccessMask = 0;
     if (!video || !video->host) {
-        video_release.srcQueueFamilyIndex = app->queue_family;
+        video_release.srcQueueFamilyIndex = app->gpu.queue_family;
         video_release.dstQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
     }
     VkImageMemoryBarrier video_releases[2] = {video_release, video_release};
@@ -6278,22 +5828,22 @@ static void render_frame(struct app *app)
             .fd = sync_export.fd,
         };
         need_vk("vkImportSemaphoreFdKHR(producer)",
-                app->import_semaphore_fd(app->device, &semaphore_import));
+                app->gpu.import_semaphore_fd(app->gpu.device, &semaphore_import));
         submit.waitSemaphoreCount = 1;
         submit.pWaitSemaphores = &video->producer_semaphore;
         submit.pWaitDstStageMask = &producer_stage;
         video->producer_wait_pending = false;
     }
     double recorded = monotonic_seconds();
-    need_vk("vkQueueSubmit(render)", vkQueueSubmit(app->queue, 1, &submit, app->fence));
+    need_vk("vkQueueSubmit(render)", vkQueueSubmit(app->gpu.queue, 1, &submit, app->fence));
     double submitted = monotonic_seconds();
-    need_vk("vkWaitForFences(render completion)", vkWaitForFences(app->device, 1, &app->fence, VK_TRUE, UINT64_C(5000000000)));
+    need_vk("vkWaitForFences(render completion)", vkWaitForFences(app->gpu.device, 1, &app->fence, VK_TRUE, UINT64_C(5000000000)));
     double gpu_ms = (monotonic_seconds() - submitted) * 1e3;
     app->timing.gpu_ms[copied_video] += gpu_ms;
     app->timing.gpu_frames[copied_video]++;
     note_max(&app->timing.gpu_max_ms[copied_video], gpu_ms);
     XrSwapchainImageReleaseInfo release = {.type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
-    need_xr("xrReleaseSwapchainImage", xrReleaseSwapchainImage(app->swapchain, &release));
+    need_xr("xrReleaseSwapchainImage", xrReleaseSwapchainImage(app->xr.swapchain, &release));
     for (uint32_t eye = 0;
          overlay && !app->overlay_in_eye_images && eye < 2; ++eye)
         need_xr("xrReleaseSwapchainImage(overlay)",
@@ -6312,18 +5862,18 @@ static void render_frame(struct app *app)
     XrCompositionLayerProjection overlay_layer = {
         .type = XR_TYPE_COMPOSITION_LAYER_PROJECTION,
         .layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT,
-        .space = app->space, .viewCount = 2, .views = overlay_views,
+        .space = app->xr.space, .viewCount = 2, .views = overlay_views,
     };
     XrCompositionLayerProjectionView projection_views[2] = {{.type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}, {.type = XR_TYPE_COMPOSITION_LAYER_PROJECTION_VIEW}};
     for (uint32_t eye = 0; eye < 2; ++eye) {
         projection_views[eye].pose = views[eye].pose; projection_views[eye].fov = views[eye].fov;
-        projection_views[eye].subImage = (XrSwapchainSubImage){.swapchain = app->swapchain, .imageRect = {.extent = {(int32_t)app->width, (int32_t)app->height}}, .imageArrayIndex = eye};
+        projection_views[eye].subImage = (XrSwapchainSubImage){.swapchain = app->xr.swapchain, .imageRect = {.extent = {(int32_t)app->xr.width, (int32_t)app->xr.height}}, .imageArrayIndex = eye};
     }
     XrCompositionLayerProjection layer = {.type = XR_TYPE_COMPOSITION_LAYER_PROJECTION,
         .layerFlags = passthrough_active(app)
                           ? XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT
                           : 0,
-        .space = app->space, .viewCount = 2, .views = projection_views};
+        .space = app->xr.space, .viewCount = 2, .views = projection_views};
     XrCompositionLayerQuad pointer_layer = make_pointer_layer(app);
     XrCompositionLayerQuad gaze_layer = make_gaze_marker_layer(app);
     const XrCompositionLayerBaseHeader *layers[5] = {
@@ -6348,7 +5898,7 @@ static void render_frame(struct app *app)
         .layerCount = layer_count,
         .layers = layers};
     double ending = monotonic_seconds();
-    need_xr("xrEndFrame", xrEndFrame(app->session, &end));
+    need_xr("xrEndFrame", xrEndFrame(app->xr.session, &end));
     ++app->rendered_frames;
     double cpu_ms = (monotonic_seconds() - frame_started) * 1e3;
     if (cpu_ms > 50.0)
@@ -6420,27 +5970,27 @@ int main(int argc, char **argv)
     refresh_update_status(&app);
     initialize_xr_vulkan(&app);
     XrGraphicsBindingVulkan2KHR binding = {.type = XR_TYPE_GRAPHICS_BINDING_VULKAN2_KHR,
-        .instance = app.instance, .physicalDevice = app.physical, .device = app.device, .queueFamilyIndex = app.queue_family, .queueIndex = 0};
-    XrSessionCreateInfo session_info = {.type = XR_TYPE_SESSION_CREATE_INFO, .next = &binding, .systemId = app.system};
-    need_xr("xrCreateSession", xrCreateSession(app.xr, &session_info, &app.session));
+        .instance = app.gpu.instance, .physicalDevice = app.gpu.physical, .device = app.gpu.device, .queueFamilyIndex = app.gpu.queue_family, .queueIndex = 0};
+    XrSessionCreateInfo session_info = {.type = XR_TYPE_SESSION_CREATE_INFO, .next = &binding, .systemId = app.xr.system};
+    need_xr("xrCreateSession", xrCreateSession(app.xr.instance, &session_info, &app.xr.session));
     initialize_actions(&app);
     /* SteamVR on Frame requires READY/xrBeginSession before it permits a
      * reference space or swapchain to be created. */
     struct timespec pause = {.tv_nsec = 10000000};
     struct timespec started, now;
     clock_gettime(CLOCK_MONOTONIC, &started);
-    while (!app.running) {
+    while (!app.xr.running) {
         poll_events(&app);
         clock_gettime(CLOCK_MONOTONIC, &now);
         need(now.tv_sec - started.tv_sec < 10,
              "OpenXR session did not enter READY within ten seconds");
-        if (!app.running) nanosleep(&pause, NULL);
+        if (!app.xr.running) nanosleep(&pause, NULL);
     }
     XrReferenceSpaceCreateInfo space_info = {.type = XR_TYPE_REFERENCE_SPACE_CREATE_INFO, .referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL, .poseInReferenceSpace = {{0,0,0,1},{0,0,0}}};
-    need_xr("xrCreateReferenceSpace", xrCreateReferenceSpace(app.session, &space_info, &app.space));
+    need_xr("xrCreateReferenceSpace", xrCreateReferenceSpace(app.xr.session, &space_info, &app.xr.space));
     space_info.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_VIEW;
     need_xr("xrCreateReferenceSpace(VIEW)",
-            xrCreateReferenceSpace(app.session, &space_info, &app.view_space));
+            xrCreateReferenceSpace(app.xr.session, &space_info, &app.xr.view_space));
     initialize_swapchain(&app);
     app.panels_in_eye_images = panels_in_eye_images();
     create_ui_swapchain(&app);
@@ -6478,7 +6028,7 @@ int main(int argc, char **argv)
         hide_dashboard_at_startup(&app);
         if (app.quit)
             break;
-        if (app.running) render_frame(&app); else nanosleep(&pause, NULL);
+        if (app.xr.running) render_frame(&app); else nanosleep(&pause, NULL);
         if (app.playing && app.eos_received)
             end_playback(&app);
     }

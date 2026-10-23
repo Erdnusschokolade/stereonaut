@@ -50,11 +50,11 @@
 #include "nv12-playback-ipc.h"
 #include "player-ui-ipc.h"
 #include "xr-math.h"
+#include "xr-session.h"
 
 #define ARRAY_COUNT(a) (sizeof(a) / sizeof((a)[0]))
 /* Entries of button_inputs (buttons beyond trigger and grip). */
 #define BUTTON_INPUT_COUNT 14
-#define MAX_IMAGES 8U
 #define VIDEO_BUFFER_COUNT 12U
 #define UBO_STRIDE 512U
 #define PI_F 3.14159265358979f
@@ -247,20 +247,8 @@ struct gpu_model {
 };
 
 struct app {
-    XrInstance xr;
-    XrSystemId system;
-    XrSession session;
-    XrSpace space;
-    XrSpace view_space;
-    XrSessionState state;
-    bool running;
-    bool xr_should_render;
-    bool view_geometry_logged;
-    VkInstance instance;
-    VkPhysicalDevice physical;
-    VkDevice device;
-    VkQueue queue;
-    uint32_t queue_family;
+    struct xr_state xr;
+    struct gpu gpu;
     VkCommandPool command_pool;
     VkCommandBuffer command;
     VkFence fence;
@@ -286,9 +274,9 @@ struct app {
     float autofocus_distance, autofocus_focus_disparity;
     bool focus_threshold;   /* only subjects nearer than FOCUS_DISTANCE */
     bool av1_software;      /* settings.json, read by the next session */
-    /* Passthrough: chosen (settings.json) and offered by the runtime
-     * (XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND). */
-    bool passthrough, alpha_blend_supported;
+    /* Passthrough chosen (settings.json); whether the runtime offers it is
+     * xr.alpha_blend_supported. */
+    bool passthrough;
     /* Chroma key colour picker: waiting for the trigger, the aim it was
      * pulled with (measured in the next frame), result being read back. */
     bool key_picking, key_pick_request, key_sample_pending;
@@ -352,11 +340,6 @@ struct app {
     bool title_finished;  /* EOS after the last frame, not "back" */
     char location[PLAYER_UI_PATH_MAX]; /* what the session plays */
     int end_action;       /* enum player_end_action (settings.json) */
-    PFN_vkImportSemaphoreFdKHR import_semaphore_fd;
-    PFN_vkGetMemoryFdPropertiesKHR get_memory_fd_properties;
-    PFN_vkGetImageDrmFormatModifierPropertiesEXT get_modifier_properties;
-    /* VK_EXT_external_memory_host, for PC decoder buffers (optional). */
-    PFN_vkGetMemoryHostPointerPropertiesEXT get_host_pointer_properties;
     VkDeviceSize dma_buf_size;
     uint32_t video_width, video_height, video_stride;
     uint32_t video_format; /* enum nv12_pixel_format */
@@ -391,9 +374,6 @@ struct app {
     /* "Next/previous video": the title to start once the session ended. */
     char skip_path[PLAYER_UI_PATH_MAX];
     char skip_title[256];
-    /* Eye tracking (XR_EXT_eye_gaze_interaction): the gaze ray steers the
-     * autofocus measurement; without it the head's forward direction. */
-    bool has_eye_gaze_extension, has_eye_gaze;
     /* Controller models (render-models.h); reloaded when the runtime
      * reports other devices. */
     struct render_models render_models;
@@ -435,9 +415,6 @@ struct app {
     bool gaze_logged;
     int stick_direction[2]; /* -1 left, +1 right, 0 centred */
     struct button select[2];
-    bool has_valve_frame_controller;
-    bool has_pcvr_controller;
-    bool has_generic_controller;
     XrPath hands[2];
     XrSpace aim_spaces[2];
     int ui_hover;
@@ -473,10 +450,6 @@ struct app {
     VkBuffer uniform_buffer;
     VkDeviceMemory uniform_memory;
     void *uniform_mapping;
-    VkFormat color_format;
-    XrSwapchain swapchain;
-    uint32_t width, height, image_count;
-    XrSwapchainImageVulkan2KHR images[MAX_IMAGES];
     VkImageView image_views[MAX_IMAGES][2];
     VkFramebuffer framebuffers[MAX_IMAGES][2];
     XrSwapchain ui_swapchain;
@@ -492,7 +465,6 @@ struct app {
     VkDescriptorPool panel_descriptor_pool;
     VkPipelineLayout panel_pipeline_layout;
     VkPipeline panel_pipeline;
-    float panel_anisotropy; /* 1 without samplerAnisotropy */
     VkBuffer ui_staging_buffer;
     VkDeviceMemory ui_staging_memory;
     uint32_t *ui_pixels; /* mapped staging memory: write-only */
@@ -555,5 +527,8 @@ struct app {
     struct frame_timing timing;
     uint64_t hidden_video_frames, pipeline_skipped_frames;
 };
+
+/* Still in stereonaut-renderer.c, used by the modules split off so far. */
+bool overlay_in_eye_images(void);
 
 #endif
