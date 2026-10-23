@@ -559,6 +559,93 @@ static void layout_focus(const struct player_ui_state *state,
     }
 }
 
+/* Playback settings: the scrub preview and the panel (first column), AV1
+ * (second), passthrough (third). */
+static void layout_playback(const struct player_ui_state *state,
+                            struct ui_layout *layout)
+{
+    static const char *const modes[2] = {N_("Original"), N_("Perspective")};
+    const char *fovs[PLAYER_UI_PREVIEW_FOV_COUNT];
+    char fov_text[PLAYER_UI_PREVIEW_FOV_COUNT][16];
+    int fov_selected = -1;
+    for (int i = 0; i < PLAYER_UI_PREVIEW_FOV_COUNT; ++i) {
+        snprintf(fov_text[i], sizeof(fov_text[i]), "%d°",
+                 player_ui_preview_fovs[i]);
+        fovs[i] = fov_text[i];
+        if (state->preview_fov == player_ui_preview_fovs[i])
+            fov_selected = i;
+    }
+    static const char *const autohide[PLAYER_UI_AUTOHIDE_COUNT] = {
+        N_("Never"), N_("after 5 s"), N_("after 15 s"),
+    };
+    int autohide_selected = 0;
+    for (int i = 0; i < PLAYER_UI_AUTOHIDE_COUNT; ++i)
+        if (player_ui_autohide[i] == state->autohide)
+            autohide_selected = i;
+    static const char *const off_on[2] = {N_("Off"), N_("On")};
+    COLUMNS {
+        COLUMN {
+            hint(layout, tr("Scrub preview"));
+            chip_row(layout, state, 2, PLAYER_UI_PREVIEW_MODE, modes,
+                     state->preview_perspective ? 1 : 0);
+            hint(layout, tr("Field of view (perspective)"));
+            chip_row(layout, state, PLAYER_UI_PREVIEW_FOV_COUNT,
+                     PLAYER_UI_PREVIEW_FOV, fovs, fov_selected);
+            hint(layout, tr("Hide the panel (playback)"));
+            chip_row(layout, state, PLAYER_UI_AUTOHIDE_COUNT,
+                     PLAYER_UI_AUTOHIDE, autohide, autohide_selected);
+        }
+        COLUMN {
+            hint(layout, tr("AV1 up to 4K on the CPU"));
+            chip_row(layout, state, 2, PLAYER_UI_AV1_SOFTWARE, off_on,
+                     state->av1_software ? 1 : 0);
+            note(layout, 3,
+                 tr("Iris has no AV1; dav1d plays 8 bit up to 4096×2160. "
+                    "Applies from the next title."));
+        }
+        COLUMN {
+            hint(layout, tr("Passthrough: the room instead of black"));
+            chip_row(layout, state, 2, PLAYER_UI_PASSTHROUGH, off_on,
+                     state->passthrough ? 1 : 0);
+            hint(layout, tr("Dim the room"));
+            stepper(layout, state, PLAYER_ADJUST_ENVIRONMENT_DIM,
+                    N_("Strength"));
+            if (!state->passthrough_supported)
+                note(layout, 2, tr("SteamVR offers no passthrough here."));
+        }
+    }
+}
+
+/* Autofocus settings: timing (first column), when it acts (second). */
+static void layout_autofocus(const struct player_ui_state *state,
+                             struct ui_layout *layout)
+{
+    static const char *const thresholds[2] = {N_("Always"),
+                                              N_("Near only")};
+    COLUMNS {
+        COLUMN {
+            hint(layout, tr("Duration of a focus change"));
+            stepper(layout, state, PLAYER_ADJUST_FOCUS_FADE, NULL);
+            hint(layout, tr("Refocus from a distance change of"));
+            stepper(layout, state, PLAYER_ADJUST_FOCUS_HYSTERESIS, NULL);
+        }
+        COLUMN {
+            hint(layout, tr("Activation"));
+            chip_row(layout, state, 2, PLAYER_UI_FOCUS_THRESHOLD, thresholds,
+                     state->focus_threshold ? 1 : 0);
+            hint(layout, state->focus_threshold
+                             ? tr("Farther away: video unchanged")
+                             : tr("Limit (with “Near only”)"));
+            stepper(layout, state, PLAYER_ADJUST_FOCUS_DISTANCE, NULL);
+        }
+        COLUMN {
+            paragraph(layout, 3,
+                      tr("The strength of the autofocus is in the player "
+                         "under “Focus”."));
+        }
+    }
+}
+
 /* Updates tab: versions and the check (first column), the status and the
  * update (second), the check at start (third). */
 static void layout_updates(const struct player_ui_state *state,
@@ -670,6 +757,12 @@ static bool layout_tab(const struct player_ui_state *state,
     switch (state->popup_tab) {
     case PLAYER_UI_TAB_FOCUS:
         describe = layout_focus;
+        break;
+    case PLAYER_UI_TAB_PLAYBACK:
+        describe = layout_playback;
+        break;
+    case PLAYER_UI_TAB_AUTOFOCUS:
+        describe = layout_autofocus;
         break;
     case PLAYER_UI_TAB_LANGUAGE:
         describe = layout_language;
@@ -812,85 +905,6 @@ static void layout_popup(const struct player_ui_state *state,
                     NULL);
         add_chip(layout, PLAYER_UI_RESET_PICTURE, COLUMN_X(2), STEPPER_Y(2),
                  COLUMN_W, tr("Reset"), false);
-    } else if (state->popup_tab == PLAYER_UI_TAB_PLAYBACK) {
-        static const char *const modes[2] = {N_("Original"),
-                                             N_("Perspective")};
-        const char *fovs[PLAYER_UI_PREVIEW_FOV_COUNT];
-        char fov_text[PLAYER_UI_PREVIEW_FOV_COUNT][16];
-        int fov_selected = -1;
-        for (int i = 0; i < PLAYER_UI_PREVIEW_FOV_COUNT; ++i) {
-            snprintf(fov_text[i], sizeof(fov_text[i]), "%d°",
-                     player_ui_preview_fovs[i]);
-            fovs[i] = fov_text[i];
-            if (state->preview_fov == player_ui_preview_fovs[i])
-                fov_selected = i;
-        }
-        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(0), 0,
-                   tr("Scrub preview"));
-        add_chip_row(layout, 0, 0, 2, PLAYER_UI_PREVIEW_MODE, modes,
-                     state->preview_perspective ? 1 : 0);
-        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(1), 0,
-                   tr("Field of view (perspective)"));
-        add_chip_row(layout, 0, 1, PLAYER_UI_PREVIEW_FOV_COUNT,
-                     PLAYER_UI_PREVIEW_FOV, fovs, fov_selected);
-        static const char *const autohide[PLAYER_UI_AUTOHIDE_COUNT] = {
-            N_("Never"), N_("after 5 s"), N_("after 15 s"),
-        };
-        int autohide_selected = 0;
-        for (int i = 0; i < PLAYER_UI_AUTOHIDE_COUNT; ++i)
-            if (player_ui_autohide[i] == state->autohide)
-                autohide_selected = i;
-        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(2), 0,
-                   tr("Hide the panel (playback)"));
-        add_chip_row(layout, 0, 2, PLAYER_UI_AUTOHIDE_COUNT,
-                     PLAYER_UI_AUTOHIDE, autohide, autohide_selected);
-
-        static const char *const off_on[2] = {N_("Off"), N_("On")};
-        add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(0), 0,
-                   tr("AV1 up to 4K on the CPU"));
-        add_chip_row(layout, 1, 0, 2, PLAYER_UI_AV1_SOFTWARE, off_on,
-                     state->av1_software ? 1 : 0);
-        add_paragraph(layout, COLUMN_X(1), ROW_LABEL_Y(1) + 6, 3,
-                      tr("Iris has no AV1; dav1d plays 8 bit up to "
-                         "4096×2160. Applies from the next title."));
-
-        add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(0), 0,
-                   tr("Passthrough: the room instead of black"));
-        add_chip_row(layout, 2, 0, 2, PLAYER_UI_PASSTHROUGH, off_on,
-                     state->passthrough ? 1 : 0);
-        add_widget(layout, WIDGET_HINT, COLUMN_X(2), ROW_LABEL_Y(1), 0,
-                   tr("Dim the room"));
-        add_stepper(layout, state, 2, ROW_CHIP_Y(1),
-                    PLAYER_ADJUST_ENVIRONMENT_DIM, N_("Strength"));
-        if (!state->passthrough_supported)
-            add_paragraph(layout, COLUMN_X(2), ROW_LABEL_Y(2) + 6, 2,
-                          tr("SteamVR offers no passthrough here."));
-    } else if (state->popup_tab == PLAYER_UI_TAB_AUTOFOCUS) {
-        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(0), 0,
-                   tr("Duration of a focus change"));
-        add_stepper(layout, state, 0, ROW_CHIP_Y(0),
-                    PLAYER_ADJUST_FOCUS_FADE, NULL);
-        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(1), 0,
-                   tr("Refocus from a distance change of"));
-        add_stepper(layout, state, 0, ROW_CHIP_Y(1),
-                    PLAYER_ADJUST_FOCUS_HYSTERESIS, NULL);
-
-        static const char *const thresholds[2] = {N_("Always"),
-                                                  N_("Near only")};
-        add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(0), 0,
-                   tr("Activation"));
-        add_chip_row(layout, 1, 0, 2, PLAYER_UI_FOCUS_THRESHOLD, thresholds,
-                     state->focus_threshold ? 1 : 0);
-        add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(1), 0,
-                   state->focus_threshold
-                       ? tr("Farther away: video unchanged")
-                       : tr("Limit (with “Near only”)"));
-        add_stepper(layout, state, 1, ROW_CHIP_Y(1),
-                    PLAYER_ADJUST_FOCUS_DISTANCE, NULL);
-
-        add_paragraph(layout, COLUMN_X(2), ROW_LABEL_Y(0), 3,
-                      tr("The strength of the autofocus is in the player "
-                         "under “Focus”."));
     } else if (state->popup_tab == PLAYER_UI_TAB_PASSTHROUGH) {
         static const char *const off_on[2] = {N_("Off"), N_("On")};
         add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(0), 0,
