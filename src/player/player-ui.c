@@ -502,6 +502,63 @@ static void chip_row(struct ui_layout *layout,
     }
 }
 
+/* Label, [-], value, [+] in one row. */
+static void stepper(struct ui_layout *layout,
+                    const struct player_ui_state *state,
+                    enum player_adjust adjust, const char *label)
+{
+    char value[32];
+    format_adjust(value, adjust, state->adjust ? state->adjust[adjust]
+                                               : player_adjust_info[adjust]
+                                                     .standard);
+    int control = PLAYER_UI_ADJUST + 2 * (int)adjust;
+    CLAY({.layout = {.sizing = {CLAY_SIZING_GROW(0),
+                                CLAY_SIZING_FIXED(CHIP_H)},
+                     .childAlignment = {.y = CLAY_ALIGN_Y_CENTER}}}) {
+        CLAY({.layout = {.sizing = {CLAY_SIZING_FIXED(STEPPER_LABEL_W + 6),
+                                    CLAY_SIZING_FIT(0)},
+                         .padding = {.right = 6}}}) {
+            ui_layout_label(layout,
+                            tr(label ? label
+                                     : player_adjust_info[adjust].label),
+                            UI_LAYOUT_REGULAR, 24, color_text, UI_ALIGN_LEFT,
+                            CLAY_SIZING_GROW(0));
+        }
+        chip_sized(layout, state, control, "−", false,
+                   CLAY_SIZING_FIXED(STEPPER_BUTTON_W), false);
+        CLAY({.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0)},
+                         .padding = {4, 4, 0, 0}}}) {
+            ui_layout_label(layout, value, UI_LAYOUT_BOLD, 24, color_text,
+                            UI_ALIGN_CENTER, CLAY_SIZING_GROW(0));
+        }
+        chip_sized(layout, state, control + 1, "+", false,
+                   CLAY_SIZING_FIXED(STEPPER_BUTTON_W), false);
+    }
+}
+
+/* Focus tab: the autofocus strength and the gaze display (first column),
+ * what it does (second). */
+static void layout_focus(const struct player_ui_state *state,
+                         struct ui_layout *layout)
+{
+    COLUMNS {
+        COLUMN {
+            hint(layout, tr("Autofocus (180°/360° with SBS/TB only)"));
+            stepper(layout, state, PLAYER_ADJUST_AUTOFOCUS, N_("Strength"));
+            hint(layout, tr("Check the measurement"));
+            chip(layout, state, PLAYER_UI_GAZE_DEBUG, tr("Show gaze"),
+                 state->gaze_debug);
+        }
+        COLUMN {
+            paragraph(layout, 5,
+                      tr("Near subjects are pushed back to about 1 m. "
+                         "Applies to all titles; threshold, hysteresis and "
+                         "transition under Settings."));
+        }
+        COLUMN {}
+    }
+}
+
 /* Updates tab: versions and the check (first column), the status and the
  * update (second), the check at start (third). */
 static void layout_updates(const struct player_ui_state *state,
@@ -611,6 +668,9 @@ static bool layout_tab(const struct player_ui_state *state,
     void (*describe)(const struct player_ui_state *, struct ui_layout *) =
         NULL;
     switch (state->popup_tab) {
+    case PLAYER_UI_TAB_FOCUS:
+        describe = layout_focus;
+        break;
     case PLAYER_UI_TAB_LANGUAGE:
         describe = layout_language;
         break;
@@ -752,19 +812,6 @@ static void layout_popup(const struct player_ui_state *state,
                     NULL);
         add_chip(layout, PLAYER_UI_RESET_PICTURE, COLUMN_X(2), STEPPER_Y(2),
                  COLUMN_W, tr("Reset"), false);
-    } else if (state->popup_tab == PLAYER_UI_TAB_FOCUS) {
-        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(0), 0,
-                   tr("Autofocus (180°/360° with SBS/TB only)"));
-        add_stepper(layout, state, 0, ROW_CHIP_Y(0),
-                    PLAYER_ADJUST_AUTOFOCUS, N_("Strength"));
-        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(1), 0,
-                   tr("Check the measurement"));
-        add_chip(layout, PLAYER_UI_GAZE_DEBUG, COLUMN_X(0), ROW_CHIP_Y(1),
-                 COLUMN_W, tr("Show gaze"), state->gaze_debug);
-        add_paragraph(layout, COLUMN_X(1), ROW_LABEL_Y(0), 5,
-                      tr("Near subjects are pushed back to about 1 m. "
-                         "Applies to all titles; threshold, hysteresis and "
-                         "transition under Settings."));
     } else if (state->popup_tab == PLAYER_UI_TAB_PLAYBACK) {
         static const char *const modes[2] = {N_("Original"),
                                              N_("Perspective")};
