@@ -234,30 +234,12 @@ static struct widget *add_widget(struct popup_layout *layout,
     return widget;
 }
 
-static void add_paragraph(struct popup_layout *layout, int x, int y,
-                          int lines, const char *text)
-{
-    add_widget(layout, WIDGET_PARAGRAPH, x, y, COLUMN_W, text)->lines = lines;
-}
-
 static void add_chip(struct popup_layout *layout, int control, int x, int y,
                      int width, const char *text, bool selected)
 {
     struct widget *chip = add_widget(layout, WIDGET_CHIP, x, y, width, text);
     chip->control = control;
     chip->selected = selected;
-}
-
-/* `count` equal chips across a column. */
-static void add_chip_row(struct popup_layout *layout, int column, int row,
-                         int count, int first_control,
-                         const char *const *labels, int selected)
-{
-    int width = (COLUMN_W - (count - 1) * CHIP_GAP) / count;
-    for (int i = 0; i < count; ++i)
-        add_chip(layout, first_control + i,
-                 COLUMN_X(column) + i * (width + CHIP_GAP), ROW_CHIP_Y(row),
-                 width, tr(labels[i]), i == selected);
 }
 
 static void format_adjust(char text[32], enum player_adjust adjust,
@@ -282,28 +264,6 @@ static void format_adjust(char text[32], enum player_adjust adjust,
     snprintf(text, 32, info->format, shown);
 #pragma GCC diagnostic pop
     i18n_localize_number(text);
-}
-
-/* Label, [-], value, [+] on one line. */
-static void add_stepper(struct popup_layout *layout,
-                        const struct player_ui_state *state, int column,
-                        int y, enum player_adjust adjust, const char *label)
-{
-    int x = COLUMN_X(column);
-    add_widget(layout, WIDGET_TEXT, x, y + 10, STEPPER_LABEL_W,
-               tr(label ? label : player_adjust_info[adjust].label));
-    int minus_x = x + STEPPER_LABEL_W + 6;
-    int plus_x = x + COLUMN_W - STEPPER_BUTTON_W;
-    add_chip(layout, PLAYER_UI_ADJUST + 2 * (int)adjust, minus_x, y,
-             STEPPER_BUTTON_W, "−", false);
-    add_chip(layout, PLAYER_UI_ADJUST + 2 * (int)adjust + 1, plus_x, y,
-             STEPPER_BUTTON_W, "+", false);
-    char value[32];
-    format_adjust(value, adjust, state->adjust ? state->adjust[adjust]
-                                               : player_adjust_info[adjust]
-                                                     .standard);
-    int value_x = minus_x + STEPPER_BUTTON_W;
-    add_widget(layout, WIDGET_VALUE, value_x, y + 8, plus_x - value_x, value);
 }
 
 /* ---- popup tabs laid out with Clay (ui-layout.h) -------------------------
@@ -786,6 +746,75 @@ static void layout_picture(const struct player_ui_state *state,
     }
 }
 
+/* Passthrough tab: the room (first column), the chroma key's colour and
+ * edge (second), what it does, the colour picker and the spill (third).
+ * The key's rows line up in both columns below a block as high as three
+ * lines of text. */
+#define KEY_TOP_H (3 * 30 + 4)
+
+#define KEY_COLUMN                                                         \
+    CLAY({.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0)}, \
+                     .layoutDirection = CLAY_TOP_TO_BOTTOM}})
+#define KEY_TOP                                                            \
+    CLAY({.layout = {.sizing = {CLAY_SIZING_GROW(0),                       \
+                                CLAY_SIZING_FIXED(KEY_TOP_H)},             \
+                     .childGap = STACK_GAP,                                \
+                     .layoutDirection = CLAY_TOP_TO_BOTTOM}})
+#define KEY_ROWS                                                           \
+    CLAY({.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_FIT(0)},  \
+                     .childGap = STEPPER_GAP,                              \
+                     .layoutDirection = CLAY_TOP_TO_BOTTOM}})
+
+static void layout_passthrough(const struct player_ui_state *state,
+                               struct ui_layout *layout)
+{
+    static const char *const off_on[2] = {N_("Off"), N_("On")};
+    static const char *const keys[4] = {N_("Off"), N_("Green"), N_("Blue"),
+                                        N_("Picked")};
+    int key = state->adjust
+                  ? (int)(state->adjust[PLAYER_ADJUST_KEY_COLOR] + 0.5f)
+                  : 0;
+    COLUMNS {
+        COLUMN {
+            hint(layout, tr("The room instead of black (all titles)"));
+            chip_row(layout, state, 2, PLAYER_UI_PASSTHROUGH, off_on,
+                     state->passthrough ? 1 : 0);
+            hint(layout, tr("Dim the room"));
+            stepper(layout, state, PLAYER_ADJUST_ENVIRONMENT_DIM,
+                    N_("Strength"));
+            if (!state->passthrough_supported)
+                note(layout, 2, tr("SteamVR offers no passthrough here."));
+        }
+        KEY_COLUMN {
+            KEY_TOP {
+                hint(layout, tr("Chroma key (per title)"));
+                chip_row(layout, state, 4, PLAYER_UI_KEY_COLOR, keys, key);
+            }
+            KEY_ROWS {
+                stepper(layout, state, PLAYER_ADJUST_KEY_THRESHOLD, NULL);
+                stepper(layout, state, PLAYER_ADJUST_KEY_SOFTNESS, NULL);
+            }
+        }
+        KEY_COLUMN {
+            KEY_TOP {
+                paragraph(layout, 3,
+                          state->key_picking
+                              ? tr("Aim the controller at the background "
+                                   "in the video and pull the trigger.")
+                              : tr("The key colour turns transparent; with "
+                                   "passthrough the room shows there."));
+            }
+            KEY_ROWS {
+                chip(layout, state, PLAYER_UI_KEY_PICK,
+                     state->key_picking ? tr("Cancel")
+                                        : tr("Pick the colour"),
+                     state->key_picking);
+                stepper(layout, state, PLAYER_ADJUST_KEY_SPILL, NULL);
+            }
+        }
+    }
+}
+
 /* Updates tab: versions and the check (first column), the status and the
  * update (second), the check at start (third). */
 static void layout_updates(const struct player_ui_state *state,
@@ -916,6 +945,9 @@ static bool layout_tab(const struct player_ui_state *state,
     case PLAYER_UI_TAB_PICTURE:
         describe = layout_picture;
         break;
+    case PLAYER_UI_TAB_PASSTHROUGH:
+        describe = layout_passthrough;
+        break;
     case PLAYER_UI_TAB_LANGUAGE:
         describe = layout_language;
         break;
@@ -959,47 +991,6 @@ static void layout_popup(const struct player_ui_state *state,
         add_chip(layout, PLAYER_UI_SETTINGS_CLOSE,
                  POPUP_X + POPUP_W - 22 - TAB_W, TAB_Y, TAB_W, tr("Close"),
                  false);
-
-    if (state->popup_tab == PLAYER_UI_TAB_PASSTHROUGH) {
-        static const char *const off_on[2] = {N_("Off"), N_("On")};
-        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(0), 0,
-                   tr("The room instead of black (all titles)"));
-        add_chip_row(layout, 0, 0, 2, PLAYER_UI_PASSTHROUGH, off_on,
-                     state->passthrough ? 1 : 0);
-        add_widget(layout, WIDGET_HINT, COLUMN_X(0), ROW_LABEL_Y(1), 0,
-                   tr("Dim the room"));
-        add_stepper(layout, state, 0, ROW_CHIP_Y(1),
-                    PLAYER_ADJUST_ENVIRONMENT_DIM, N_("Strength"));
-        if (!state->passthrough_supported)
-            add_paragraph(layout, COLUMN_X(0), ROW_LABEL_Y(2) + 6, 2,
-                          tr("SteamVR offers no passthrough here."));
-
-        static const char *const keys[4] = {N_("Off"), N_("Green"),
-                                            N_("Blue"), N_("Picked")};
-        add_widget(layout, WIDGET_HINT, COLUMN_X(1), ROW_LABEL_Y(0), 0,
-                   tr("Chroma key (per title)"));
-        int key = state->adjust
-                      ? (int)(state->adjust[PLAYER_ADJUST_KEY_COLOR] + 0.5f)
-                      : 0;
-        add_chip_row(layout, 1, 0, 4, PLAYER_UI_KEY_COLOR, keys, key);
-        add_stepper(layout, state, 1, STEPPER_Y(1) + 12,
-                    PLAYER_ADJUST_KEY_THRESHOLD, NULL);
-        add_stepper(layout, state, 1, STEPPER_Y(2) + 12,
-                    PLAYER_ADJUST_KEY_SOFTNESS, NULL);
-
-        add_paragraph(layout, COLUMN_X(2), ROW_LABEL_Y(0), 3,
-                      state->key_picking
-                          ? tr("Aim the controller at the background in "
-                               "the video and pull the trigger.")
-                          : tr("The key colour turns transparent; with "
-                               "passthrough the room shows there."));
-        add_chip(layout, PLAYER_UI_KEY_PICK, COLUMN_X(2),
-                 STEPPER_Y(1) + 12, COLUMN_W,
-                 state->key_picking ? tr("Cancel") : tr("Pick the colour"),
-                 state->key_picking);
-        add_stepper(layout, state, 2, STEPPER_Y(2) + 12,
-                    PLAYER_ADJUST_KEY_SPILL, NULL);
-    }
 }
 
 float player_adjust_step(enum player_adjust adjust, float value,
