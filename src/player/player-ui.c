@@ -54,19 +54,21 @@
 #define PREVIEW_LABEL_H 40
 #define PREVIEW_BOTTOM (CARD_Y - 12)
 
-/* Settings popup above the card: a tab row and three columns of controls
- * in up to three rows. */
+/* Settings popup above the card: a tab row, a rule and the tab's content,
+ * mostly three columns (laid out with Clay, see layout_popup). */
 #define POPUP_X PLAYER_UI_POPUP_X
 #define POPUP_Y PLAYER_UI_POPUP_Y
 #define POPUP_W PLAYER_UI_POPUP_W
 #define POPUP_H PLAYER_UI_POPUP_H
-#define COLUMN_W 416
-#define COLUMN_X(column) (POPUP_X + 22 + (column) * 460)
-#define TAB_Y (POPUP_Y + 18)
+#define POPUP_RADIUS 26
+#define POPUP_PAD 22 /* left and right */
+#define POPUP_PAD_TOP 18
+#define POPUP_PAD_BOTTOM 8
+#define RULE_ABOVE 10 /* the rule below the tab row */
+#define RULE_BELOW 12
+#define COLUMN_GAP 44
+#define COLUMN_W ((POPUP_W - 2 * POPUP_PAD - 2 * COLUMN_GAP) / 3)
 #define TAB_W 200
-#define ROW_LABEL_Y(row) (POPUP_Y + 86 + (row) * 82)
-#define ROW_CHIP_Y(row) (ROW_LABEL_Y(row) + 32)
-#define STEPPER_Y(row) (POPUP_Y + 98 + (row) * 70)
 #define STEPPER_LABEL_W 170
 #define STEPPER_BUTTON_W 56
 #define CHIP_GAP 10
@@ -191,57 +193,6 @@ static bool in_rect(float x, float y, float rx, float ry, float rw, float rh)
     return x >= rx && x < rx + rw && y >= ry && y < ry + rh;
 }
 
-/* ---- popup layout -------------------------------------------------------
- * The popup is described once as a list of widgets; drawing and hit
- * testing both walk it. */
-
-/* A paragraph is a hint wrapped across a column into up to `lines` lines,
- * so translations need not match the English line breaks. */
-enum widget_kind {
-    WIDGET_CHIP,
-    WIDGET_TEXT,
-    WIDGET_HINT,
-    WIDGET_PARAGRAPH,
-    WIDGET_VALUE,
-};
-
-struct widget {
-    enum widget_kind kind;
-    int control; /* chips only */
-    int x, y, width;
-    bool selected;
-    bool small; /* chips: smaller text */
-    int lines;  /* paragraphs */
-    char text[256];
-};
-
-#define MAX_WIDGETS 64
-
-struct popup_layout {
-    struct widget items[MAX_WIDGETS];
-    int count;
-};
-
-static struct widget *add_widget(struct popup_layout *layout,
-                                 enum widget_kind kind, int x, int y,
-                                 int width, const char *text)
-{
-    if (layout->count >= MAX_WIDGETS)
-        return &layout->items[MAX_WIDGETS - 1];
-    struct widget *widget = &layout->items[layout->count++];
-    *widget = (struct widget){.kind = kind, .x = x, .y = y, .width = width};
-    snprintf(widget->text, sizeof(widget->text), "%s", text);
-    return widget;
-}
-
-static void add_chip(struct popup_layout *layout, int control, int x, int y,
-                     int width, const char *text, bool selected)
-{
-    struct widget *chip = add_widget(layout, WIDGET_CHIP, x, y, width, text);
-    chip->control = control;
-    chip->selected = selected;
-}
-
 static void format_adjust(char text[32], enum player_adjust adjust,
                           float value)
 {
@@ -273,21 +224,32 @@ static void format_adjust(char text[32], enum player_adjust adjust,
  * column's last chip may sit at its bottom after a spacer. Columns of
  * steppers alone use the tighter stepper grid. */
 
-#define CONTENT_X COLUMN_X(0)
-#define CONTENT_Y ROW_LABEL_Y(0)
-#define CONTENT_W (3 * COLUMN_W + 2 * COLUMN_GAP)
-#define CONTENT_H (ROW_CHIP_Y(2) + CHIP_H - CONTENT_Y)
-#define COLUMN_GAP (COLUMN_X(1) - COLUMN_X(0) - COLUMN_W)
+#define CONTENT_H                                                          \
+    (POPUP_H - POPUP_PAD_TOP - CHIP_H - RULE_ABOVE - 2 - RULE_BELOW -      \
+     POPUP_PAD_BOTTOM)
 /* Between a hint and its row, and between one row and the next hint. */
-#define STACK_GAP (ROW_CHIP_Y(0) - ROW_LABEL_Y(0) - HINT_H)
+#define STACK_GAP 6
 #define HINT_H 26 /* hint text (22 px) and its box */
 /* A hint and its row. */
-#define BAND_H (ROW_LABEL_Y(1) - ROW_LABEL_Y(0) - STACK_GAP)
-#define STEPPER_GAP (STEPPER_Y(1) - STEPPER_Y(0) - CHIP_H)
+#define BAND_H (HINT_H + STACK_GAP + CHIP_H)
+/* Columns of steppers alone start a little lower, the rows closer. */
+#define STEPPER_INSET 12
+#define STEPPER_GAP 26
 
+/* Columns, with a SEPARATOR between two of them. */
 #define COLUMNS                                                            \
-    CLAY({.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0)}, \
-                     .childGap = COLUMN_GAP}})
+    CLAY({.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0)}}})
+
+/* The gap between two columns with a rule in its middle, a little shorter
+ * than the columns. */
+#define SEPARATOR                                                          \
+    CLAY({.layout = {.sizing = {CLAY_SIZING_FIXED(COLUMN_GAP),             \
+                                CLAY_SIZING_GROW(0)},                      \
+                     .padding = {COLUMN_GAP / 2, 0, 2, 12}}}) {            \
+        CLAY({.layout = {.sizing = {CLAY_SIZING_FIXED(2),                  \
+                                    CLAY_SIZING_GROW(0)}},                 \
+              .backgroundColor = ui_layout_color(color_border)}) {}        \
+    }
 
 #define COLUMN                                                             \
     CLAY({.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0)}, \
@@ -296,7 +258,7 @@ static void format_adjust(char text[32], enum player_adjust adjust,
 
 #define STEPPER_COLUMN                                                     \
     CLAY({.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0)}, \
-                     .padding = {.top = STEPPER_Y(0) - CONTENT_Y},         \
+                     .padding = {.top = STEPPER_INSET},                    \
                      .childGap = STEPPER_GAP,                              \
                      .layoutDirection = CLAY_TOP_TO_BOTTOM}})
 
@@ -445,12 +407,14 @@ static void layout_focus(const struct player_ui_state *state,
             chip(layout, state, PLAYER_UI_GAZE_DEBUG, tr("Show gaze"),
                  state->gaze_debug);
         }
+        SEPARATOR;
         COLUMN {
             paragraph(layout, 5,
                       tr("Near subjects are pushed back to about 1 m. "
                          "Applies to all titles; threshold, hysteresis and "
                          "transition under Settings."));
         }
+        SEPARATOR;
         COLUMN {}
     }
 }
@@ -491,6 +455,7 @@ static void layout_playback(const struct player_ui_state *state,
             chip_row(layout, state, PLAYER_UI_AUTOHIDE_COUNT,
                      PLAYER_UI_AUTOHIDE, autohide, autohide_selected);
         }
+        SEPARATOR;
         COLUMN {
             hint(layout, tr("AV1 up to 4K on the CPU"));
             chip_row(layout, state, 2, PLAYER_UI_AV1_SOFTWARE, off_on,
@@ -499,6 +464,7 @@ static void layout_playback(const struct player_ui_state *state,
                  tr("Iris has no AV1; dav1d plays 8 bit up to 4096×2160. "
                     "Applies from the next title."));
         }
+        SEPARATOR;
         COLUMN {
             hint(layout, tr("Passthrough: the room instead of black"));
             chip_row(layout, state, 2, PLAYER_UI_PASSTHROUGH, off_on,
@@ -525,6 +491,7 @@ static void layout_autofocus(const struct player_ui_state *state,
             hint(layout, tr("Refocus from a distance change of"));
             stepper(layout, state, PLAYER_ADJUST_FOCUS_HYSTERESIS, NULL);
         }
+        SEPARATOR;
         COLUMN {
             hint(layout, tr("Activation"));
             chip_row(layout, state, 2, PLAYER_UI_FOCUS_THRESHOLD, thresholds,
@@ -534,6 +501,7 @@ static void layout_autofocus(const struct player_ui_state *state,
                              : tr("Limit (with “Near only”)"));
             stepper(layout, state, PLAYER_ADJUST_FOCUS_DISTANCE, NULL);
         }
+        SEPARATOR;
         COLUMN {
             paragraph(layout, 3,
                       tr("The strength of the autofocus is in the player "
@@ -562,7 +530,9 @@ static void layout_buttons(const struct player_ui_state *state,
     bool learning = state->learn_action >= 0 &&
                     state->learn_action < BINDING_ACTION_COUNT;
     COLUMNS {
-        for (int column = 0; column < 2; ++column)
+        for (int column = 0; column < 2; ++column) {
+            if (column)
+                SEPARATOR;
             COLUMN {
                 for (int r = 3 * column; r < 3 * column + 3; ++r) {
                     hint(layout, tr(rows[r].label));
@@ -589,6 +559,8 @@ static void layout_buttons(const struct player_ui_state *state,
                     }
                 }
             }
+        }
+        SEPARATOR;
         COLUMN {
             if (learning) {
                 char label[96];
@@ -652,6 +624,7 @@ static void layout_view(const struct player_ui_state *state,
             hint(layout, tr("Orientation"));
             chip(layout, state, PLAYER_UI_RECENTER, tr("Centre"), false);
         }
+        SEPARATOR;
         COLUMN {
             hint(layout, projection_label);
             CHIP_ROW {
@@ -672,6 +645,7 @@ static void layout_view(const struct player_ui_state *state,
                  state->swap_eyes ? tr("Eyes swapped") : tr("Swap eyes"),
                  state->swap_eyes);
         }
+        SEPARATOR;
         COLUMN {
             BAND {
                 paragraph(layout, 2,
@@ -696,7 +670,9 @@ static void layout_position(const struct player_ui_state *state,
          PLAYER_ADJUST_COUNT},
     };
     COLUMNS {
-        for (int column = 0; column < 3; ++column)
+        for (int column = 0; column < 3; ++column) {
+            if (column)
+                SEPARATOR;
             STEPPER_COLUMN {
                 for (int row = 0; row < 3; ++row)
                     if (grid[column][row] != PLAYER_ADJUST_COUNT)
@@ -705,6 +681,7 @@ static void layout_position(const struct player_ui_state *state,
                     chip(layout, state, PLAYER_UI_RESET_POSITION,
                          tr("Reset"), false);
             }
+        }
     }
     hint(layout,
          tr("Tilt applies to all titles, everything else per title."));
@@ -733,11 +710,13 @@ static void layout_picture(const struct player_ui_state *state,
                 hint(layout, tr("Full: full range 0–255"));
             }
         }
+        SEPARATOR;
         STEPPER_COLUMN {
             stepper(layout, state, PLAYER_ADJUST_BRIGHTNESS, NULL);
             stepper(layout, state, PLAYER_ADJUST_CONTRAST, NULL);
             stepper(layout, state, PLAYER_ADJUST_SATURATION, NULL);
         }
+        SEPARATOR;
         STEPPER_COLUMN {
             stepper(layout, state, PLAYER_ADJUST_GAMMA, NULL);
             EMPTY_ROW;
@@ -785,6 +764,7 @@ static void layout_passthrough(const struct player_ui_state *state,
             if (!state->passthrough_supported)
                 note(layout, 2, tr("SteamVR offers no passthrough here."));
         }
+        SEPARATOR;
         KEY_COLUMN {
             KEY_TOP {
                 hint(layout, tr("Chroma key (per title)"));
@@ -795,6 +775,7 @@ static void layout_passthrough(const struct player_ui_state *state,
                 stepper(layout, state, PLAYER_ADJUST_KEY_SOFTNESS, NULL);
             }
         }
+        SEPARATOR;
         KEY_COLUMN {
             KEY_TOP {
                 paragraph(layout, 3,
@@ -820,7 +801,8 @@ static void layout_passthrough(const struct player_ui_state *state,
 #define FACT_LABEL_W 150
 #define FACT_LINE_H 30
 #define FACT_GAP 8
-#define INFO_BOTTOM (POPUP_Y + POPUP_H - 20)
+/* The facts end where the column rules do. */
+#define FACTS_H (CONTENT_H - 12)
 
 static void layout_info(const struct player_ui_state *state,
                         struct ui_layout *layout)
@@ -852,6 +834,7 @@ static void layout_info(const struct player_ui_state *state,
                     details->overview[0] ? color_text : color_dim, 31, 6);
             }
         }
+        SEPARATOR;
         if (details) {
             const struct {
                 const char *label, *value;
@@ -867,7 +850,7 @@ static void layout_info(const struct player_ui_state *state,
                                         CLAY_SIZING_GROW(0)},
                              .childGap = FACT_GAP,
                              .layoutDirection = CLAY_TOP_TO_BOTTOM}}) {
-                int room = INFO_BOTTOM - CONTENT_Y;
+                int room = FACTS_H;
                 for (size_t i = 0; i < sizeof(rows) / sizeof(rows[0]);
                      ++i) {
                     if (!rows[i].value[0])
@@ -921,6 +904,7 @@ static void layout_updates(const struct player_ui_state *state,
                 chip(layout, state, PLAYER_UI_UPDATE_CHECK, tr("Check now"),
                      false);
         }
+        SEPARATOR;
         COLUMN {
             hint(layout, tr("Status"));
             if (state->update_status && state->update_status[0])
@@ -930,6 +914,7 @@ static void layout_updates(const struct player_ui_state *state,
                 chip(layout, state, PLAYER_UI_UPDATE_INSTALL,
                      tr("Update now"), true);
         }
+        SEPARATOR;
         COLUMN {
             static const char *const off_on[2] = {N_("Off"), N_("On")};
             hint(layout, tr("Check at start"));
@@ -988,10 +973,12 @@ static void layout_language(const struct player_ui_state *state,
             for (int pair = 0; pair < 2; ++pair)
                 language_pair(layout, state, 2 * pair, count);
         }
+        SEPARATOR;
         COLUMN {
             for (int pair = 2; pair < 5; ++pair)
                 language_pair(layout, state, 2 * pair, count);
         }
+        SEPARATOR;
         COLUMN {
             paragraph(layout, 5,
                       tr("Automatic follows the language of Steam or of the "
@@ -1001,84 +988,82 @@ static void layout_language(const struct player_ui_state *state,
     }
 }
 
-/* Lays out the content of the tabs that use Clay; false for the others
- * (still in struct popup_layout). */
-static bool layout_tab(const struct player_ui_state *state,
-                       struct ui_layout *layout)
-{
-    void (*describe)(const struct player_ui_state *, struct ui_layout *) =
-        NULL;
-    switch (state->popup_tab) {
-    case PLAYER_UI_TAB_FOCUS:
-        describe = layout_focus;
-        break;
-    case PLAYER_UI_TAB_PLAYBACK:
-        describe = layout_playback;
-        break;
-    case PLAYER_UI_TAB_AUTOFOCUS:
-        describe = layout_autofocus;
-        break;
-    case PLAYER_UI_TAB_BUTTONS:
-        describe = layout_buttons;
-        break;
-    case PLAYER_UI_TAB_VIEW:
-        describe = layout_view;
-        break;
-    case PLAYER_UI_TAB_POSITION:
-        describe = layout_position;
-        break;
-    case PLAYER_UI_TAB_PICTURE:
-        describe = layout_picture;
-        break;
-    case PLAYER_UI_TAB_PASSTHROUGH:
-        describe = layout_passthrough;
-        break;
-    case PLAYER_UI_TAB_INFO:
-        describe = layout_info;
-        break;
-    case PLAYER_UI_TAB_LANGUAGE:
-        describe = layout_language;
-        break;
-    case PLAYER_UI_TAB_UPDATES:
-        describe = layout_updates;
-        break;
-    }
-    if (!describe)
-        return false;
-    ui_layout_begin(layout, PLAYER_UI_WIDTH, PLAYER_UI_HEIGHT);
-    CLAY({.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0)},
-                     .padding = {.left = CONTENT_X, .top = CONTENT_Y}}}) {
-        CLAY({.layout = {.sizing = {CLAY_SIZING_FIXED(CONTENT_W),
-                                    CLAY_SIZING_FIXED(CONTENT_H)},
-                         .layoutDirection = CLAY_TOP_TO_BOTTOM}}) {
-            describe(state, layout);
-        }
-    }
-    ui_layout_end(layout);
-    return true;
-}
-
+/* The popup: the tab row (and "Close" on the settings page), a rule, the
+ * tab's content. */
 static void layout_popup(const struct player_ui_state *state,
-                         struct popup_layout *layout)
+                         struct ui_layout *layout)
 {
-    layout->count = 0;
     static const char *const tabs[PLAYER_UI_TAB_COUNT] = {
         N_("View"),     N_("Position"),  N_("Picture"),
         N_("Focus"),    N_("Passthrough"), N_("Info"),
         N_("Playback"), N_("Autofocus"), N_("Buttons"),
         N_("Language"), N_("Updates"),
     };
+    static void (*const describe[PLAYER_UI_TAB_COUNT])(
+        const struct player_ui_state *, struct ui_layout *) = {
+        [PLAYER_UI_TAB_VIEW] = layout_view,
+        [PLAYER_UI_TAB_POSITION] = layout_position,
+        [PLAYER_UI_TAB_PICTURE] = layout_picture,
+        [PLAYER_UI_TAB_FOCUS] = layout_focus,
+        [PLAYER_UI_TAB_PASSTHROUGH] = layout_passthrough,
+        [PLAYER_UI_TAB_INFO] = layout_info,
+        [PLAYER_UI_TAB_PLAYBACK] = layout_playback,
+        [PLAYER_UI_TAB_AUTOFOCUS] = layout_autofocus,
+        [PLAYER_UI_TAB_BUTTONS] = layout_buttons,
+        [PLAYER_UI_TAB_LANGUAGE] = layout_language,
+        [PLAYER_UI_TAB_UPDATES] = layout_updates,
+    };
     int first = state->settings_page ? PLAYER_UI_FIRST_SETTINGS_TAB : 0;
     int end = state->settings_page ? PLAYER_UI_TAB_COUNT
                                    : PLAYER_UI_FIRST_SETTINGS_TAB;
-    for (int i = first; i < end; ++i)
-        add_chip(layout, PLAYER_UI_TAB + i,
-                 COLUMN_X(0) + (i - first) * (TAB_W + CHIP_GAP), TAB_Y,
-                 TAB_W, tr(tabs[i]), state->popup_tab == i);
-    if (state->settings_page)
-        add_chip(layout, PLAYER_UI_SETTINGS_CLOSE,
-                 POPUP_X + POPUP_W - 22 - TAB_W, TAB_Y, TAB_W, tr("Close"),
-                 false);
+    const struct ui_layout_card card = {
+        .fill = UI_RGBA(17, 18, 22, 240),
+        .border = color_border,
+        .shadow = color_shadow,
+        .radius = POPUP_RADIUS,
+        .border_width = 2,
+        .shadow_blur = 22,
+        .shadow_offset = 6,
+    };
+    ui_layout_begin(layout, PLAYER_UI_WIDTH, PLAYER_UI_HEIGHT);
+    CLAY({.layout = {.sizing = {CLAY_SIZING_GROW(0), CLAY_SIZING_GROW(0)},
+                     .padding = {.left = POPUP_X, .top = POPUP_Y}}}) {
+        CLAY({.layout = {.sizing = {CLAY_SIZING_FIXED(POPUP_W),
+                                    CLAY_SIZING_FIXED(POPUP_H)},
+                         .padding = {POPUP_PAD, POPUP_PAD, POPUP_PAD_TOP,
+                                     POPUP_PAD_BOTTOM},
+                         .layoutDirection = CLAY_TOP_TO_BOTTOM},
+              .custom = {.customData = ui_layout_card(layout, &card)}}) {
+            CHIP_ROW {
+                for (int i = first; i < end; ++i)
+                    chip_sized(layout, state, PLAYER_UI_TAB + i, tr(tabs[i]),
+                               state->popup_tab == i,
+                               CLAY_SIZING_FIXED(TAB_W), false);
+                if (state->settings_page) {
+                    SPACER;
+                    chip_sized(layout, state, PLAYER_UI_SETTINGS_CLOSE,
+                               tr("Close"), false, CLAY_SIZING_FIXED(TAB_W),
+                               false);
+                }
+            }
+            CLAY({.layout = {.sizing = {CLAY_SIZING_GROW(0),
+                                        CLAY_SIZING_FIT(0)},
+                             .padding = {.top = RULE_ABOVE,
+                                         .bottom = RULE_BELOW}}}) {
+                CLAY({.layout = {.sizing = {CLAY_SIZING_GROW(0),
+                                            CLAY_SIZING_FIXED(2)}},
+                      .backgroundColor = ui_layout_color(color_border)}) {}
+            }
+            CLAY({.layout = {.sizing = {CLAY_SIZING_GROW(0),
+                                        CLAY_SIZING_GROW(0)},
+                             .layoutDirection = CLAY_TOP_TO_BOTTOM}}) {
+                if (state->popup_tab >= 0 &&
+                    state->popup_tab < PLAYER_UI_TAB_COUNT)
+                    describe[state->popup_tab](state, layout);
+            }
+        }
+    }
+    ui_layout_end(layout);
 }
 
 float player_adjust_step(enum player_adjust adjust, float value,
@@ -1107,71 +1092,13 @@ static void round_button(struct ui_canvas *canvas, float cx, float r,
                            : color_button);
 }
 
-static void draw_chip(struct player_ui *ui, struct ui_canvas *canvas, int x,
-                      int y, int width, const char *label, bool selected,
-                      bool hover, bool small)
-{
-    ui_fill_round_rect(canvas, x, y, width, CHIP_H, CHIP_H / 2.0f,
-                       selected ? color_accent
-                       : hover ? color_button_hover
-                               : color_button);
-    ui_draw_text(canvas, selected ? ui->bold : ui->font, small ? 20 : 24,
-                 x + width / 2, y + (small ? 10 : 8), width - 16,
-                 UI_ALIGN_CENTER, color_text, label);
-}
-
 static void draw_popup(struct player_ui *ui, struct ui_canvas *canvas,
                        const struct player_ui_state *state)
 {
-    ui_shadow_round_rect(canvas, POPUP_X, POPUP_Y + 6, POPUP_W, POPUP_H, 26,
-                         22, color_shadow);
-    ui_fill_round_rect(canvas, POPUP_X, POPUP_Y, POPUP_W, POPUP_H, 26,
-                       UI_RGBA(17, 18, 22, 240));
-    ui_stroke_round_rect(canvas, POPUP_X, POPUP_Y, POPUP_W, POPUP_H, 26, 2,
-                         color_border);
-    ui_fill_rect(canvas, POPUP_X + 20, TAB_Y + CHIP_H + 10, POPUP_W - 40, 2,
-                 color_border);
-    for (int column = state->popup_tab == PLAYER_UI_TAB_INFO ? 2 : 1;
-         column < 3; ++column)
-        ui_fill_rect(canvas, COLUMN_X(column) - 22, TAB_Y + CHIP_H + 26, 2,
-                     POPUP_H - CHIP_H - 64, color_border);
-    struct popup_layout layout;
+    struct ui_layout layout;
     layout_popup(state, &layout);
-    for (int i = 0; i < layout.count; ++i) {
-        const struct widget *widget = &layout.items[i];
-        switch (widget->kind) {
-        case WIDGET_CHIP:
-            draw_chip(ui, canvas, widget->x, widget->y, widget->width,
-                      widget->text, widget->selected,
-                      state->hover == widget->control, widget->small);
-            break;
-        case WIDGET_TEXT:
-            ui_draw_text(canvas, ui->font, 24, widget->x, widget->y,
-                         widget->width, UI_ALIGN_LEFT, color_text,
-                         widget->text);
-            break;
-        case WIDGET_HINT:
-            ui_draw_text(canvas, ui->font, 22, widget->x, widget->y, 0,
-                         UI_ALIGN_LEFT, color_dim, widget->text);
-            break;
-        case WIDGET_PARAGRAPH:
-            ui_draw_text_wrapped(canvas, ui->font, 22, widget->x, widget->y,
-                                 widget->width, 30, widget->lines,
-                                 UI_ALIGN_LEFT, color_dim, widget->text);
-            break;
-        case WIDGET_VALUE:
-            ui_draw_text(canvas, ui->bold, 24, widget->x + widget->width / 2,
-                         widget->y, widget->width - 8, UI_ALIGN_CENTER,
-                         color_text, widget->text);
-            break;
-        }
-    }
-    struct ui_layout tab;
-    if (layout_tab(state, &tab)) {
-        struct ui_font *const fonts[UI_LAYOUT_FONT_COUNT] = {ui->font,
-                                                             ui->bold};
-        ui_layout_draw(&tab, canvas, fonts);
-    }
+    struct ui_font *const fonts[UI_LAYOUT_FONT_COUNT] = {ui->font, ui->bold};
+    ui_layout_draw(&layout, canvas, fonts);
 }
 
 /* Name of the chapter `position_us` lies in, or NULL. */
@@ -1444,18 +1371,9 @@ int player_ui_hit_test(const struct player_ui_state *state, float u, float v)
     float x = u * PLAYER_UI_WIDTH, y = v * PLAYER_UI_HEIGHT;
     if (state->popup_open && in_rect(x, y, POPUP_X, POPUP_Y, POPUP_W,
                                      POPUP_H)) {
-        struct popup_layout layout;
+        struct ui_layout layout;
         layout_popup(state, &layout);
-        for (int i = 0; i < layout.count; ++i) {
-            const struct widget *widget = &layout.items[i];
-            if (widget->kind == WIDGET_CHIP &&
-                in_rect(x, y, widget->x, widget->y, widget->width, CHIP_H))
-                return widget->control;
-        }
-        struct ui_layout tab;
-        if (layout_tab(state, &tab))
-            return ui_layout_hit(&tab, x, y, PLAYER_UI_NONE);
-        return PLAYER_UI_NONE;
+        return ui_layout_hit(&layout, x, y, PLAYER_UI_NONE);
     }
     if (state->duration_us > 0 && y >= BAR_HIT_TOP && y < BAR_HIT_BOTTOM &&
         x >= BAR_X - 16 && x < BAR_X + BAR_W + 16)

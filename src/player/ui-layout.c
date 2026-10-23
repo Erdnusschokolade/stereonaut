@@ -201,7 +201,7 @@ static struct ui_layout_item *add_item(struct ui_layout *layout,
 {
     static struct ui_layout_item overflow;
     if (layout->item_count >= UI_LAYOUT_MAX_ITEMS) {
-        fprintf(stderr, "ui-layout: more than %d text items\n",
+        fprintf(stderr, "ui-layout: more than %d drawn items\n",
                 UI_LAYOUT_MAX_ITEMS);
         overflow = (struct ui_layout_item){.text = ""};
         return &overflow;
@@ -244,6 +244,16 @@ void ui_layout_paragraph(struct ui_layout *layout, const char *text,
           .custom = {.customData = item}}) {}
 }
 
+void *ui_layout_card(struct ui_layout *layout,
+                     const struct ui_layout_card *card)
+{
+    struct ui_layout_item *item = add_item(layout, UI_LAYOUT_CARD, NULL,
+                                           UI_LAYOUT_REGULAR, 0,
+                                           card->fill);
+    item->card = *card;
+    return item;
+}
+
 int ui_layout_line_count(const char *text, enum ui_layout_font font,
                          int size, int width, int max_lines)
 {
@@ -258,6 +268,23 @@ static void draw_item(const struct ui_layout_command *command,
     const struct ui_layout_item *item = command->item;
     int x = (int)command->x, y = (int)command->y;
     int width = (int)command->width;
+    if (item->kind == UI_LAYOUT_CARD) {
+        const struct ui_layout_card *card = &item->card;
+        if (card->shadow.a)
+            ui_shadow_round_rect(canvas, command->x,
+                                 command->y + card->shadow_offset,
+                                 command->width, command->height,
+                                 card->radius, card->shadow_blur,
+                                 card->shadow);
+        ui_fill_round_rect(canvas, command->x, command->y, command->width,
+                           command->height, card->radius, card->fill);
+        if (card->border_width > 0.0f)
+            ui_stroke_round_rect(canvas, command->x, command->y,
+                                 command->width, command->height,
+                                 card->radius, card->border_width,
+                                 card->border);
+        return;
+    }
     if (item->kind == UI_LAYOUT_PARAGRAPH) {
         ui_draw_text_wrapped(canvas, fonts[item->font], item->size, x, y,
                              width, item->line_height, item->max_lines,

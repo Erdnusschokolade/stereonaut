@@ -33,12 +33,21 @@ enum ui_layout_font {
 #define UI_LAYOUT_MAX_ITEMS 128
 #define UI_LAYOUT_TEXT_BYTES 8192
 
-/* Text the adapter draws itself, because Clay has neither an ellipsis nor
- * a line limit: a single line shortened to its box, or a paragraph wrapped
- * into at most `max_lines` lines (the box is that high). */
+/* What the adapter draws itself. Text, because Clay has neither an
+ * ellipsis nor a line limit: a single line shortened to its box, or a
+ * paragraph wrapped into at most `max_lines` lines (the box is that high).
+ * A card: a rounded box with a soft shadow below it and a border, drawn
+ * before its children. */
 enum ui_layout_item_kind {
     UI_LAYOUT_LABEL,
     UI_LAYOUT_PARAGRAPH,
+    UI_LAYOUT_CARD,
+};
+
+struct ui_layout_card {
+    struct ui_color fill, border, shadow;
+    float radius, border_width;
+    float shadow_blur, shadow_offset; /* blur and downward offset */
 };
 
 struct ui_layout_item {
@@ -49,6 +58,7 @@ struct ui_layout_item {
     enum ui_align align;
     int line_height, max_lines; /* paragraphs */
     const char *text;
+    struct ui_layout_card card;
 };
 
 enum ui_layout_command_kind {
@@ -118,6 +128,11 @@ void ui_layout_paragraph(struct ui_layout *layout, const char *text,
  * a paragraph draws it; only between ui_layout_begin and ui_layout_end. */
 int ui_layout_line_count(const char *text, enum ui_layout_font font,
                          int size, int width, int max_lines);
+
+/* Custom data for an element drawn as `card` (CLAY .custom.customData);
+ * the element's children lie on it. */
+void *ui_layout_card(struct ui_layout *layout,
+                     const struct ui_layout_card *card);
 
 void ui_layout_draw(const struct ui_layout *layout, struct ui_canvas *canvas,
                     struct ui_font *const fonts[UI_LAYOUT_FONT_COUNT]);
