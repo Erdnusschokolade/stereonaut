@@ -81,7 +81,11 @@ static char *join_path(const char *directory, const char *name)
     char *path = malloc(size);
     if (!path)
         return NULL;
-    snprintf(path, size, root ? "/%s" : "%s/%s", directory, name);
+
+    if (root)
+        snprintf(path, size, "/%s", name);
+    else
+        snprintf(path, size, "%s/%s", directory, name);
     return path;
 }
 
