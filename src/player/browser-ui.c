@@ -1460,21 +1460,29 @@ static void request_streams(struct browser_ui *ui)
         ui->streams_requested[indices[i]] = true;
 }
 
+/* Pages around the current one whose thumbnails stay loaded (at most
+ * 7 x 12 tiles, about 20 MB). */
+#define KEPT_PAGES 3
+
 /* Loads the thumbnails of the current and the next page and releases those
- * more than one page away, so memory stays bounded for long listings. */
+ * more than KEPT_PAGES away, so memory stays bounded for long listings.
+ * Requests not started yet are dropped first: pages flipped past would
+ * otherwise be made before the one shown. */
 static void request_thumbnails(struct browser_ui *ui)
 {
     request_streams(ui);
     if (!ui->thumbs || !ui->thumb_requested)
         return;
+    thumbnail_loader_cancel(ui->loader);
     for (size_t position = 0; position < ui->grid_count; ++position) {
         size_t page = position / PAGE_ENTRIES;
         size_t index = ui->grid[position];
-        if (page + 1 < ui->page || page > ui->page + 1) {
+        if (page + KEPT_PAGES < ui->page || page > ui->page + KEPT_PAGES) {
             ui_image_free(ui->thumbs[index]);
             ui->thumbs[index] = NULL;
-            ui->thumb_requested[index] = false;
         }
+        if (!ui->thumbs[index])
+            ui->thumb_requested[index] = false;
     }
     for (size_t page = ui->page; page <= ui->page + 1; ++page)
         for (size_t slot = 0; slot < PAGE_ENTRIES; ++slot) {
