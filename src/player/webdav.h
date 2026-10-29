@@ -51,7 +51,16 @@ struct wd_entry {
     char path[1024]; /* encoded path below the origin, e.g. /dav/movies/ */
     bool is_dir;
     int64_t size;    /* bytes, 0 if unknown */
+    /* A title's sidecar picture (see local-thumbnail.c), encoded like
+     * `path`, and its size; "" if there is none. */
+    char image[1024];
+    int64_t image_size;
 };
+
+/* GET of a small file (a picture) below the origin into a malloc'd
+ * buffer. 0 on success, <0 on any failure. */
+int wd_fetch(const struct wd_server *server, const char *path, char **data,
+             size_t *size);
 
 #define WD_LOGIN_REJECTED (-2) /* HTTP 401 */
 #define WD_UNREACHABLE (-3)    /* no connection, or HTTP 404 */

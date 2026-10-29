@@ -170,16 +170,27 @@ static int encode_jpeg(const uint8_t *rgb, int width, int height, char **data,
     return 0;
 }
 
-static int key_frame_jpeg(const char *path, int max_width, char **data,
-                          size_t *size)
+/* `headers` (CRLF-terminated lines) only for an http(s) URL. */
+static int key_frame_jpeg(const char *path, const char *headers,
+                          int max_width, char **data, size_t *size)
 {
     AVFormatContext *format = NULL;
     AVCodecContext *decoder = NULL;
     AVPacket *packet = av_packet_alloc();
     AVFrame *frame = av_frame_alloc();
+    AVDictionary *options = NULL;
     int result = -1;
-    if (!packet || !frame ||
-        avformat_open_input(&format, path, NULL, NULL) < 0 ||
+    if (headers) {
+        if (headers[0])
+            av_dict_set(&options, "headers", headers, 0);
+        av_dict_set(&options, "user_agent", "Stereonaut", 0);
+        av_dict_set(&options, "rw_timeout", "10000000", 0);
+    }
+    int opened = packet && frame
+                     ? avformat_open_input(&format, path, NULL, &options)
+                     : -1;
+    av_dict_free(&options);
+    if (opened < 0 ||
         avformat_find_stream_info(format, NULL) < 0)
         goto done;
     const AVCodec *codec = NULL;
@@ -236,5 +247,13 @@ int local_thumbnail_jpeg(const char *path, int max_width, char **data,
     *data = read_sidecar(path, size);
     if (*data)
         return 0;
-    return key_frame_jpeg(path, max_width, data, size);
+    return key_frame_jpeg(path, NULL, max_width, data, size);
+}
+
+int local_thumbnail_url_jpeg(const char *url, const char *headers,
+                             int max_width, char **data, size_t *size)
+{
+    *data = NULL;
+    *size = 0;
+    return key_frame_jpeg(url, headers ? headers : "", max_width, data, size);
 }

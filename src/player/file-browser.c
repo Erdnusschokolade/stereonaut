@@ -734,7 +734,19 @@ static struct file_browser_listing read_webdav(const char *path,
             free(entries);
             goto allocation_failure;
         }
-        listing.entries[listing.entry_count - 1U].size = entries[i].size;
+        struct file_browser_entry *entry =
+            &listing.entries[listing.entry_count - 1U];
+        entry->size = entries[i].size;
+        if (!entries[i].is_dir) {
+            /* Tile picture: the sidecar, else a key frame of the title. */
+            bool sidecar = entries[i].image[0];
+            char source[1200];
+            snprintf(source, sizeof(source), "webdav:%ld:%lld:%s", index,
+                     (long long)(sidecar ? entries[i].image_size
+                                         : entries[i].size),
+                     sidecar ? entries[i].image : entries[i].path);
+            entry->image = strdup(source);
+        }
     }
     free(entries);
     compare_sort = FILE_BROWSER_SORT_NAME;

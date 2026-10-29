@@ -31,6 +31,9 @@ void thumbnail_loader_request(struct thumbnail_loader *loader,
                               uint64_t generation, size_t index,
                               const char *source);
 /* Takes one finished result; false if there is none. */
+/* Drops the requests not started yet (a title starts playing: keep the
+ * network and the CPU for it). */
+void thumbnail_loader_cancel(struct thumbnail_loader *loader);
 bool thumbnail_loader_poll(struct thumbnail_loader *loader,
                            struct thumbnail_result *result);
 /* Decodes a JPEG into an opaque RGBA image; NULL on failure. */

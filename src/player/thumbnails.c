@@ -4,6 +4,7 @@
 #include "jellyfin.h"
 #include "local-thumbnail.h"
 #include "ui-draw.h"
+#include "webdav.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -13,6 +14,7 @@
 #include <jpeglib.h> /* needs stdio.h first */
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -324,11 +326,71 @@ static struct ui_image *load_local(const char *path)
     return decoded ? prepare(decoded) : NULL;
 }
 
+/* "webdav:N:SIZE:PATH": a sidecar picture (PATH ends in .jpg) or a key
+ * frame of the video at PATH on WebDAV server N, cached under a hash of
+ * the URL with SIZE as the tag. */
+static struct ui_image *load_webdav(const char *source)
+{
+    char *rest = NULL;
+    long index = strtol(source, &rest, 10);
+    struct wd_server server;
+    if (rest == source || *rest != ':' || wd_server_get((int)index, &server) < 0)
+        return NULL;
+    long long file_size = strtoll(rest + 1, &rest, 10);
+    if (*rest != ':' || rest[1] != '/')
+        return NULL;
+    const char *path = rest + 1;
+    char origin[512], url[1600];
+    wd_origin(&server, origin, sizeof(origin));
+    snprintf(url, sizeof(url), "%s%s", origin, path);
+    uint64_t hash = 1469598103934665603ULL; /* FNV-1a */
+    for (const unsigned char *c = (const unsigned char *)url; *c; ++c)
+        hash = (hash ^ *c) * 1099511628211ULL;
+    char item[32], image[64], cache[PATH_MAX];
+    snprintf(item, sizeof(item), "webdav%016llx", (unsigned long long)hash);
+    snprintf(image, sizeof(image), "Remote?tag=%lld", file_size);
+    bool cacheable = cache_path(item, image, cache, sizeof(cache));
+    size_t size = 0;
+    char *data = cacheable ? read_file(cache, &size) : NULL;
+    if (!data) {
+        const char *dot = strrchr(path, '.');
+        int got;
+        if (dot && strcasecmp(dot, ".jpg") == 0) {
+            got = wd_fetch(&server, path, &data, &size);
+        } else {
+            char authorization[1024], headers[1100];
+            wd_authorization_header(&server, authorization,
+                                    sizeof(authorization));
+            snprintf(headers, sizeof(headers), "%s%s", authorization,
+                     authorization[0] ? "\r\n" : "");
+            got = local_thumbnail_url_jpeg(url, headers, DOWNLOAD_WIDTH,
+                                           &data, &size);
+        }
+        if (got < 0) {
+            printf("webdav_thumbnail server=%ld available=0\n", index);
+            memset(&server, 0, sizeof(server));
+            return NULL;
+        }
+        if (cacheable)
+            write_file(cache, data, size);
+    }
+    memset(&server, 0, sizeof(server));
+    struct ui_image *decoded = thumbnail_decode_jpeg(data, size);
+    free(data);
+    if (!decoded)
+        return NULL;
+    bool small = false;
+    decoded = trim_border(decoded, &small);
+    return decoded ? prepare(decoded) : NULL;
+}
+
 static struct ui_image *load(const struct jf_config *config,
                              const char *source, bool *stale)
 {
     if (strncmp(source, "file:", 5) == 0)
         return load_local(source + 5);
+    if (strncmp(source, "webdav:", 7) == 0)
+        return load_webdav(source + 7);
     const char *separator = strchr(source, '|');
     if (!separator)
         return NULL;
@@ -486,6 +548,17 @@ void thumbnail_loader_request(struct thumbnail_loader *loader,
                                                          copy};
         pthread_cond_signal(&loader->changed);
     }
+    pthread_mutex_unlock(&loader->mutex);
+}
+
+void thumbnail_loader_cancel(struct thumbnail_loader *loader)
+{
+    if (!loader)
+        return;
+    pthread_mutex_lock(&loader->mutex);
+    for (size_t i = 0; i < loader->job_count; ++i)
+        free(loader->jobs[i].source);
+    loader->job_count = 0;
     pthread_mutex_unlock(&loader->mutex);
 }
 

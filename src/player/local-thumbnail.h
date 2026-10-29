@@ -10,5 +10,9 @@
  * (seconds): run it on a worker and cache the result. *data is malloc'd. */
 int local_thumbnail_jpeg(const char *path, int max_width, char **data,
                          size_t *size);
+/* The key frame of a video at an http(s) URL; `headers` are extra request
+ * lines ("Authorization: ...\r\n") or NULL. */
+int local_thumbnail_url_jpeg(const char *url, const char *headers,
+                             int max_width, char **data, size_t *size);
 
 #endif
