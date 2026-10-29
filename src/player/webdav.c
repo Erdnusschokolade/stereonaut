@@ -344,12 +344,15 @@ static void xml_unescape(const char *in, size_t length, char *out,
 struct buffer {
     char *data;
     size_t size;
+    size_t limit; /* 0: no limit */
 };
 
 static size_t write_body(char *data, size_t size, size_t count, void *user)
 {
     struct buffer *buffer = user;
     size_t total = size * count;
+    if (buffer->limit && buffer->size + total > buffer->limit)
+        return 0; /* aborts the transfer */
     char *grown = realloc(buffer->data, buffer->size + total + 1);
     if (!grown)
         return 0;
@@ -393,6 +396,45 @@ static bool is_media_name(const char *name)
            (strcasecmp(dot, ".mkv") == 0 || strcasecmp(dot, ".mp4") == 0);
 }
 
+/* A picture next to a video: "NAME-poster.jpg", "NAME.jpg", ... */
+struct picture {
+    char name[256];
+    char path[1024];
+    int64_t size;
+};
+
+/* Gives each title the first sidecar picture found, in the order of
+ * local-thumbnail.c. */
+static void match_pictures(struct wd_entry *entries, size_t count,
+                           const struct picture *pictures,
+                           size_t picture_count)
+{
+    static const char *const suffixes[] = {
+        "-poster.jpg", ".jpg", "-thumb.jpg", "-fanart.jpg",
+    };
+    for (size_t i = 0; i < count && picture_count; ++i) {
+        if (entries[i].is_dir)
+            continue;
+        const char *dot = strrchr(entries[i].name, '.');
+        int base = dot ? (int)(dot - entries[i].name)
+                       : (int)strlen(entries[i].name);
+        for (size_t s = 0; s < sizeof(suffixes) / sizeof(suffixes[0]) &&
+                           !entries[i].image[0];
+             ++s) {
+            char wanted[300];
+            snprintf(wanted, sizeof(wanted), "%.*s%s", base, entries[i].name,
+                     suffixes[s]);
+            for (size_t p = 0; p < picture_count; ++p)
+                if (strcmp(pictures[p].name, wanted) == 0) {
+                    memcpy(entries[i].image, pictures[p].path,
+                           sizeof(entries[i].image));
+                    entries[i].image_size = pictures[p].size;
+                    break;
+                }
+        }
+    }
+}
+
 /* Decoded `path` without trailing slashes into `out`. */
 static void decoded_path(const char *path, char *out, size_t size)
 {
@@ -402,34 +444,20 @@ static void decoded_path(const char *path, char *out, size_t size)
         out[--length] = '\0';
 }
 
-int wd_list(const struct wd_server *server, const char *dir_path,
-            struct wd_entry **out, size_t *count, char *error,
-            size_t error_size)
+/* A request to `path` below the server's origin with its login, the
+ * body collected in `response`. */
+static CURL *open_request(const struct wd_server *server, const char *path,
+                          struct buffer *response)
 {
-    *out = NULL;
-    *count = 0;
     char origin[512], url[1600];
     wd_origin(server, origin, sizeof(origin));
-    snprintf(url, sizeof(url), "%s%s", origin, dir_path);
-
+    snprintf(url, sizeof(url), "%s%s", origin, path);
     CURL *curl = curl_easy_init();
-    if (!curl) {
-        set_error(error, error_size, tr("Not enough memory"));
-        return -1;
-    }
-    struct buffer response = {0};
-    struct curl_slist *headers = NULL;
-    headers = curl_slist_append(headers, "Depth: 1");
-    headers = curl_slist_append(headers, "Content-Type: application/xml");
-    static const char body[] =
-        "<?xml version=\"1.0\"?><d:propfind xmlns:d=\"DAV:\"><d:prop>"
-        "<d:resourcetype/><d:getcontentlength/></d:prop></d:propfind>";
+    if (!curl)
+        return NULL;
     curl_easy_setopt(curl, CURLOPT_URL, url);
-    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PROPFIND");
-    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_body);
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, response);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 10L);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 30L);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
@@ -440,6 +468,52 @@ int wd_list(const struct wd_server *server, const char *dir_path,
         curl_easy_setopt(curl, CURLOPT_USERNAME, server->user);
         curl_easy_setopt(curl, CURLOPT_PASSWORD, server->pass);
     }
+    return curl;
+}
+
+int wd_fetch(const struct wd_server *server, const char *path, char **data,
+             size_t *size)
+{
+    *data = NULL;
+    *size = 0;
+    struct buffer response = {.limit = 32U * 1024U * 1024U};
+    CURL *curl = open_request(server, path, &response);
+    if (!curl)
+        return -1;
+    CURLcode result = curl_easy_perform(curl);
+    long status = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+    curl_easy_cleanup(curl);
+    if (result != CURLE_OK || status != 200 || !response.data) {
+        free(response.data);
+        return -1;
+    }
+    *data = response.data;
+    *size = response.size;
+    return 0;
+}
+
+int wd_list(const struct wd_server *server, const char *dir_path,
+            struct wd_entry **out, size_t *count, char *error,
+            size_t error_size)
+{
+    *out = NULL;
+    *count = 0;
+    struct buffer response = {0};
+    CURL *curl = open_request(server, dir_path, &response);
+    if (!curl) {
+        set_error(error, error_size, tr("Not enough memory"));
+        return -1;
+    }
+    struct curl_slist *headers = NULL;
+    headers = curl_slist_append(headers, "Depth: 1");
+    headers = curl_slist_append(headers, "Content-Type: application/xml");
+    static const char body[] =
+        "<?xml version=\"1.0\"?><d:propfind xmlns:d=\"DAV:\"><d:prop>"
+        "<d:resourcetype/><d:getcontentlength/></d:prop></d:propfind>";
+    curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "PROPFIND");
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body);
     CURLcode result = curl_easy_perform(curl);
     long status = 0;
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
@@ -465,8 +539,9 @@ int wd_list(const struct wd_server *server, const char *dir_path,
 
     char self[1024];
     decoded_path(dir_path, self, sizeof(self));
-    size_t capacity = 0;
+    size_t capacity = 0, picture_count = 0, picture_capacity = 0;
     struct wd_entry *entries = NULL;
+    struct picture *pictures = NULL;
     const char *end = response.data + response.size;
     for (const char *href = find_tag(response.data, end, "href"); href;) {
         const char *href_end = memchr(href, '<', (size_t)(end - href));
@@ -495,8 +570,10 @@ int wd_list(const struct wd_server *server, const char *dir_path,
         const char *slash = strrchr(decoded, '/');
         const char *name = slash ? slash + 1 : decoded;
         bool is_dir = find_tag(href_end, properties_end, "collection");
+        const char *dot = strrchr(name, '.');
+        bool picture = !is_dir && dot && strcasecmp(dot, ".jpg") == 0;
         if (!name[0] || name[0] == '.' || /* hidden */
-            (!is_dir && !is_media_name(name)))
+            (!is_dir && !picture && !is_media_name(name)))
             continue;
         /* Folders end in '/'; a path that would be cut is skipped. */
         char location[sizeof(entries->path)];
@@ -505,12 +582,32 @@ int wd_list(const struct wd_server *server, const char *dir_path,
                                                                        : "");
         if (written < 0 || (size_t)written >= sizeof(location))
             continue;
+        const char *length = find_tag(href_end, properties_end,
+                                      "getcontentlength");
+        int64_t size = length && !is_dir ? strtoll(length, NULL, 10) : 0;
+        if (picture) {
+            if (picture_count == picture_capacity) {
+                size_t grown = picture_capacity ? picture_capacity * 2 : 16;
+                struct picture *more =
+                    realloc(pictures, grown * sizeof(*more));
+                if (!more)
+                    continue; /* the title just keeps its key frame */
+                pictures = more;
+                picture_capacity = grown;
+            }
+            struct picture *added = &pictures[picture_count++];
+            snprintf(added->name, sizeof(added->name), "%s", name);
+            memcpy(added->path, location, (size_t)written + 1);
+            added->size = size;
+            continue;
+        }
 
         if (*count == capacity) {
             size_t grown = capacity ? capacity * 2 : 16;
             struct wd_entry *more = realloc(entries, grown * sizeof(*more));
             if (!more) {
                 free(entries);
+                free(pictures);
                 free(response.data);
                 set_error(error, error_size, tr("Not enough memory"));
                 return -1;
@@ -523,11 +620,10 @@ int wd_list(const struct wd_server *server, const char *dir_path,
         snprintf(entry->name, sizeof(entry->name), "%s", name);
         memcpy(entry->path, location, (size_t)written + 1);
         entry->is_dir = is_dir;
-        const char *length = find_tag(href_end, properties_end,
-                                      "getcontentlength");
-        if (length && !is_dir)
-            entry->size = strtoll(length, NULL, 10);
+        entry->size = size;
     }
+    match_pictures(entries, *count, pictures, picture_count);
+    free(pictures);
     free(response.data);
     *out = entries;
     return 0;
