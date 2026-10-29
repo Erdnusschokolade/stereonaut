@@ -131,6 +131,8 @@ static const struct i18n_entry entries[] = {
      "Videodatei auf dem Server defekt"},
     {"Stream address too long", "Stream-Adresse zu lang"},
     {"The title cannot be played", "Titel kann nicht abgespielt werden"},
+    {"Cannot reach the WebDAV server or the network",
+     "WebDAV-Server oder Netzwerk nicht erreichbar"},
     {"Cannot reach Jellyfin or the network",
      "Jellyfin oder Netzwerk nicht erreichbar"},
     {"Another program is using the video decoder (e.g. a video in Steam)",

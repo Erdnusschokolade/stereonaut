@@ -2938,7 +2938,12 @@ int main(int argc, char **argv)
         fprintf(stderr, "open media pipeline: %s\n", pipeline_error);
         if (strstr(pipeline_error, "unsupported video"))
             return EXIT_UNSUPPORTED_FORMAT;
-        return strncmp(input, "http", 4) == 0 ? EXIT_SOURCE_FAILED : 2;
+        if (strncmp(input, "http", 4) != 0)
+            return 2;
+        /* The server answered, but not with a video (an empty or cut
+         * file): not a network problem. */
+        return strstr(pipeline_error, "Invalid data") ? EXIT_BROKEN_SOURCE
+                                                      : EXIT_SOURCE_FAILED;
     }
     volume_pipeline = pipeline;
     log_seek_phase("pipeline_open");
