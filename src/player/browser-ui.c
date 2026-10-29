@@ -1460,9 +1460,12 @@ static void request_streams(struct browser_ui *ui)
         ui->streams_requested[indices[i]] = true;
 }
 
-/* Pages around the current one whose thumbnails stay loaded (at most
- * 7 x 12 tiles, about 20 MB). */
-#define KEPT_PAGES 3
+/* Memory for the loaded thumbnails of a listing (a tile is at most
+ * THUMBNAIL_WIDTH wide and about 260 kB): pages around the current one
+ * stay loaded within it, i.e. a usual folder entirely. Others come back
+ * from the disk cache. */
+#define THUMBNAIL_MEMORY (500U * 1024U * 1024U)
+#define KEPT_PAGES (THUMBNAIL_MEMORY / (2U * PAGE_ENTRIES * 260U * 1024U))
 
 /* Loads the thumbnails of the current and the next page and releases those
  * more than KEPT_PAGES away, so memory stays bounded for long listings.
