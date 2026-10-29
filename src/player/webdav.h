@@ -22,10 +22,14 @@ struct wd_server {
 
 /* Fills `out` with the saved servers (up to `max`); returns the count. */
 int wd_servers_load(struct wd_server *out, int max);
-/* Appends `server` (http:// is assumed without a scheme) and saves the
- * list. 0 on success, <0 with a message in `error`. */
-int wd_server_add(const struct wd_server *server, char *error,
-                  size_t error_size);
+/* Replaces the server at `index`, or appends it for index -1, and saves
+ * the list; http:// is assumed without a scheme, an empty name keeps the
+ * old one or becomes the address. 0 on success, <0 with a message in
+ * `error`. */
+int wd_server_save(int index, const struct wd_server *server, char *error,
+                   size_t error_size);
+/* Removes the server at `index`; later servers move up one place. */
+int wd_server_remove(int index, char *error, size_t error_size);
 /* Copies the server at `index` into `out`. 0 on success, <0 if out of
  * range. */
 int wd_server_get(int index, struct wd_server *out);
@@ -49,9 +53,12 @@ struct wd_entry {
     int64_t size;    /* bytes, 0 if unknown */
 };
 
+#define WD_LOGIN_REJECTED (-2) /* HTTP 401 */
+
 /* PROPFIND Depth 1 of `dir_path` (encoded, below the origin): folders and
  * .mkv/.mp4 files, without the folder itself. *out is malloc'd (caller
- * frees). 0 on success, <0 with a message in `error`. */
+ * frees). 0 on success, <0 (WD_LOGIN_REJECTED or -1) with a message in
+ * `error`. */
 int wd_list(const struct wd_server *server, const char *dir_path,
             struct wd_entry **out, size_t *count, char *error,
             size_t error_size);

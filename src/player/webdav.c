@@ -144,8 +144,20 @@ static int servers_save(const struct wd_server *servers, int count,
     return 0;
 }
 
-int wd_server_add(const struct wd_server *server, char *error,
-                  size_t error_size)
+/* The name a server gets without one of its own: the address without the
+ * scheme and a trailing slash. */
+static void default_name(const char *url, char *name, size_t size)
+{
+    const char *scheme = strstr(url, "://");
+    const char *start = scheme ? scheme + 3 : url;
+    size_t length = strlen(start);
+    while (length > 1 && start[length - 1] == '/')
+        --length;
+    snprintf(name, size, "%.*s", (int)length, start);
+}
+
+int wd_server_save(int index, const struct wd_server *server, char *error,
+                   size_t error_size)
 {
     if (!server->url[0]) {
         set_error(error, error_size, tr("The server address is missing"));
@@ -153,19 +165,47 @@ int wd_server_add(const struct wd_server *server, char *error,
     }
     struct wd_server servers[WD_MAX_SERVERS];
     int count = wd_servers_load(servers, WD_MAX_SERVERS);
-    if (count >= WD_MAX_SERVERS) {
+    if (index < 0 && count >= WD_MAX_SERVERS) {
         set_error(error, error_size, tr("Too many saved servers"));
         return -1;
     }
-    struct wd_server *added = &servers[count];
-    *added = *server;
+    if (index >= count) {
+        set_error(error, error_size, tr("The server no longer exists"));
+        return -1;
+    }
+    struct wd_server *saved = &servers[index < 0 ? count : index];
+    /* A name of its own (edited in webdav.json) survives a change. */
+    char name[sizeof(saved->name)] = "";
+    if (index >= 0) {
+        char generated[sizeof(name)];
+        default_name(saved->url, generated, sizeof(generated));
+        if (strcmp(saved->name, generated) != 0)
+            copy_string(name, sizeof(name), saved->name);
+    }
+    *saved = *server;
     /* A bare "host:port" has no scheme; libcurl needs one. */
-    if (!strstr(added->url, "://"))
-        snprintf(added->url, sizeof(added->url), "http://%.*s",
-                 (int)(sizeof(added->url) - 8), server->url);
-    if (!added->name[0])
-        copy_string(added->name, sizeof(added->name), server->url);
-    return servers_save(servers, count + 1, error, error_size);
+    if (!strstr(saved->url, "://"))
+        snprintf(saved->url, sizeof(saved->url), "http://%.*s",
+                 (int)(sizeof(saved->url) - 8), server->url);
+    if (!saved->name[0])
+        copy_string(saved->name, sizeof(saved->name), name);
+    if (!saved->name[0])
+        default_name(saved->url, saved->name, sizeof(saved->name));
+    return servers_save(servers, index < 0 ? count + 1 : count, error,
+                        error_size);
+}
+
+int wd_server_remove(int index, char *error, size_t error_size)
+{
+    struct wd_server servers[WD_MAX_SERVERS];
+    int count = wd_servers_load(servers, WD_MAX_SERVERS);
+    if (index < 0 || index >= count) {
+        set_error(error, error_size, tr("The server no longer exists"));
+        return -1;
+    }
+    memmove(&servers[index], &servers[index + 1],
+            (size_t)(count - index - 1) * sizeof(*servers));
+    return servers_save(servers, count - 1, error, error_size);
 }
 
 int wd_server_get(int index, struct wd_server *out)
@@ -418,7 +458,7 @@ int wd_list(const struct wd_server *server, const char *dir_path,
         else
             set_error(error, error_size, tr("Invalid answer from the server"));
         free(response.data);
-        return -1;
+        return result == CURLE_OK && status == 401 ? WD_LOGIN_REJECTED : -1;
     }
 
     char self[1024];

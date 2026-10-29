@@ -46,6 +46,7 @@ struct file_browser_listing {
     struct file_browser_entry *entries;
     size_t entry_count;
     char error[256];
+    bool login_rejected; /* a WebDAV server refused its credentials */
 };
 
 /* Codec and picture size of Jellyfin titles (see

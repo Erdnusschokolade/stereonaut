@@ -76,8 +76,9 @@
 #define FILTER_MENU_Y (FILTER_Y + FILTER_H + 8)
 #define FILTER_MENU_H (4 * MENU_ITEM_H + 16)
 
-/* On-screen keyboard over the grid (the search and the fields of a new
- * WebDAV server): four rows of eleven keys and a row of actions. */
+/* On-screen keyboard over the grid (the search and the fields of a
+ * WebDAV server): four rows of eleven keys, or of five large ones on the
+ * number pad, and a row of actions. */
 #define KB_W 1120
 #define KB_X (CENTER_X + (CENTER_W - KB_W) / 2)
 #define KB_Y 180
@@ -88,6 +89,8 @@
 #define KB_H (120 + 5 * (KEY_H + KEY_GAP) + 16)
 #define KEY_ROWS 4
 #define KEY_COLUMNS 11
+#define PAD_COLUMNS 5
+#define PAD_KEY_W 205
 
 /* Keys row by row; a language can bring its own layout. */
 static const char english_keyboard[] =
@@ -103,6 +106,14 @@ static const char symbol_keyboard[] =
     "! \" $ ' ( ) * + , ; ^ "
     "< > [ ] { } | \\ `";
 
+/* Addresses: an IP and port on large keys, letters one layer away. */
+static const char *const number_pad[KEY_ROWS * PAD_COLUMNS] = {
+    "7", "8", "9", ".", "http://",
+    "4", "5", "6", ":", "https://",
+    "1", "2", "3", "@", "/",
+    "-", "0", "_", "[", "]",
+};
+
 /* What the keyboard edits. */
 enum {
     KEYBOARD_SEARCH,
@@ -111,15 +122,29 @@ enum {
     KEYBOARD_SERVER_PASSWORD,
 };
 
-/* Key `index` of the language's keyboard, or of the symbol layer, with
- * capitals for shift ("" past its end). */
+/* Its layers; the number pad only for addresses. */
+enum {
+    LAYER_LETTERS,
+    LAYER_SYMBOLS,
+    LAYER_NUMBERS,
+};
+
+/* Key `index` of the layer: the language's letters (capitals for shift),
+ * the symbols or the number pad ("" past its end). */
 static const char *keyboard_key(const struct browser_ui *ui, int index,
-                                char key[8])
+                                char key[16])
 {
+    if (ui->keyboard_layer == LAYER_NUMBERS) {
+        snprintf(key, 16, "%s",
+                 index >= 0 && index < KEY_ROWS * PAD_COLUMNS
+                     ? number_pad[index]
+                     : "");
+        return key;
+    }
     const char *layout = i18n_languages[i18n_current()]->keyboard;
-    const char *cursor = ui->keyboard_symbols ? symbol_keyboard
-                         : layout             ? layout
-                                              : english_keyboard;
+    const char *cursor = ui->keyboard_layer == LAYER_SYMBOLS ? symbol_keyboard
+                         : layout                            ? layout
+                                                  : english_keyboard;
     for (int i = 0; i < index && *cursor; ++i) {
         cursor += strcspn(cursor, " ");
         cursor += strspn(cursor, " ");
@@ -129,7 +154,7 @@ static const char *keyboard_key(const struct browser_ui *ui, int index,
         length = 0;
     memcpy(key, cursor, length);
     key[length] = '\0';
-    if (ui->keyboard_shift && !ui->keyboard_symbols) {
+    if (ui->keyboard_shift && ui->keyboard_layer == LAYER_LETTERS) {
         unsigned char *c = (unsigned char *)key;
         if (length == 1 && c[0] >= 'a' && c[0] <= 'z')
             c[0] -= 32;
@@ -154,6 +179,13 @@ static const char *keyboard_key(const struct browser_ui *ui, int index,
 /* Titles watched less than this are offered from the start only. */
 #define RESUME_MINIMUM_US INT64_C(30000000)
 
+/* What the prompt asks (browser_ui.prompt_kind). */
+enum {
+    PROMPT_RESUME,
+    PROMPT_REMOVE_SERVER, /* on "webdav:remove:N" */
+    PROMPT_LOGIN,         /* on "webdav:edit:N" after a refused login */
+};
+
 /* Control ids returned by browser_ui_hit_test. */
 enum {
     ID_TILE = 0, /* 0 .. PAGE_ENTRIES-1 */
@@ -175,7 +207,7 @@ enum {
     ID_FILTER_AREA = 88, /* hit test only: resolved with the model */
     ID_KEY = 100,        /* 100 .. 143: keyboard_keys row by row */
     ID_KEY_SHIFT = 144,
-    ID_KEY_SYMBOLS = 145,
+    ID_KEY_LAYER = 145,
     ID_KEY_SPACE = 146,
     ID_KEY_BACKSPACE = 147,
     ID_KEY_CANCEL = 148,
@@ -186,11 +218,33 @@ enum {
 /* What the stateless hit test reports (menus are open or not). */
 enum { HIT_MENU = 1, HIT_PROMPT = 2, HIT_FILTER = 4, HIT_KEYBOARD = 8 };
 
-/* Rectangle of keyboard control `id`; false for other ids. */
-static bool key_rect(int id, int *x, int *y, int *width)
+/* The layer the layer key switches to: letters, symbols and, for an
+ * address, the number pad in turn. */
+static int next_layer(const struct browser_ui *ui)
+{
+    if (ui->keyboard_layer == LAYER_LETTERS)
+        return LAYER_SYMBOLS;
+    if (ui->keyboard_layer == LAYER_SYMBOLS &&
+        ui->keyboard_purpose == KEYBOARD_SERVER_URL)
+        return LAYER_NUMBERS;
+    return LAYER_LETTERS;
+}
+
+/* Rectangle of keyboard control `id` on the current layer; false for
+ * other ids. */
+static bool key_rect(const struct browser_ui *ui, int id, int *x, int *y,
+                     int *width)
 {
     *width = KEY_W;
-    if (id >= ID_KEY && id < ID_KEY + KEY_ROWS * KEY_COLUMNS) {
+    if (ui->keyboard_layer == LAYER_NUMBERS) {
+        if (id >= ID_KEY && id < ID_KEY + KEY_ROWS * PAD_COLUMNS) {
+            int index = id - ID_KEY;
+            *width = PAD_KEY_W;
+            *x = KB_X + 26 + (index % PAD_COLUMNS) * (PAD_KEY_W + KEY_GAP);
+            *y = KEY_TOP + (index / PAD_COLUMNS) * (KEY_H + KEY_GAP);
+            return true;
+        }
+    } else if (id >= ID_KEY && id < ID_KEY + KEY_ROWS * KEY_COLUMNS) {
         int index = id - ID_KEY;
         *x = KB_X + 26 + (index % KEY_COLUMNS) * (KEY_W + KEY_GAP);
         *y = KEY_TOP + (index / KEY_COLUMNS) * (KEY_H + KEY_GAP);
@@ -897,10 +951,13 @@ static void draw_keyboard(struct browser_ui *ui, struct ui_canvas *canvas,
                        UI_RGBA(0, 0, 0, 150));
     bool search = ui->keyboard_purpose == KEYBOARD_SEARCH;
     if (!search) {
-        static const char *const steps[] = {
-            N_("Add a WebDAV server · 1/3 address"),
-            N_("Add a WebDAV server · 2/3 user name"),
-            N_("Add a WebDAV server · 3/3 password"),
+        static const char *const steps[2][3] = {
+            {N_("Add a WebDAV server · 1/3 address"),
+             N_("Add a WebDAV server · 2/3 user name"),
+             N_("Add a WebDAV server · 3/3 password")},
+            {N_("Change the WebDAV server · 1/3 address"),
+             N_("Change the WebDAV server · 2/3 user name"),
+             N_("Change the WebDAV server · 3/3 password")},
         };
         /* On its own plate: the header below is only dimmed. */
         ui_fill_round_rect(canvas, KB_X, KB_Y - 92, KB_W, 76, 22,
@@ -909,7 +966,8 @@ static void draw_keyboard(struct browser_ui *ui, struct ui_canvas *canvas,
                              color_border);
         ui_draw_text(canvas, ui->bold, 34, CENTER_X + CENTER_W / 2,
                      KB_Y - 76, KB_W - 64, UI_ALIGN_CENTER, color_text,
-                     tr(steps[ui->keyboard_purpose - KEYBOARD_SERVER_URL]));
+                     tr(steps[ui->server_edit >= 0]
+                             [ui->keyboard_purpose - KEYBOARD_SERVER_URL]));
     }
     ui_shadow_round_rect(canvas, KB_X, KB_Y + 8, KB_W, KB_H, 26, 28,
                          color_shadow);
@@ -955,27 +1013,27 @@ static void draw_keyboard(struct browser_ui *ui, struct ui_canvas *canvas,
                  text[0] ? visible : tr(placeholders[ui->keyboard_purpose]));
     for (int id = ID_KEY; id <= ID_KEY_ENTER; ++id) {
         int x, y, width;
-        if (!key_rect(id, &x, &y, &width))
+        if (!key_rect(ui, id, &x, &y, &width))
             continue;
         bool focused = hover == id;
         bool primary = id == ID_KEY_ENTER;
-        bool toggled = (id == ID_KEY_SHIFT && ui->keyboard_shift) ||
-                       (id == ID_KEY_SYMBOLS && ui->keyboard_symbols);
+        bool toggled = id == ID_KEY_SHIFT && ui->keyboard_shift;
         ui_fill_round_rect(canvas, x, y, width, KEY_H, 14,
                            primary ? (focused ? UI_RGBA(90, 180, 255, 255)
                                               : color_accent)
                            : focused ? color_tile_hover
                            : toggled ? color_accent_soft
                                      : color_chip);
-        char key[8];
+        char key[16];
         const char *enter = search ? tr("Search")
                             : ui->keyboard_purpose == KEYBOARD_SERVER_PASSWORD
                                 ? tr("Save")
                                 : tr("Continue");
+        static const char *const layer_labels[] = {"abc", "#+=", "123"};
         const char *label =
             id < ID_KEY_SHIFT        ? keyboard_key(ui, id - ID_KEY, key)
             : id == ID_KEY_SHIFT     ? "Aa"
-            : id == ID_KEY_SYMBOLS   ? (ui->keyboard_symbols ? "abc" : "#+=")
+            : id == ID_KEY_LAYER     ? layer_labels[next_layer(ui)]
             : id == ID_KEY_SPACE     ? tr("Space")
             : id == ID_KEY_BACKSPACE ? tr("Delete")
             : id == ID_KEY_CANCEL    ? tr("Cancel")
@@ -999,22 +1057,32 @@ static void draw_resume_prompt(struct browser_ui *ui,
                        UI_RGBA(30, 32, 39, 255));
     ui_stroke_round_rect(canvas, PROMPT_X, PROMPT_Y, PROMPT_W, PROMPT_H, 26,
                          2, color_border);
+    bool resume = ui->prompt_kind == PROMPT_RESUME;
     ui_draw_text(canvas, ui->bold, 34, PROMPT_X + PROMPT_W / 2,
                  PROMPT_Y + 34, PROMPT_W - 64, UI_ALIGN_CENTER, color_text,
-                 entry->name);
+                 resume ? entry->name : current_title(ui));
     char position[16], text[64];
     format_duration(entry->resume_us, position);
     ui_draw_text(canvas, ui->font, 26, PROMPT_X + PROMPT_W / 2,
                  PROMPT_Y + 96, PROMPT_W - 64, UI_ALIGN_CENTER, color_dim,
-                 tr("Stopped last time – where to continue?"));
-    snprintf(text, sizeof(text), tr("From %s"), position);
+                 resume ? tr("Stopped last time – where to continue?")
+                 : ui->prompt_kind == PROMPT_REMOVE_SERVER
+                     ? tr("Remove this server from the list?")
+                     : tr("The server refused the sign-in. Enter it again?"));
+    if (resume)
+        snprintf(text, sizeof(text), tr("From %s"), position);
+    else
+        snprintf(text, sizeof(text), "%s",
+                 ui->prompt_kind == PROMPT_REMOVE_SERVER ? tr("Remove")
+                                                         : tr("Enter again"));
     const struct {
         int id, x;
         const char *label;
         bool primary;
     } buttons[] = {
         {ID_RESUME, PROMPT_RESUME_X, text, true},
-        {ID_RESTART, PROMPT_RESTART_X, tr("From the start"), false},
+        {ID_RESTART, PROMPT_RESTART_X,
+         resume ? tr("From the start") : tr("Cancel"), false},
     };
     for (size_t i = 0; i < 2; ++i) {
         bool focused = hover == buttons[i].id;
@@ -1179,7 +1247,7 @@ void browser_ui_set_pointer(struct browser_ui *ui, bool visible, int x, int y,
         for (int id = ID_KEY; hover == ID_KEYBOARD_AREA && id <= ID_KEY_ENTER;
              ++id) {
             int kx, ky, width;
-            if (key_rect(id, &kx, &ky, &width) && x >= kx &&
+            if (key_rect(ui, id, &kx, &ky, &width) && x >= kx &&
                 x < kx + width && y >= ky && y < ky + KEY_H)
                 key = id;
         }
@@ -1412,6 +1480,7 @@ static void forget_server_form(struct browser_ui *ui)
     memset(ui->server_url, 0, sizeof(ui->server_url));
     memset(ui->server_user, 0, sizeof(ui->server_user));
     memset(ui->server_password, 0, sizeof(ui->server_password));
+    ui->server_edit = -1;
 }
 
 static void open_keyboard(struct browser_ui *ui, int purpose)
@@ -1419,7 +1488,8 @@ static void open_keyboard(struct browser_ui *ui, int purpose)
     ui->keyboard_open = true;
     ui->keyboard_purpose = purpose;
     ui->keyboard_shift = false;
-    ui->keyboard_symbols = purpose == KEYBOARD_SERVER_URL;
+    ui->keyboard_layer =
+        purpose == KEYBOARD_SERVER_URL ? LAYER_NUMBERS : LAYER_LETTERS;
     ui->sort_menu_open = ui->filter_menu_open = false;
     ui->hover = -1;
     ui->dirty = true;
@@ -1480,14 +1550,25 @@ static void keyboard_enter(struct browser_ui *ui)
     struct wd_server server = {0};
     snprintf(server.url, sizeof(server.url), "%s", ui->server_url);
     snprintf(server.user, sizeof(server.user), "%s", ui->server_user);
-    snprintf(server.pass, sizeof(server.pass), "%s", ui->server_password);
+    if (server.user[0])
+        snprintf(server.pass, sizeof(server.pass), "%s",
+                 ui->server_password);
     char error[256] = "";
-    int result = wd_server_add(&server, error, sizeof(error));
-    memset(&server, 0, sizeof(server));
+    int edited = ui->server_edit;
+    int result = wd_server_save(edited, &server, error, sizeof(error));
     close_keyboard(ui);
     snprintf(ui->status_message, sizeof(ui->status_message), "%s",
              result < 0 ? error : "");
-    request(ui, "webdav:");
+    /* A changed server opens again right away, to show the login works. */
+    char location[700] = "webdav:";
+    if (result == 0 && edited >= 0 && wd_server_get(edited, &server) == 0) {
+        char base[640];
+        wd_base_path(&server, base, sizeof(base));
+        snprintf(location, sizeof(location), "webdav:%d:%s", edited, base);
+    }
+    memset(&server, 0, sizeof(server));
+    ui->restore_page = 0;
+    request(ui, location);
 }
 
 /* A key of the keyboard (or a click outside it, which closes it). */
@@ -1497,15 +1578,17 @@ static void type_key(struct browser_ui *ui, int hover)
     char *text = keyboard_text(ui, &size);
     size_t length = strlen(text);
     ui->dirty = true;
-    if (hover >= ID_KEY && hover < ID_KEY + KEY_ROWS * KEY_COLUMNS) {
-        char key[8];
+    int kx, ky, width;
+    if (hover >= ID_KEY && hover < ID_KEY_SHIFT &&
+        key_rect(ui, hover, &kx, &ky, &width)) {
+        char key[16];
         keyboard_key(ui, hover - ID_KEY, key);
         if (length + strlen(key) < size)
             memcpy(text + length, key, strlen(key) + 1);
     } else if (hover == ID_KEY_SHIFT) {
         ui->keyboard_shift = !ui->keyboard_shift;
-    } else if (hover == ID_KEY_SYMBOLS) {
-        ui->keyboard_symbols = !ui->keyboard_symbols;
+    } else if (hover == ID_KEY_LAYER) {
+        ui->keyboard_layer = next_layer(ui);
     } else if (hover == ID_KEY_SPACE) {
         /* The search skips leading and double spaces; a password keeps
          * every one. */
@@ -1525,6 +1608,44 @@ static void type_key(struct browser_ui *ui, int hover)
     } else if (hover != ID_KEYBOARD_AREA) {
         close_keyboard(ui); /* "Cancel" or a click outside */
     }
+}
+
+static void open_prompt(struct browser_ui *ui, int index, int kind)
+{
+    ui->resume_prompt = index;
+    ui->prompt_kind = kind;
+    ui->hover = -1;
+    ui->dirty = true;
+}
+
+/* "webdav:edit:N" or "webdav:remove:N": change the server's settings
+ * (PROMPT_RESUME, i.e. no question asked), enter its login again or
+ * remove it. */
+static void server_action(struct browser_ui *ui, const char *path, int kind)
+{
+    int index = atoi(strrchr(path, ':') + 1);
+    struct wd_server server;
+    char error[256] = "";
+    if (kind == PROMPT_REMOVE_SERVER) {
+        wd_server_remove(index, error, sizeof(error));
+        snprintf(ui->status_message, sizeof(ui->status_message), "%s", error);
+        ui->restore_page = 0;
+        request(ui, "webdav:");
+        return;
+    }
+    if (wd_server_get(index, &server) < 0)
+        return;
+    forget_server_form(ui);
+    ui->server_edit = index;
+    snprintf(ui->server_url, sizeof(ui->server_url), "%s", server.url);
+    snprintf(ui->server_user, sizeof(ui->server_user), "%s", server.user);
+    if (kind == PROMPT_RESUME)
+        snprintf(ui->server_password, sizeof(ui->server_password), "%s",
+                 server.pass);
+    memset(&server, 0, sizeof(server));
+    /* A refused login starts at the user name, the address is right. */
+    open_keyboard(ui, kind == PROMPT_LOGIN ? KEYBOARD_SERVER_USER
+                                           : KEYBOARD_SERVER_URL);
 }
 
 static enum browser_ui_action select_title(struct browser_ui *ui, int index,
@@ -1567,6 +1688,12 @@ enum browser_ui_action browser_ui_activate(struct browser_ui *ui, char *path,
         if ((size_t)index >= ui->listing.entry_count ||
             (hover != ID_RESUME && hover != ID_RESTART))
             return BROWSER_UI_NONE;
+        if (ui->prompt_kind != PROMPT_RESUME) {
+            if (hover == ID_RESUME)
+                server_action(ui, ui->listing.entries[index].path,
+                              ui->prompt_kind);
+            return BROWSER_UI_NONE;
+        }
         return select_title(ui, index,
                             hover == ID_RESUME
                                 ? ui->listing.entries[index].resume_us
@@ -1623,9 +1750,7 @@ enum browser_ui_action browser_ui_activate(struct browser_ui *ui, char *path,
         const struct file_browser_entry *entry = &ui->listing.entries[index];
         if (entry->kind == FILE_BROWSER_MEDIA) {
             if (entry->resume_us >= RESUME_MINIMUM_US) {
-                ui->resume_prompt = index;
-                ui->hover = -1;
-                ui->dirty = true;
+                open_prompt(ui, index, PROMPT_RESUME);
                 return BROWSER_UI_NONE;
             }
             return select_title(ui, index, 0, path, path_size);
@@ -1633,6 +1758,14 @@ enum browser_ui_action browser_ui_activate(struct browser_ui *ui, char *path,
         if (strcmp(entry->path, "webdav:add") == 0) {
             forget_server_form(ui);
             open_keyboard(ui, KEYBOARD_SERVER_URL);
+            return BROWSER_UI_NONE;
+        }
+        if (strncmp(entry->path, "webdav:edit:", 12) == 0) {
+            server_action(ui, entry->path, PROMPT_RESUME);
+            return BROWSER_UI_NONE;
+        }
+        if (strncmp(entry->path, "webdav:remove:", 14) == 0) {
+            open_prompt(ui, index, PROMPT_REMOVE_SERVER);
             return BROWSER_UI_NONE;
         }
         request(ui, entry->path);
@@ -1740,6 +1873,14 @@ static void install_listing(struct browser_ui *ui,
     ui->content_dirty = true;
     ui->dirty = true;
     request_thumbnails(ui);
+    /* A refused WebDAV login asks right away to enter it again. */
+    for (size_t i = 0; ui->listing.login_rejected && !ui->keyboard_open &&
+                       i < ui->listing.entry_count;
+         ++i)
+        if (strncmp(ui->listing.entries[i].path, "webdav:edit:", 12) == 0) {
+            open_prompt(ui, (int)i, PROMPT_LOGIN);
+            break;
+        }
 }
 
 void browser_ui_set_thumbnail(struct browser_ui *ui, size_t index,
@@ -1813,6 +1954,7 @@ int browser_ui_open(struct browser_ui *ui, const char *location,
     ui->hover = -1;
     ui->detail = -1;
     ui->resume_prompt = -1;
+    ui->server_edit = -1;
     ui->parent = -1;
     ui->dirty = true;
     ui->content_dirty = true;

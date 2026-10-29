@@ -343,9 +343,9 @@ int main(int argc, char **argv)
     if (hover >= 150 && hover <= 152) { /* keyboard, key "g" focused */
         ui.keyboard_open = true;
         snprintf(ui.query, sizeof(ui.query), "genshin imp");
-        if (hover == 151) { /* WebDAV address on the symbol layer */
+        if (hover == 151) { /* WebDAV address on the number pad */
             ui.keyboard_purpose = 1;
-            ui.keyboard_symbols = true;
+            ui.keyboard_layer = 2; /* number pad */
             snprintf(ui.server_url, sizeof(ui.server_url),
                      "http://host:8080/videos/a/very/long/path/to/the/"
                      "collection");
@@ -364,6 +364,10 @@ int main(int argc, char **argv)
         px = 1406 + 190 - 360 + 60;
         py = 126 + 46 + 8 + 8 + (hover - 84) * 52 + 20;
         hover = 88;
+    }
+    if (hover == 153 || hover == 154) { /* remove server / login again */
+        ui.prompt_kind = hover - 152;
+        hover = 80;
     }
     if (hover == 80 || hover == 81) { /* resume prompt, button focused */
         ui.resume_prompt = 1;

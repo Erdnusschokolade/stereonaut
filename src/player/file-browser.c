@@ -642,7 +642,9 @@ allocation_failure:
 
 /* "webdav:" lists the saved servers and the "webdav:add" form (opened by
  * the panel, never read here); "webdav:N:PATH" is a folder (PATH ends in
- * '/') or a title on server N, PATH encoded as in the server's URLs. */
+ * '/') or a title on server N, PATH encoded as in the server's URLs. On a
+ * failed listing (wrong password, server gone) error and entries both
+ * come back. */
 static struct file_browser_listing read_webdav(const char *path,
                                                uint64_t generation)
 {
@@ -715,9 +717,11 @@ static struct file_browser_listing read_webdav(const char *path,
 
     struct wd_entry *entries = NULL;
     size_t count = 0;
-    if (wd_list(&server, directory, &entries, &count, listing.error,
-                sizeof(listing.error)) < 0)
-        return listing;
+    int listed = wd_list(&server, directory, &entries, &count,
+                         listing.error, sizeof(listing.error));
+    if (listed < 0)
+        count = 0; /* the error shows; the server can still be changed */
+    listing.login_rejected = listed == WD_LOGIN_REJECTED;
     for (size_t i = 0; i < count; ++i) {
         char location[1200];
         snprintf(location, sizeof(location), "webdav:%ld:%s", index,
@@ -736,6 +740,19 @@ static struct file_browser_listing read_webdav(const char *path,
     compare_descending = false;
     qsort(listing.entries, listing.entry_count, sizeof(*listing.entries),
           compare_entries);
+    /* The server's own folder ends with its settings ("webdav:edit:N",
+     * "webdav:remove:N", handled by the panel). */
+    if (strcmp(directory, base) == 0) {
+        char edit_path[32], remove_path[32];
+        snprintf(edit_path, sizeof(edit_path), "webdav:edit:%ld", index);
+        snprintf(remove_path, sizeof(remove_path), "webdav:remove:%ld",
+                 index);
+        if (add_entry(&listing, FILE_BROWSER_DIRECTORY, tr("Edit server"),
+                      edit_path) < 0 ||
+            add_entry(&listing, FILE_BROWSER_DIRECTORY, tr("Remove server"),
+                      remove_path) < 0)
+            goto allocation_failure;
+    }
     return listing;
 
 allocation_failure:
