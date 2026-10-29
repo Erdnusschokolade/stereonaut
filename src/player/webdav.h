@@ -54,11 +54,12 @@ struct wd_entry {
 };
 
 #define WD_LOGIN_REJECTED (-2) /* HTTP 401 */
+#define WD_UNREACHABLE (-3)    /* no connection, or HTTP 404 */
 
 /* PROPFIND Depth 1 of `dir_path` (encoded, below the origin): folders and
  * .mkv/.mp4 files, without the folder itself. *out is malloc'd (caller
- * frees). 0 on success, <0 (WD_LOGIN_REJECTED or -1) with a message in
- * `error`. */
+ * frees). 0 on success, <0 (WD_LOGIN_REJECTED, WD_UNREACHABLE or -1) with
+ * a message in `error`. */
 int wd_list(const struct wd_server *server, const char *dir_path,
             struct wd_entry **out, size_t *count, char *error,
             size_t error_size);

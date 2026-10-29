@@ -184,6 +184,7 @@ enum {
     PROMPT_RESUME,
     PROMPT_REMOVE_SERVER, /* on "webdav:remove:N" */
     PROMPT_LOGIN,         /* on "webdav:edit:N" after a refused login */
+    PROMPT_ADDRESS,       /* on "webdav:edit:N", the server unreachable */
 };
 
 /* Control ids returned by browser_ui_hit_test. */
@@ -1068,13 +1069,16 @@ static void draw_resume_prompt(struct browser_ui *ui,
                  resume ? tr("Stopped last time – where to continue?")
                  : ui->prompt_kind == PROMPT_REMOVE_SERVER
                      ? tr("Remove this server from the list?")
-                     : tr("The server refused the sign-in. Enter it again?"));
+                 : ui->prompt_kind == PROMPT_LOGIN
+                     ? tr("The server refused the sign-in. Enter it again?")
+                     : tr("The server cannot be reached. Check the address?"));
     if (resume)
         snprintf(text, sizeof(text), tr("From %s"), position);
     else
         snprintf(text, sizeof(text), "%s",
                  ui->prompt_kind == PROMPT_REMOVE_SERVER ? tr("Remove")
-                                                         : tr("Enter again"));
+                 : ui->prompt_kind == PROMPT_LOGIN       ? tr("Enter again")
+                                                   : tr("Change address"));
     const struct {
         int id, x;
         const char *label;
@@ -1619,8 +1623,8 @@ static void open_prompt(struct browser_ui *ui, int index, int kind)
 }
 
 /* "webdav:edit:N" or "webdav:remove:N": change the server's settings
- * (PROMPT_RESUME, i.e. no question asked), enter its login again or
- * remove it. */
+ * (PROMPT_RESUME, i.e. no question asked, or PROMPT_ADDRESS), enter its
+ * login again or remove it. */
 static void server_action(struct browser_ui *ui, const char *path, int kind)
 {
     int index = atoi(strrchr(path, ':') + 1);
@@ -1639,7 +1643,7 @@ static void server_action(struct browser_ui *ui, const char *path, int kind)
     ui->server_edit = index;
     snprintf(ui->server_url, sizeof(ui->server_url), "%s", server.url);
     snprintf(ui->server_user, sizeof(ui->server_user), "%s", server.user);
-    if (kind == PROMPT_RESUME)
+    if (kind != PROMPT_LOGIN)
         snprintf(ui->server_password, sizeof(ui->server_password), "%s",
                  server.pass);
     memset(&server, 0, sizeof(server));
@@ -1873,12 +1877,16 @@ static void install_listing(struct browser_ui *ui,
     ui->content_dirty = true;
     ui->dirty = true;
     request_thumbnails(ui);
-    /* A refused WebDAV login asks right away to enter it again. */
-    for (size_t i = 0; ui->listing.login_rejected && !ui->keyboard_open &&
+    /* A refused WebDAV login or an unreachable server asks right away to
+     * enter the login or the address again. */
+    bool ask = ui->listing.login_rejected || ui->listing.unreachable;
+    for (size_t i = 0; ask && !ui->keyboard_open &&
                        i < ui->listing.entry_count;
          ++i)
         if (strncmp(ui->listing.entries[i].path, "webdav:edit:", 12) == 0) {
-            open_prompt(ui, (int)i, PROMPT_LOGIN);
+            open_prompt(ui, (int)i,
+                        ui->listing.login_rejected ? PROMPT_LOGIN
+                                                   : PROMPT_ADDRESS);
             break;
         }
 }

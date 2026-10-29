@@ -365,7 +365,7 @@ int main(int argc, char **argv)
         py = 126 + 46 + 8 + 8 + (hover - 84) * 52 + 20;
         hover = 88;
     }
-    if (hover == 153 || hover == 154) { /* remove server / login again */
+    if (hover >= 153 && hover <= 155) { /* remove server, login, address */
         ui.prompt_kind = hover - 152;
         hover = 80;
     }

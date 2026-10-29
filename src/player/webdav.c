@@ -458,7 +458,9 @@ int wd_list(const struct wd_server *server, const char *dir_path,
         else
             set_error(error, error_size, tr("Invalid answer from the server"));
         free(response.data);
-        return result == CURLE_OK && status == 401 ? WD_LOGIN_REJECTED : -1;
+        if (result != CURLE_OK || status == 404)
+            return WD_UNREACHABLE;
+        return status == 401 ? WD_LOGIN_REJECTED : -1;
     }
 
     char self[1024];

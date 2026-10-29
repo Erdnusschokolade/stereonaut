@@ -722,6 +722,7 @@ static struct file_browser_listing read_webdav(const char *path,
     if (listed < 0)
         count = 0; /* the error shows; the server can still be changed */
     listing.login_rejected = listed == WD_LOGIN_REJECTED;
+    listing.unreachable = listed == WD_UNREACHABLE;
     for (size_t i = 0; i < count; ++i) {
         char location[1200];
         snprintf(location, sizeof(location), "webdav:%ld:%s", index,
