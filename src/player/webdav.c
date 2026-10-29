@@ -495,7 +495,8 @@ int wd_list(const struct wd_server *server, const char *dir_path,
         const char *slash = strrchr(decoded, '/');
         const char *name = slash ? slash + 1 : decoded;
         bool is_dir = find_tag(href_end, properties_end, "collection");
-        if (!name[0] || (!is_dir && !is_media_name(name)))
+        if (!name[0] || name[0] == '.' || /* hidden */
+            (!is_dir && !is_media_name(name)))
             continue;
         /* Folders end in '/'; a path that would be cut is skipped. */
         char location[sizeof(entries->path)];

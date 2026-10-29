@@ -236,9 +236,8 @@ static struct file_browser_listing read_directory(const char *requested,
                          strerror(errno));
             break;
         }
-        if (strcmp(item->d_name, ".") == 0 ||
-            strcmp(item->d_name, "..") == 0)
-            continue;
+        if (item->d_name[0] == '.')
+            continue; /* hidden, as well as "." and ".." */
         char *path = join_path(resolved, item->d_name);
         if (!path)
             goto allocation_failure;
