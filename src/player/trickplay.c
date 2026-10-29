@@ -1,19 +1,18 @@
 #define _POSIX_C_SOURCE 200809L
 #include "trickplay.h"
 
+#include "eye-view.h"
 #include "jellyfin.h"
 #include "nv12-playback-ipc.h"
 #include "thumbnails.h"
 #include "ui-draw.h"
 
-#include <math.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
-#define PI 3.14159265358979323846
 /* Finished thumbnails kept by the worker: moving the strip by a step only
  * makes the new end. */
 #define CACHE_SIZE 16
@@ -272,87 +271,6 @@ static struct ui_image *cut_thumbnail(const struct item_state *state,
     return image;
 }
 
-/* Bilinear sample of `image` at pixel coordinates (x, y), clamped. */
-static void sample(const struct ui_image *image, double x, double y,
-                   uint8_t out[4])
-{
-    x = fmin(fmax(x - 0.5, 0.0), image->width - 1.0);
-    y = fmin(fmax(y - 0.5, 0.0), image->height - 1.0);
-    int x0 = (int)x, y0 = (int)y;
-    int x1 = x0 + 1 < image->width ? x0 + 1 : x0;
-    int y1 = y0 + 1 < image->height ? y0 + 1 : y0;
-    double fx = x - x0, fy = y - y0;
-    const uint8_t *p00 = image->rgba + ((size_t)y0 * image->width + x0) * 4U;
-    const uint8_t *p01 = image->rgba + ((size_t)y0 * image->width + x1) * 4U;
-    const uint8_t *p10 = image->rgba + ((size_t)y1 * image->width + x0) * 4U;
-    const uint8_t *p11 = image->rgba + ((size_t)y1 * image->width + x1) * 4U;
-    for (int c = 0; c < 4; ++c) {
-        double top = p00[c] + (p01[c] - p00[c]) * fx;
-        double bottom = p10[c] + (p11[c] - p10[c]) * fx;
-        out[c] = (uint8_t)lround(top + (bottom - top) * fy);
-    }
-}
-
-/* Where each pixel of the straightened view samples the eye picture: it
- * depends only on the sizes, the projection and the field of view, so it
- * is computed once (per pixel two arctangents and a square root made a
- * strip of five pictures five times slower). */
-struct view_map {
-    int eye_width, eye_height;
-    uint32_t projection;
-    int fov;
-    float *xy; /* source x, y per view pixel */
-};
-
-static const float *view_map(struct view_map *map, const struct ui_image *eye,
-                             uint32_t projection, int fov_degrees)
-{
-    if (map->xy && map->eye_width == eye->width &&
-        map->eye_height == eye->height && map->projection == projection &&
-        map->fov == fov_degrees)
-        return map->xy;
-    int height = eye->height, width = eye->height * 4 / 3;
-    free(map->xy);
-    map->xy = malloc((size_t)width * (size_t)height * 2U * sizeof(float));
-    if (!map->xy)
-        return NULL;
-    double half_x = tan(fov_degrees * PI / 360.0);
-    double half_y = half_x * height / width;
-    double span = projection == NV12_PROJECTION_EQUIRECT_360 ? 2.0 * PI : PI;
-    for (int y = 0; y < height; ++y) {
-        double dy = (1.0 - (y + 0.5) * 2.0 / height) * half_y;
-        for (int x = 0; x < width; ++x) {
-            double dx = ((x + 0.5) * 2.0 / width - 1.0) * half_x;
-            double longitude = atan2(dx, 1.0);
-            double latitude = atan2(dy, sqrt(dx * dx + 1.0));
-            float *out = map->xy + ((size_t)y * width + x) * 2U;
-            out[0] = (float)((longitude / span + 0.5) * eye->width);
-            out[1] = (float)((0.5 - latitude / PI) * eye->height);
-        }
-    }
-    map->eye_width = eye->width;
-    map->eye_height = eye->height;
-    map->projection = projection;
-    map->fov = fov_degrees;
-    return map->xy;
-}
-
-/* Perspective view straight ahead (4:3) out of an equirectangular eye,
- * with the same mapping as the projection shader. */
-static struct ui_image *straighten(const struct ui_image *eye,
-                                   struct view_map *map, uint32_t projection,
-                                   int fov_degrees)
-{
-    const float *xy = view_map(map, eye, projection, fov_degrees);
-    int height = eye->height, width = eye->height * 4 / 3;
-    struct ui_image *view = xy ? ui_image_create(width, height) : NULL;
-    if (!view)
-        return NULL;
-    for (size_t i = 0; i < (size_t)width * (size_t)height; ++i)
-        sample(eye, xy[2 * i], xy[2 * i + 1], view->rgba + i * 4U);
-    return view;
-}
-
 static bool fetch_tile(struct item_state *state, int tile)
 {
     if (state->tiles[tile])
@@ -386,7 +304,7 @@ static const struct ui_image *decoded_tile(struct item_state *state, int tile)
 }
 
 static struct ui_image *make_thumbnail(struct item_state *state,
-                                       struct view_map *map, int index,
+                                       struct eye_view_map *map, int index,
                                        uint32_t layout, uint32_t projection,
                                        int fov)
 {
@@ -401,7 +319,9 @@ static struct ui_image *make_thumbnail(struct item_state *state,
         (projection != NV12_PROJECTION_EQUIRECT_180 &&
          projection != NV12_PROJECTION_EQUIRECT_360))
         return eye;
-    struct ui_image *view = straighten(eye, map, projection, fov);
+    /* A 4:3 view as high as the eye. */
+    struct ui_image *view = eye_view_straighten(
+        eye, map, projection, fov, eye->height * 4 / 3, eye->height);
     ui_image_free(eye);
     return view;
 }
@@ -464,7 +384,7 @@ static void *worker(void *argument)
 {
     struct trickplay *trickplay = argument;
     struct item_state state = {0};
-    struct view_map map = {0};
+    struct eye_view_map map = {0};
     reset_item(&state);
     pthread_mutex_lock(&trickplay->mutex);
     for (;;) {
@@ -546,7 +466,7 @@ static void *worker(void *argument)
     }
     pthread_mutex_unlock(&trickplay->mutex);
     reset_item(&state);
-    free(map.xy);
+    eye_view_map_free(&map);
     return NULL;
 }
 

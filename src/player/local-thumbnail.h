@@ -1,6 +1,7 @@
 #ifndef STEREONAUT_LOCAL_THUMBNAIL_H
 #define STEREONAUT_LOCAL_THUMBNAIL_H
 
+#include <stdbool.h>
 #include <stddef.h>
 
 /* Tile picture of a local video as JPEG: a picture next to it the way
@@ -10,6 +11,9 @@
  * (seconds): run it on a worker and cache the result. *data is malloc'd. */
 int local_thumbnail_jpeg(const char *path, int max_width, char **data,
                          size_t *size);
+/* Whether local_thumbnail_jpeg finds a sidecar picture for `path` (else it
+ * decodes a key frame). */
+bool local_thumbnail_has_sidecar(const char *path);
 /* The key frame of a video at an http(s) URL; `headers` are extra request
  * lines ("Authorization: ...\r\n") or NULL. */
 int local_thumbnail_url_jpeg(const char *url, const char *headers,

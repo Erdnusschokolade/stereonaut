@@ -18,6 +18,8 @@ cc -std=c11 -O2 -Wall -Wextra -Werror \
   "$script_dir/controller-bindings.c" \
   "$script_dir/ui-draw.c" "$script_dir/ui-layout.c" "$script_dir/thumbnails.c" \
   "$script_dir/jellyfin.c" "$script_dir/webdav.c" \
+  "$script_dir/eye-view.c" "$script_dir/format-detect.c" \
+  "$script_dir/title-settings.c" \
   "$script_dir/local-thumbnail.c" "$script_dir"/i18n*.c \
   $(pkg-config --libs freetype2 libjpeg libcurl json-c libavformat \
                 libavcodec libavutil) -lm -pthread

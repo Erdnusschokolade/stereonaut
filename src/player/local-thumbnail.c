@@ -37,7 +37,8 @@ static char *read_whole(const char *path, size_t *size)
     return data;
 }
 
-static char *read_sidecar(const char *path, size_t *size)
+/* The sidecar picture of `path` (read when `size` is given), else NULL. */
+static char *read_sidecar(const char *path, size_t *size, bool *exists)
 {
     static const char *const suffixes[] = {
         "-poster.jpg", ".jpg", "-thumb.jpg", "-fanart.jpg",
@@ -51,11 +52,26 @@ static char *read_sidecar(const char *path, size_t *size)
     for (size_t i = 0; i < sizeof(suffixes) / sizeof(suffixes[0]); ++i) {
         char candidate[4200];
         snprintf(candidate, sizeof(candidate), "%s%s", base, suffixes[i]);
+        struct stat status;
+        if (exists) {
+            if (stat(candidate, &status) == 0 && S_ISREG(status.st_mode)) {
+                *exists = true;
+                return NULL;
+            }
+            continue;
+        }
         char *data = read_whole(candidate, size);
         if (data)
             return data;
     }
     return NULL;
+}
+
+bool local_thumbnail_has_sidecar(const char *path)
+{
+    bool exists = false;
+    read_sidecar(path, NULL, &exists);
+    return exists;
 }
 
 /* ---- key frame -------------------------------------------------------- */
@@ -244,7 +260,7 @@ int local_thumbnail_jpeg(const char *path, int max_width, char **data,
 {
     *data = NULL;
     *size = 0;
-    *data = read_sidecar(path, size);
+    *data = read_sidecar(path, size, NULL);
     if (*data)
         return 0;
     return key_frame_jpeg(path, NULL, max_width, data, size);
