@@ -44,8 +44,15 @@ struct browser_ui {
     bool local_sort_descending;
     bool sort_menu_open;
     bool filter_menu_open;
-    bool keyboard_open;   /* on-screen keyboard of the search */
+    bool keyboard_open;   /* on-screen keyboard */
+    int keyboard_purpose; /* what it edits: the search or a server field */
+    bool keyboard_shift;  /* capitals */
+    bool keyboard_symbols; /* punctuation layer instead of the letters */
     char query[64];       /* search text (UTF-8) */
+    /* WebDAV server being added, field by field on the keyboard. */
+    char server_url[512];
+    char server_user[128];
+    char server_password[256];
     size_t page;
     size_t selected_page; /* page of the last started title */
     char selected_title[256]; /* name of the last started title */

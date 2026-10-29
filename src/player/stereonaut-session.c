@@ -41,6 +41,7 @@
 #include "format-detect.h"
 #include "settings.h"
 #include "decoded-video.h"
+#include "webdav.h"
 
 #define MAX_OUTPUT_BUFFERS 16U
 #define MAX_CAPTURE_BUFFERS 32U
@@ -267,6 +268,30 @@ static int resolve_jellyfin_input(const char *spec, bool resumed, char *url,
     atexit(jellyfin_cleanup);
     printf("jellyfin_playback mode=%s\n",
            jellyfin_playback.transcoding ? "hls-transcode" : "direct-play");
+    return 0;
+}
+
+/* "webdav:N:PATH" names a file on saved WebDAV server N. Build its URL and
+ * hand the credentials to libavformat through the environment. */
+static int resolve_webdav_input(const char *spec, char *url, size_t size)
+{
+    char *rest = NULL;
+    long index = strtol(spec + 7, &rest, 10);
+    struct wd_server server;
+    if (rest == spec + 7 || *rest != ':' || rest[1] != '/') {
+        fprintf(stderr, "invalid WebDAV item: %s\n", spec);
+        return -1;
+    }
+    if (wd_server_get((int)index, &server) < 0) {
+        fprintf(stderr, "WebDAV: no server %ld\n", index);
+        return -1;
+    }
+    char header[1024], origin[512];
+    wd_authorization_header(&server, header, sizeof(header));
+    if (header[0])
+        setenv("STEREONAUT_HTTP_HEADERS", header, 1);
+    wd_origin(&server, origin, sizeof(origin));
+    snprintf(url, size, "%s%s", origin, rest + 1);
     return 0;
 }
 
@@ -2892,6 +2917,15 @@ int main(int argc, char **argv)
             if (format_name_guess.projection == FORMAT_UNKNOWN ||
                 format_name_guess.stereo == FORMAT_UNKNOWN)
                 start_trickplay_detection(jellyfin_playback.item_id);
+        }
+    } else if (strncmp(argv[1], "webdav:", 7) == 0) {
+        if (resolve_webdav_input(argv[1], input_url, sizeof(input_url)) < 0)
+            return EXIT_SOURCE_FAILED;
+        input = input_url;
+        if (detect_format) {
+            char name[sizeof(input_url)];
+            wd_url_decode(input_url, name, sizeof(name));
+            format_from_name(name, &format_name_guess);
         }
     } else if (detect_format) {
         format_from_name(argv[1], &format_name_guess);

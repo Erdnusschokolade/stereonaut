@@ -2,6 +2,7 @@
 #include "file-browser.h"
 #include "i18n.h"
 #include "jellyfin.h"
+#include "webdav.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -320,7 +321,8 @@ static struct file_browser_listing read_root(uint64_t generation)
     const char *home = getenv("HOME");
     if (add_entry(&listing, FILE_BROWSER_DIRECTORY, tr("Local files"),
                   home && home[0] ? home : "/") < 0 ||
-        add_entry(&listing, FILE_BROWSER_DIRECTORY, "Jellyfin", "jf:") < 0) {
+        add_entry(&listing, FILE_BROWSER_DIRECTORY, "Jellyfin", "jf:") < 0 ||
+        add_entry(&listing, FILE_BROWSER_DIRECTORY, "WebDAV", "webdav:") < 0) {
         file_browser_listing_clear(&listing);
         listing.generation = generation;
         snprintf(listing.error, sizeof(listing.error), "%s",
@@ -638,6 +640,112 @@ allocation_failure:
     return listing;
 }
 
+/* "webdav:" lists the saved servers and the "webdav:add" form (opened by
+ * the panel, never read here); "webdav:N:PATH" is a folder (PATH ends in
+ * '/') or a title on server N, PATH encoded as in the server's URLs. */
+static struct file_browser_listing read_webdav(const char *path,
+                                               uint64_t generation)
+{
+    struct file_browser_listing listing = {.generation = generation};
+    char *rest = NULL;
+    long index = strtol(path + 7, &rest, 10);
+    struct wd_server server;
+    if (rest == path + 7 || *rest != ':' ||
+        wd_server_get((int)index, &server) < 0) {
+        listing.path = strdup("WebDAV");
+        if (add_entry(&listing, FILE_BROWSER_PARENT, "..", "root:") < 0)
+            goto allocation_failure;
+        struct wd_server servers[WD_MAX_SERVERS];
+        int count = wd_servers_load(servers, WD_MAX_SERVERS);
+        for (int i = 0; i < count; ++i) {
+            char base[640], location[700];
+            wd_base_path(&servers[i], base, sizeof(base));
+            snprintf(location, sizeof(location), "webdav:%d:%s", i, base);
+            if (add_entry(&listing, FILE_BROWSER_DIRECTORY, servers[i].name,
+                          location) < 0)
+                goto allocation_failure;
+        }
+        if (add_entry(&listing, FILE_BROWSER_DIRECTORY, tr("Add server"),
+                      "webdav:add") < 0)
+            goto allocation_failure;
+        return listing;
+    }
+    const char *directory = rest + 1;
+    char base[640], parent[1200];
+    wd_base_path(&server, base, sizeof(base));
+
+    /* Display title "WebDAV / server / folder / subfolder". */
+    char shown[1024], shown_base[1024], title[1400];
+    wd_url_decode(directory, shown, sizeof(shown));
+    wd_url_decode(base, shown_base, sizeof(shown_base));
+    size_t used = (size_t)snprintf(title, sizeof(title), "WebDAV / %s",
+                                   server.name);
+    size_t base_length = strlen(shown_base);
+    const char *c = strncmp(shown, shown_base, base_length) == 0
+                        ? shown + base_length
+                        : shown;
+    for (bool separate = true; *c && used + 4 < sizeof(title); ++c) {
+        if (*c == '/') {
+            separate = true;
+            continue;
+        }
+        if (separate) {
+            memcpy(title + used, " / ", 3);
+            used += 3;
+            separate = false;
+        }
+        title[used++] = *c;
+    }
+    title[used] = '\0';
+    listing.path = strdup(title);
+
+    /* ".." leads one folder up, from the server's base to the list. */
+    if (strcmp(directory, base) == 0) {
+        snprintf(parent, sizeof(parent), "webdav:");
+    } else {
+        int prefix = snprintf(parent, sizeof(parent), "webdav:%ld:", index);
+        parent_path(directory, parent + prefix,
+                    sizeof(parent) - (size_t)prefix);
+        size_t length = strlen(parent);
+        if (parent[length - 1] != '/' && length + 1 < sizeof(parent))
+            memcpy(parent + length, "/", 2);
+    }
+    if (add_entry(&listing, FILE_BROWSER_PARENT, "..", parent) < 0)
+        goto allocation_failure;
+
+    struct wd_entry *entries = NULL;
+    size_t count = 0;
+    if (wd_list(&server, directory, &entries, &count, listing.error,
+                sizeof(listing.error)) < 0)
+        return listing;
+    for (size_t i = 0; i < count; ++i) {
+        char location[1200];
+        snprintf(location, sizeof(location), "webdav:%ld:%s", index,
+                 entries[i].path);
+        if (add_entry(&listing,
+                      entries[i].is_dir ? FILE_BROWSER_DIRECTORY
+                                        : FILE_BROWSER_MEDIA,
+                      entries[i].name, location) < 0) {
+            free(entries);
+            goto allocation_failure;
+        }
+        listing.entries[listing.entry_count - 1U].size = entries[i].size;
+    }
+    free(entries);
+    compare_sort = FILE_BROWSER_SORT_NAME;
+    compare_descending = false;
+    qsort(listing.entries, listing.entry_count, sizeof(*listing.entries),
+          compare_entries);
+    return listing;
+
+allocation_failure:
+    file_browser_listing_clear(&listing);
+    listing.generation = generation;
+    listing.path = strdup("WebDAV");
+    snprintf(listing.error, sizeof(listing.error), tr("Not enough memory"));
+    return listing;
+}
+
 static struct file_browser_listing read_location(
     const char *path, uint64_t generation, int sort, bool descending,
     int local_sort, bool local_descending)
@@ -647,6 +755,8 @@ static struct file_browser_listing read_location(
     if (strncmp(path, "jf:", 3) == 0)
         return read_jellyfin(path, generation, (enum jf_sort)sort,
                              descending);
+    if (strncmp(path, "webdav:", 7) == 0)
+        return read_webdav(path, generation);
     return read_directory(path, generation, local_sort, local_descending);
 }
 

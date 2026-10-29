@@ -1,0 +1,59 @@
+#ifndef STEREONAUT_WEBDAV_H
+#define STEREONAUT_WEBDAV_H
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+
+/* Saved WebDAV servers ($XDG_CONFIG_HOME/stereonaut/webdav.json, 0600) and
+ * PROPFIND directory listings over libcurl (blocking: callers run it on a
+ * worker thread). Files play through the session's http(s) path;
+ * wd_authorization_header() hands Basic credentials to libavformat through
+ * STEREONAUT_HTTP_HEADERS, never through argv. */
+
+#define WD_MAX_SERVERS 16
+
+struct wd_server {
+    char name[64];
+    char url[512]; /* base URL, e.g. https://host:8443/dav */
+    char user[128];
+    char pass[256];
+};
+
+/* Fills `out` with the saved servers (up to `max`); returns the count. */
+int wd_servers_load(struct wd_server *out, int max);
+/* Appends `server` (http:// is assumed without a scheme) and saves the
+ * list. 0 on success, <0 with a message in `error`. */
+int wd_server_add(const struct wd_server *server, char *error,
+                  size_t error_size);
+/* Copies the server at `index` into `out`. 0 on success, <0 if out of
+ * range. */
+int wd_server_get(int index, struct wd_server *out);
+
+/* "Authorization: Basic <base64(user:pass)>" into `out`; "" without a
+ * user. */
+void wd_authorization_header(const struct wd_server *server, char *out,
+                             size_t size);
+/* scheme://host[:port] of the server's URL into `out`. */
+void wd_origin(const struct wd_server *server, char *out, size_t size);
+/* Path of the server's URL below the origin with a trailing slash ("/" if
+ * none) into `out`. */
+void wd_base_path(const struct wd_server *server, char *out, size_t size);
+/* `in` with %XX escapes decoded into `out`. */
+void wd_url_decode(const char *in, char *out, size_t size);
+
+struct wd_entry {
+    char name[256];  /* display name (decoded last path segment) */
+    char path[1024]; /* encoded path below the origin, e.g. /dav/movies/ */
+    bool is_dir;
+    int64_t size;    /* bytes, 0 if unknown */
+};
+
+/* PROPFIND Depth 1 of `dir_path` (encoded, below the origin): folders and
+ * .mkv/.mp4 files, without the folder itself. *out is malloc'd (caller
+ * frees). 0 on success, <0 with a message in `error`. */
+int wd_list(const struct wd_server *server, const char *dir_path,
+            struct wd_entry **out, size_t *count, char *error,
+            size_t error_size);
+
+#endif

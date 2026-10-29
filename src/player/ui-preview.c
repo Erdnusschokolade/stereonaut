@@ -340,12 +340,24 @@ int main(int argc, char **argv)
         ui.sort = 4;
         ui.sort_descending = true;
     }
-    if (hover == 150) { /* search keyboard, key "g" focused */
+    if (hover >= 150 && hover <= 152) { /* keyboard, key "g" focused */
         ui.keyboard_open = true;
         snprintf(ui.query, sizeof(ui.query), "genshin imp");
+        if (hover == 151) { /* WebDAV address on the symbol layer */
+            ui.keyboard_purpose = 1;
+            ui.keyboard_symbols = true;
+            snprintf(ui.server_url, sizeof(ui.server_url),
+                     "http://host:8080/videos/a/very/long/path/to/the/"
+                     "collection");
+        } else if (hover == 152) { /* WebDAV password with shift */
+            ui.keyboard_purpose = 3;
+            ui.keyboard_shift = true;
+            snprintf(ui.server_password, sizeof(ui.server_password),
+                     "geheim 123");
+        }
         px = 464 + 26 + 4 * 98 + 40;
         py = 180 + 120 + 2 * 76 + 30;
-        hover = 148;
+        hover = 150;
     }
     if (hover >= 84 && hover <= 87) { /* filter menu, item focused */
         ui.filter_menu_open = true;
