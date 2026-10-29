@@ -39,6 +39,8 @@ int main(int argc, char **argv)
     printf("listing generation=%" PRIu64 " path=%s entries=%zu error=%s\n",
            listing.generation, listing.path, listing.entry_count,
            listing.error[0] ? listing.error : "none");
+    for (size_t i = 0; i < listing.crumb_count; ++i)
+        printf("crumb index=%zu location=%s\n", i, listing.crumbs[i]);
     for (size_t i = 0; i < listing.entry_count; ++i)
         printf("entry kind=%u name=%s path=%s\n",
                (unsigned)listing.entries[i].kind,

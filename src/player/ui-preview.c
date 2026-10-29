@@ -281,7 +281,15 @@ int main(int argc, char **argv)
     browser_ui_open(&ui, location ? location : "jf:view:x", NULL, error,
                     sizeof(error));
     struct file_browser_listing listing = {.generation = 1};
-    listing.path = strdup("Jellyfin / VR-Filme");
+    const char *title = getenv("STEREONAUT_PREVIEW_PATH");
+    listing.path = strdup(title ? title : "Jellyfin / VR-Filme");
+    /* Every breadcrumb but the last leads somewhere. */
+    listing.crumb_count = 1;
+    for (const char *c = listing.path; (c = strstr(c, " / ")); c += 3)
+        ++listing.crumb_count;
+    listing.crumbs = calloc(listing.crumb_count, sizeof(*listing.crumbs));
+    for (size_t i = 0; i < listing.crumb_count; ++i)
+        listing.crumbs[i] = strdup("jf:");
     add(&listing, FILE_BROWSER_PARENT, "..", "jf:");
     const char *names[] = {
         "Über den Wolken – Alpenflug 8K", "Herbstwald im Nebel",
@@ -364,6 +372,13 @@ int main(int argc, char **argv)
         px = 1406 + 190 - 360 + 60;
         py = 126 + 46 + 8 + 8 + (hover - 84) * 52 + 20;
         hover = 88;
+    }
+    if (hover == 156) { /* first breadcrumb focused */
+        browser_ui_render(&ui, malloc((size_t)BROWSER_UI_WIDTH *
+                                      BROWSER_UI_HEIGHT * 4), false);
+        px = 452 + 20;
+        py = 140;
+        hover = 89;
     }
     if (hover >= 153 && hover <= 155) { /* remove server, login, address */
         ui.prompt_kind = hover - 152;

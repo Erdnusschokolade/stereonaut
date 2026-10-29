@@ -63,7 +63,31 @@ void file_browser_listing_clear(struct file_browser_listing *listing)
     }
     free(listing->entries);
     free(listing->path);
+    for (size_t i = 0; i < listing->crumb_count; ++i)
+        free(listing->crumbs[i]);
+    free(listing->crumbs);
     memset(listing, 0, sizeof(*listing));
+}
+
+/* Appends the location of the next breadcrumb ("" for none); without
+ * memory the listing has no breadcrumbs at all. */
+static void add_crumb(struct file_browser_listing *listing,
+                      const char *location, size_t length)
+{
+    char **crumbs = realloc(listing->crumbs,
+                            (listing->crumb_count + 1) * sizeof(*crumbs));
+    char *copy = crumbs ? strndup(location, length) : NULL;
+    if (crumbs)
+        listing->crumbs = crumbs;
+    if (!copy) {
+        for (size_t i = 0; i < listing->crumb_count; ++i)
+            free(listing->crumbs[i]);
+        free(listing->crumbs);
+        listing->crumbs = NULL;
+        listing->crumb_count = 0;
+        return;
+    }
+    listing->crumbs[listing->crumb_count++] = copy;
 }
 
 static bool is_media_name(const char *name)
@@ -183,6 +207,11 @@ static struct file_browser_listing read_directory(const char *requested,
         }
         listing.path[used] = '\0';
     }
+    /* "Local files" leads to /, every folder to its own path. */
+    add_crumb(&listing, "/", 1);
+    for (const char *c = resolved + 1; c[-1]; ++c)
+        if ((*c == '/' || !*c) && c[-1] != '/')
+            add_crumb(&listing, resolved, (size_t)(c - resolved));
     DIR *directory = opendir(resolved);
     if (!directory) {
         snprintf(listing.error, sizeof(listing.error),
@@ -604,6 +633,13 @@ static struct file_browser_listing read_jellyfin(const char *request,
         return jellyfin_message(generation, "Jellyfin",
                                 error[0] ? error : tr("Jellyfin error"));
     listing.path = strdup(title);
+    /* "Jellyfin" (not for a search), the library of a filter, the folder
+     * itself. */
+    add_crumb(&listing, query ? "" : "jf:", query ? 0 : 3);
+    if (filter != JF_FILTER_NONE)
+        add_crumb(&listing, parent_path_text, strlen(parent_path_text));
+    if (strcmp(title, "Jellyfin") != 0)
+        add_crumb(&listing, request, strlen(request));
     if (add_entry(&listing, FILE_BROWSER_PARENT, "..", parent_path_text) < 0)
         goto allocation_failure;
     if (filter_values) {
@@ -676,29 +712,38 @@ static struct file_browser_listing read_webdav(const char *path,
     char base[640], parent[1200];
     wd_base_path(&server, base, sizeof(base));
 
-    /* Display title "WebDAV / server / folder / subfolder". */
-    char shown[1024], shown_base[1024], title[1400];
-    wd_url_decode(directory, shown, sizeof(shown));
-    wd_url_decode(base, shown_base, sizeof(shown_base));
+    /* Display title "WebDAV / server / folder / subfolder"; the
+     * breadcrumbs lead to the server list, the base and every folder. */
+    char title[1400], location[1200];
     size_t used = (size_t)snprintf(title, sizeof(title), "WebDAV / %s",
                                    server.name);
-    size_t base_length = strlen(shown_base);
-    const char *c = strncmp(shown, shown_base, base_length) == 0
-                        ? shown + base_length
-                        : shown;
-    for (bool separate = true; *c && used + 4 < sizeof(title); ++c) {
-        if (*c == '/') {
-            separate = true;
-            continue;
-        }
-        if (separate) {
-            memcpy(title + used, " / ", 3);
-            used += 3;
-            separate = false;
-        }
-        title[used++] = *c;
+    add_crumb(&listing, "webdav:", 7);
+    int prefix = snprintf(location, sizeof(location), "webdav:%ld:", index);
+    size_t base_length = strlen(base);
+    const char *folder = strncmp(directory, base, base_length) == 0
+                             ? directory + base_length
+                             : directory + 1;
+    snprintf(location + prefix, sizeof(location) - (size_t)prefix, "%s",
+             directory);
+    add_crumb(&listing, location,
+              (size_t)prefix + (size_t)(folder - directory));
+    for (const char *c = folder; *c;) {
+        size_t length = strcspn(c, "/");
+        char encoded[256], name[256];
+        snprintf(encoded, sizeof(encoded), "%.*s", (int)length, c);
+        wd_url_decode(encoded, name, sizeof(name));
+        if (length)
+            used += (size_t)snprintf(title + used, sizeof(title) - used,
+                                     " / %s", name);
+        c += length;
+        if (*c)
+            ++c;
+        if (length)
+            add_crumb(&listing, location,
+                      (size_t)prefix + (size_t)(c - directory));
+        if (used >= sizeof(title))
+            break;
     }
-    title[used] = '\0';
     listing.path = strdup(title);
 
     /* ".." leads one folder up, from the server's base to the list. */

@@ -66,6 +66,11 @@
 #define MENU_Y (SORT_Y + SORT_H + 8)
 #define MENU_H (JF_SORT_COUNT * MENU_ITEM_H + 16)
 
+/* Breadcrumb row below the title: one chip per part of the location. */
+#define CRUMB_Y 126
+#define CRUMB_H 46
+#define CRUMB_MAX 10
+
 /* Filter chip at the right end of the breadcrumb row and its menu. */
 #define FILTER_W 190
 #define FILTER_H 46
@@ -206,6 +211,8 @@ enum {
     ID_FILTER = 83,
     ID_FILTER_ITEM = 84, /* 84 .. 87 */
     ID_FILTER_AREA = 88, /* hit test only: resolved with the model */
+    ID_CRUMB_AREA = 89,  /* hit test only: resolved with the model */
+    ID_CRUMB = 90,       /* 90 .. 90+CRUMB_MAX-1, chips from the left */
     ID_KEY = 100,        /* 100 .. 143: keyboard_keys row by row */
     ID_KEY_SHIFT = 144,
     ID_KEY_LAYER = 145,
@@ -580,37 +587,102 @@ static void draw_tile(struct browser_ui *ui, struct ui_canvas *canvas,
                          entry->name);
 }
 
-static void draw_breadcrumbs(struct browser_ui *ui, struct ui_canvas *canvas)
+/* A breadcrumb chip: a " / " part of the listing title. */
+struct crumb {
+    const char *text;
+    size_t length;
+    size_t segment; /* index of the part in the title */
+    int x, width;
+    bool last;
+};
+
+/* Lays out the breadcrumb chips; when not all fit, the first ones are
+ * left out (the current folder always shows). Returns the count. */
+static int crumb_layout(struct browser_ui *ui, struct crumb chips[CRUMB_MAX],
+                        size_t *segments)
 {
-    const char *path = ui->listing.path ? ui->listing.path : "";
-    char segment[256];
-    int x = GRID_X;
-    const char *cursor = path;
-    const int limit = filterable(ui) ? FILTER_X - 16 : CENTER_X + CENTER_W - 60;
-    while (*cursor && x < limit - 60) {
+    *segments = 0;
+    if (!ui->font || !ui->bold || !ui->listing.path)
+        return 0;
+    struct crumb all[32];
+    size_t count = 0;
+    for (const char *cursor = ui->listing.path; *cursor && count < 32;) {
         const char *separator = strstr(cursor, " / ");
         size_t length = separator ? (size_t)(separator - cursor)
                                   : strlen(cursor);
-        if (length >= sizeof(segment))
-            length = sizeof(segment) - 1;
-        memcpy(segment, cursor, length);
-        segment[length] = '\0';
         bool last = !separator;
-        int width = ui_text_width(last ? ui->bold : ui->font, 24, segment) +
-                    44;
-        if (width > 420)
-            width = 420;
-        if (x + width > limit)
-            width = limit - x;
-        ui_fill_round_rect(canvas, x, 126, width, 46, 23,
-                           last ? color_accent : color_chip);
-        ui_draw_text(canvas, last ? ui->bold : ui->font, 24, x + width / 2,
-                     134, width - 32, UI_ALIGN_CENTER,
-                     last ? UI_RGBA(255, 255, 255, 255) : color_text, segment);
-        x += width + 10;
+        int width = ui_text_width_n(last ? ui->bold : ui->font, 24, cursor,
+                                    length) + 44;
+        all[count] = (struct crumb){cursor, length, count, 0,
+                                    width > 420 ? 420 : width, last};
+        ++count;
         if (!separator)
             break;
         cursor = separator + 3;
+    }
+    *segments = count;
+    const int limit = filterable(ui) ? FILTER_X - 16 : CENTER_X + CENTER_W - 60;
+    size_t first = count > CRUMB_MAX ? count - CRUMB_MAX : 0;
+    for (;;) {
+        int total = 0;
+        for (size_t i = first; i < count; ++i)
+            total += all[i].width + 10;
+        if (GRID_X + total - 10 <= limit || first + 1 >= count)
+            break;
+        ++first;
+    }
+    int x = GRID_X, shown = 0;
+    for (size_t i = first; i < count; ++i) {
+        chips[shown] = all[i];
+        chips[shown].x = x;
+        if (x + chips[shown].width > limit)
+            chips[shown].width = limit - x;
+        x += chips[shown].width + 10;
+        ++shown;
+    }
+    return shown;
+}
+
+/* Location chip `chip` leads to, or NULL (the current folder, or none
+ * known). */
+static const char *crumb_location(struct browser_ui *ui, int chip)
+{
+    struct crumb chips[CRUMB_MAX];
+    size_t segments;
+    int count = crumb_layout(ui, chips, &segments);
+    if (chip < 0 || chip >= count || chips[chip].last ||
+        segments != ui->listing.crumb_count)
+        return NULL;
+    const char *location = ui->listing.crumbs[chips[chip].segment];
+    return location[0] ? location : NULL;
+}
+
+/* All chips, or with `hover` only that one highlighted. */
+static void draw_breadcrumbs(struct browser_ui *ui, struct ui_canvas *canvas,
+                             int hover)
+{
+    struct crumb chips[CRUMB_MAX];
+    size_t segments;
+    int count = crumb_layout(ui, chips, &segments);
+    for (int i = 0; i < count; ++i) {
+        if (hover >= 0 && hover != ID_CRUMB + i)
+            continue;
+        char segment[256];
+        size_t length = chips[i].length < sizeof(segment)
+                            ? chips[i].length
+                            : sizeof(segment) - 1;
+        memcpy(segment, chips[i].text, length);
+        segment[length] = '\0';
+        bool last = chips[i].last;
+        ui_fill_round_rect(canvas, chips[i].x, CRUMB_Y, chips[i].width,
+                           CRUMB_H, CRUMB_H / 2.0f,
+                           last              ? color_accent
+                           : hover == ID_CRUMB + i ? color_tile_hover
+                                                   : color_chip);
+        ui_draw_text(canvas, last ? ui->bold : ui->font, 24,
+                     chips[i].x + chips[i].width / 2, CRUMB_Y + 8,
+                     chips[i].width - 32, UI_ALIGN_CENTER,
+                     last ? UI_RGBA(255, 255, 255, 255) : color_text, segment);
     }
 }
 
@@ -805,7 +877,7 @@ static void draw_base(struct browser_ui *ui, struct ui_canvas *canvas)
                  current_title(ui));
     draw_sort_chip(ui, canvas, false);
     draw_filter_chip(ui, canvas, false);
-    draw_breadcrumbs(ui, canvas);
+    draw_breadcrumbs(ui, canvas, -1);
     for (int slot = 0; slot < (int)PAGE_ENTRIES; ++slot)
         draw_tile(ui, canvas, slot, false);
     if (!ui->grid_count && ui->listing.path)
@@ -821,18 +893,6 @@ static void draw_base(struct browser_ui *ui, struct ui_canvas *canvas)
         ui_draw_icon(canvas, UI_ICON_INFO, GRID_X + 32, 882, 32, color_text);
         ui_draw_text(canvas, ui->font, 26, GRID_X + 62, 866, CENTER_W - 140,
                      UI_ALIGN_LEFT, color_text, message);
-    }
-    if (page_count(ui) > 1) {
-        int track = (int)GRID_ROWS * (TILE_H + TILE_GAP_Y) - TILE_GAP_Y;
-        int height = track / (int)page_count(ui);
-        if (height < 40)
-            height = 40;
-        int top = GRID_Y + (int)((size_t)(track - height) * ui->page /
-                                 (page_count(ui) - 1));
-        ui_fill_round_rect(canvas, CENTER_X + CENTER_W - 20, GRID_Y, 6,
-                           track, 3, color_chip);
-        ui_fill_round_rect(canvas, CENTER_X + CENTER_W - 20, top, 6, height,
-                           3, color_dim);
     }
     draw_pager(ui, canvas, -1);
 }
@@ -1147,6 +1207,8 @@ void browser_ui_render(struct browser_ui *ui, uint32_t *pixels, bool bgra)
         draw_tile(ui, &canvas, hover - ID_TILE, true);
     else if (hover == ID_BACK)
         draw_back_button(ui, &canvas, true);
+    else if (hover >= ID_CRUMB && hover < ID_CRUMB + CRUMB_MAX)
+        draw_breadcrumbs(ui, &canvas, hover);
     else if ((hover >= ID_RAIL && hover < ID_RAIL + RAIL_COUNT) ||
              hover == ID_EXIT)
         draw_rail(ui, &canvas, hover);
@@ -1192,6 +1254,9 @@ static int hit_test(int x, int y, int layers)
     if ((layers & HIT_MENU) && x >= MENU_X && x < MENU_X + MENU_W &&
         y >= MENU_Y && y < MENU_Y + MENU_H)
         return ID_SORT_AREA;
+    if (y >= CRUMB_Y && y < CRUMB_Y + CRUMB_H && x >= GRID_X &&
+        x < CENTER_X + CENTER_W - 60)
+        return ID_CRUMB_AREA;
     for (int slot = 0; slot < (int)PAGE_ENTRIES; ++slot) {
         int tx, ty;
         tile_rect(slot, &tx, &ty);
@@ -1304,8 +1369,8 @@ void browser_ui_set_pointer(struct browser_ui *ui, bool visible, int x, int y,
     if (ui->filter_menu_open && hover != ID_FILTER &&
         (hover < ID_FILTER_ITEM || hover >= ID_FILTER_ITEM + 4))
         hover = -1; /* clicks outside the menu only close it */
-    if (hover == ID_FILTER && !filterable(ui))
-        hover = -1;
+    if (hover == ID_FILTER && !filterable(ui)) /* no chip: breadcrumbs */
+        hover = y >= CRUMB_Y && y < CRUMB_Y + CRUMB_H ? ID_CRUMB_AREA : -1;
     if (hover == ID_SORT_AREA) {
         /* The menu hides everything below it while open; closed, the area
          * is just grid. */
@@ -1325,6 +1390,17 @@ void browser_ui_set_pointer(struct browser_ui *ui, bool visible, int x, int y,
         hover = -1;
     if (hover == ID_PAGE_AREA)
         hover = resolve_page_button(ui, x);
+    if (hover == ID_CRUMB_AREA) {
+        /* Only chips that lead somewhere react. */
+        struct crumb chips[CRUMB_MAX];
+        size_t segments;
+        int count = crumb_layout(ui, chips, &segments);
+        hover = -1;
+        for (int i = 0; i < count; ++i)
+            if (x >= chips[i].x && x < chips[i].x + chips[i].width &&
+                crumb_location(ui, i))
+                hover = ID_CRUMB + i;
+    }
     if ((hover == ID_PREVIOUS || hover == ID_NEXT) && page_count(ui) <= 1)
         hover = -1;
     if (hover == ID_BACK && ui->parent < 0)
@@ -1775,6 +1851,12 @@ enum browser_ui_action browser_ui_activate(struct browser_ui *ui, char *path,
         request(ui, entry->path);
     } else if (hover == ID_BACK && ui->parent >= 0) {
         request(ui, ui->listing.entries[ui->parent].path);
+    } else if (hover >= ID_CRUMB && hover < ID_CRUMB + CRUMB_MAX) {
+        const char *location = crumb_location(ui, hover - ID_CRUMB);
+        if (location) {
+            ui->restore_page = 0;
+            request(ui, location);
+        }
     } else if (hover == ID_PREVIOUS) {
         if (ui->page > 0)
             set_page(ui, ui->page - 1);

@@ -43,6 +43,10 @@ struct file_browser_entry {
 struct file_browser_listing {
     uint64_t generation;
     char *path;
+    /* Location of each " / " part of `path` (the breadcrumbs), "" where
+     * there is none; crumb_count 0 if unknown. */
+    char **crumbs;
+    size_t crumb_count;
     struct file_browser_entry *entries;
     size_t entry_count;
     char error[256];
