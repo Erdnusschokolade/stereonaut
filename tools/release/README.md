@@ -17,11 +17,15 @@ version.
 
 ## Making a release
 
-1. Tag the commit and push the tag (`git tag -a vX.Y.Z`, then push it).
-2. On the Frame, from that commit:
+1. Render the README pictures again with
+   `tools/release/make-readme-pictures.sh` (on a desktop, needs FFmpeg)
+   and commit them if they changed, so the README shows the panels of the
+   release. They use made-up titles and generated test patterns only.
+2. Tag the commit and push the tag (`git tag -a vX.Y.Z`, then push it).
+3. On the Frame, from that commit:
    `src/player/make-release.sh vX.Y.Z --turnip LIBRARY OUTPUT_DIR`
    (`--turnip` adds the TP10 Turnip for HEVC Main10).
-3. Copy `OUTPUT_DIR` to the machine with the signing key and run
+4. Copy `OUTPUT_DIR` to the machine with the signing key and run
    `tools/release/publish-release.sh OUTPUT_DIR KEY`. It adds the source
    package from the tag (`tools/release/make-source-release.sh`) unless it
    is in `OUTPUT_DIR` already, signs the packages, checks each signature
