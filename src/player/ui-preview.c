@@ -174,23 +174,22 @@ static int preview_player(const char *path, int hover, bool popup, int tab)
     adjust[PLAYER_ADJUST_TILT] = -25.0f;
     adjust[PLAYER_ADJUST_HEAD_MOTION] = 0.5f;
     static struct jf_details details = {
-        .overview = "Ein Flug über die Alpen bei Sonnenaufgang, aufgenommen "
-                    "mit einer 8K-Stereokamera unter einem Segelflugzeug. "
-                    "Gipfel, Gletscher und Täler ziehen in ruhigen Bögen "
-                    "vorbei.",
-        .people = "Anna Beispiel, Max Muster",
-        .studios = "Alpenfilm",
-        .genres = "Natur, Reise, 8K",
+        .overview = "A flight over the Alps at sunrise, filmed with an 8K "
+                    "stereo camera below a glider. Peaks, glaciers and "
+                    "valleys pass by in calm curves.",
+        .people = "Anna Example, Max Sample",
+        .studios = "Alpine Film",
+        .genres = "Nature, Travel, 8K",
         .year = 2023,
         .community_rating = 8.1f,
         .chapter_count = 4,
         .chapter_us = {0, INT64_C(600000000), INT64_C(1500000000),
                        INT64_C(2700000000)},
-        .chapter_names = {"Start", "Gletscher", "Matterhorn", "Landung"},
+        .chapter_names = {"Start", "Glacier", "Matterhorn", "Landing"},
     };
     struct player_ui_state state = {
         .details = &details,
-        .title = "Über den Wolken – Alpenflug 8K",
+        .title = "Above the Clouds – Alpine Flight 8K",
         .volume = 0.8f,
         .end_action = 2,
         .autohide = 5,
@@ -225,8 +224,12 @@ static int preview_player(const char *path, int hover, bool popup, int tab)
         .update_can_check = true,
         .update_can_install = true,
         .update_auto = true,
-        .debug_text = "Gaze: eye · disparity +11.40° · score 0.98 · "
-                      "structure 0.0020 · valid · offset 7.80°",
+        /* STEREONAUT_PREVIEW_NO_DEBUG hides the gaze line (pictures for
+         * the README). */
+        .debug_text = getenv("STEREONAUT_PREVIEW_NO_DEBUG")
+                          ? NULL
+                          : "Gaze: eye · disparity +11.40° · score 0.98 · "
+                            "structure 0.0020 · valid · offset 7.80°",
     };
     /* Hovering the seek bar shows the scrub preview (stand-in pictures of
      * one SBS eye, a different blue per slot). */
@@ -281,15 +284,15 @@ int main(int argc, char **argv)
     browser_ui_open(&ui, location ? location : "jf:view:x", NULL, error,
                     sizeof(error));
     struct file_browser_listing listing = {.generation = 1};
-    listing.path = strdup("Jellyfin / VR-Filme");
+    listing.path = strdup("Jellyfin / VR Films");
     add(&listing, FILE_BROWSER_PARENT, "..", "jf:");
     const char *names[] = {
-        "Über den Wolken – Alpenflug 8K", "Herbstwald im Nebel",
-        "Tokyo Night Walk 東京", "Ocean Dive Great Barrier Reef",
-        "Mondsee bei Nacht", "Konzert im Stadtpark (Live)",
-        "Sehr langer Titel einer Dokumentation über Vulkane auf Island",
-        "Wüstenfahrt bei Sonnenuntergang", "Kirschblüten in Kyoto", "Gletscherwanderung",
-        "Wildlife Safari 180°", "Nordlichter",
+        "Above the Clouds – Alpine Flight 8K", "Autumn Forest in the Fog",
+        "Tokyo Night Walk", "Ocean Dive Great Barrier Reef",
+        "Lake at Night", "Concert in the Park (Live)",
+        "A Very Long Title of a Documentary About the Volcanoes of Iceland",
+        "Desert Drive at Sunset", "Cherry Blossoms in Kyoto", "Glacier Hike",
+        "Wildlife Safari 180°", "Northern Lights",
     };
     for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); ++i) {
         char path[64];
@@ -299,7 +302,7 @@ int main(int argc, char **argv)
             names[i], path);
     }
     for (int i = 0; i < 30; ++i)
-        add(&listing, FILE_BROWSER_MEDIA, "Weitere Seite", "jf:item:y:x");
+        add(&listing, FILE_BROWSER_MEDIA, "More Titles", "jf:item:y:x");
     for (size_t i = 1; i < listing.entry_count; ++i)
         listing.entries[i].duration_us = INT64_C(2280000000);
     listing.entries[1].resume_us = INT64_C(1390000000); /* resume prompt */
@@ -342,7 +345,7 @@ int main(int argc, char **argv)
     }
     if (hover == 150) { /* search keyboard, key "g" focused */
         ui.keyboard_open = true;
-        snprintf(ui.query, sizeof(ui.query), "genshin imp");
+        snprintf(ui.query, sizeof(ui.query), "northern li");
         px = 464 + 26 + 4 * 98 + 40;
         py = 180 + 120 + 2 * 76 + 30;
         hover = 148;

@@ -25,6 +25,7 @@ docs/**/*.raw
 docs/**/*.bin
 docs/**/*.pgm
 docs/**/*.png
+!docs/images/*.png
 docs/**/*.strace
 docs/**/*.zip
 

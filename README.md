@@ -25,6 +25,37 @@ Audio:  libavcodec/libswresample -> 48 kHz S16 stereo -> ALSA (master clock)
 This is a personal project, not affiliated with Valve. It targets the Steam
 Frame specifically and has not been tried on other headsets.
 
+## What it looks like
+
+Stereonaut opens a browser panel about 2.4 m in front of you. You point at
+it with either controller and pull the trigger: libraries and folders on
+the left, the titles as tiles in the middle, details of the title pointed
+at on the right.
+
+![The browser with a Jellyfin library](docs/images/browser.png)
+
+A title plays as a dome around you (180°, 360°, fisheye) or as a flat
+screen. A panel below the video holds the seek bar with chapter marks and
+the controls; the cube button opens settings for the title such as
+projection, stereo layout, position, picture and autofocus. The panel hides
+itself after a few seconds and comes back with the grip button.
+
+![The playback panel with the title settings open](docs/images/player.png)
+
+Searching a Jellyfin library uses an on-screen keyboard on the same panel.
+
+![Searching with the on-screen keyboard](docs/images/search.png)
+
+Settings for all titles (scrub preview, panel, AV1, passthrough, autofocus,
+controller buttons, language and updates) open from the browser.
+
+![The settings page](docs/images/settings.png)
+
+These pictures come from the layout preview (see Building) with made-up
+titles and generated stand-in pictures; in the headset the panels float in
+front of the video or, in the browser, in front of passthrough where
+SteamVR offers it.
+
 ## Features
 
 - Browser for local folders and Jellyfin libraries (Quick Connect login,
@@ -136,7 +167,9 @@ The Jellyfin connection is stored in `~/.config/stereonaut/jellyfin.json`
 
 The panel layout can be checked on a desktop without a headset:
 `src/player/build-ui-preview.sh`, then `build/ui-preview out.ppm` or
-`build/ui-preview --player out.ppm`.
+`build/ui-preview --player out.ppm`. `STEREONAUT_PREVIEW_THUMBS=DIR` takes
+tile pictures from `DIR/1.ppm` … `7.ppm`, `STEREONAUT_PREVIEW_NO_DEBUG=1`
+hides the gaze diagnostics line.
 
 ## Layout
 
