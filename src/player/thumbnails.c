@@ -4,6 +4,12 @@
 #include "jellyfin.h"
 #include "local-thumbnail.h"
 #include "ui-draw.h"
+#include "webdav.h"
+#include "eye-view.h"
+#include "format-detect.h"
+#include "nv12-playback-ipc.h"
+#include "settings.h"
+#include "title-settings.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -13,11 +19,15 @@
 #include <jpeglib.h> /* needs stdio.h first */
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 #define WORKERS 2
 #define DOWNLOAD_WIDTH 480
+/* Key frames are kept larger: a perspective view of one eye uses a small
+ * part of the picture. */
+#define KEY_FRAME_WIDTH 1280
 
 struct job {
     uint64_t generation;
@@ -290,6 +300,67 @@ static struct ui_image *fetch(const struct jf_config *config,
 
 /* `source` is "ITEM|IMAGE[|FALLBACK]"; the fallback (the poster) replaces
  * images that are missing or mostly border. */
+/* A key frame of a 180/360 degree title becomes a perspective view of one
+ * eye, as the scrub preview shows it with "Perspective" (its setting and
+ * field of view apply); `input` is what the session plays, `name` the file
+ * name. The format comes from titles.json, the tags in the name or the
+ * shape of the picture. Other pictures are prepared as before. */
+static struct ui_image *key_frame_view(struct ui_image *picture,
+                                       const char *input, const char *name)
+{
+    struct format_guess guess = {FORMAT_UNKNOWN, FORMAT_UNKNOWN, 0};
+    struct title_settings stored;
+    char key[TITLE_KEY_SIZE];
+    title_settings_defaults(&stored);
+    title_settings_key(input, key, sizeof(key));
+    if (title_settings_load(key, &stored) == 1 &&
+        stored.format_source != NV12_FORMAT_SOURCE_DEFAULT) {
+        guess.projection = (int)stored.projection_mode;
+        guess.stereo = (int)stored.stereo_layout;
+    } else {
+        format_from_name(name, &guess);
+    }
+    /* Side by side when about 2:1 and wider (as prepare() assumes). */
+    uint32_t layout = guess.stereo != FORMAT_UNKNOWN ? (uint32_t)guess.stereo
+                      : picture->width >= picture->height * 195 / 100
+                          ? NV12_STEREO_SBS
+                          : NV12_STEREO_MONO;
+    struct ui_image *eye = eye_view_cut(picture, layout);
+    int ratio = eye ? eye->width * 100 / eye->height : 0;
+    uint32_t projection =
+        guess.projection != FORMAT_UNKNOWN ? (uint32_t)guess.projection
+        : ratio >= 90 && ratio <= 110      ? NV12_PROJECTION_EQUIRECT_180
+        : ratio >= 190 && ratio <= 210     ? NV12_PROJECTION_EQUIRECT_360
+                                           : NV12_PROJECTION_FLAT;
+    int fov = settings_get_int("trickplay_fov", 100);
+    if (eye && settings_get_bool("trickplay_perspective", true) && fov > 0 &&
+        fov < 180 &&
+        (projection == NV12_PROJECTION_EQUIRECT_180 ||
+         projection == NV12_PROJECTION_EQUIRECT_360)) {
+        struct eye_view_map map = {0};
+        struct ui_image *view =
+            eye_view_straighten(eye, &map, projection, fov, THUMBNAIL_WIDTH,
+                                THUMBNAIL_WIDTH * 9 / 16);
+        eye_view_map_free(&map);
+        if (view) {
+            ui_image_free(eye);
+            ui_image_free(picture);
+            return view;
+        }
+    }
+    /* A known layout keeps the eye (top and bottom too); prepare() cuts
+     * a side-by-side picture itself. */
+    if (eye && guess.stereo != FORMAT_UNKNOWN) {
+        ui_image_free(picture);
+        picture = eye;
+    } else {
+        ui_image_free(eye);
+    }
+    bool small = false;
+    picture = trim_border(picture, &small);
+    return picture ? prepare(picture) : NULL;
+}
+
 /* "file:PATH": a local video's picture, cached under a hash of the path
  * with its modification time and size as the tag. */
 static struct ui_image *load_local(const char *path)
@@ -302,13 +373,13 @@ static struct ui_image *load_local(const char *path)
         hash = (hash ^ *c) * 1099511628211ULL;
     char item[32], image[64], cache[PATH_MAX];
     snprintf(item, sizeof(item), "local%016llx", (unsigned long long)hash);
-    snprintf(image, sizeof(image), "Local?tag=%lldx%lld",
+    snprintf(image, sizeof(image), "Local?tag=k%lldx%lld",
              (long long)status.st_mtime, (long long)status.st_size);
     bool cacheable = cache_path(item, image, cache, sizeof(cache));
     size_t size = 0;
     char *data = cacheable ? read_file(cache, &size) : NULL;
     if (!data) {
-        if (local_thumbnail_jpeg(path, DOWNLOAD_WIDTH, &data, &size) < 0) {
+        if (local_thumbnail_jpeg(path, KEY_FRAME_WIDTH, &data, &size) < 0) {
             printf("local_thumbnail path=%s available=0\n", path);
             return NULL;
         }
@@ -319,6 +390,76 @@ static struct ui_image *load_local(const char *path)
     free(data);
     if (!decoded)
         return NULL;
+    if (!local_thumbnail_has_sidecar(path)) {
+        const char *slash = strrchr(path, '/');
+        return key_frame_view(decoded, path, slash ? slash + 1 : path);
+    }
+    bool small = false;
+    decoded = trim_border(decoded, &small);
+    return decoded ? prepare(decoded) : NULL;
+}
+
+/* "webdav:N:SIZE:PATH": a sidecar picture (PATH ends in .jpg) or a key
+ * frame of the video at PATH on WebDAV server N, cached under a hash of
+ * the URL with SIZE as the tag. */
+static struct ui_image *load_webdav(const char *source)
+{
+    char *rest = NULL;
+    long index = strtol(source, &rest, 10);
+    struct wd_server server;
+    if (rest == source || *rest != ':' || wd_server_get((int)index, &server) < 0)
+        return NULL;
+    long long file_size = strtoll(rest + 1, &rest, 10);
+    if (*rest != ':' || rest[1] != '/')
+        return NULL;
+    const char *path = rest + 1;
+    char origin[512], url[1600];
+    wd_origin(&server, origin, sizeof(origin));
+    snprintf(url, sizeof(url), "%s%s", origin, path);
+    uint64_t hash = 1469598103934665603ULL; /* FNV-1a */
+    for (const unsigned char *c = (const unsigned char *)url; *c; ++c)
+        hash = (hash ^ *c) * 1099511628211ULL;
+    char item[32], image[64], cache[PATH_MAX];
+    snprintf(item, sizeof(item), "webdav%016llx", (unsigned long long)hash);
+    snprintf(image, sizeof(image), "Remote?tag=k%lld", file_size);
+    bool cacheable = cache_path(item, image, cache, sizeof(cache));
+    size_t size = 0;
+    char *data = cacheable ? read_file(cache, &size) : NULL;
+    if (!data) {
+        const char *dot = strrchr(path, '.');
+        int got;
+        if (dot && strcasecmp(dot, ".jpg") == 0) {
+            got = wd_fetch(&server, path, &data, &size);
+        } else {
+            char authorization[1024], headers[1100];
+            wd_authorization_header(&server, authorization,
+                                    sizeof(authorization));
+            snprintf(headers, sizeof(headers), "%s%s", authorization,
+                     authorization[0] ? "\r\n" : "");
+            got = local_thumbnail_url_jpeg(url, headers, KEY_FRAME_WIDTH,
+                                           &data, &size);
+        }
+        if (got < 0) {
+            printf("webdav_thumbnail server=%ld available=0\n", index);
+            memset(&server, 0, sizeof(server));
+            return NULL;
+        }
+        if (cacheable)
+            write_file(cache, data, size);
+    }
+    memset(&server, 0, sizeof(server));
+    struct ui_image *decoded = thumbnail_decode_jpeg(data, size);
+    free(data);
+    if (!decoded)
+        return NULL;
+    const char *dot = strrchr(path, '.');
+    if (!dot || strcasecmp(dot, ".jpg") != 0) {
+        char input[1400], name[1024];
+        snprintf(input, sizeof(input), "webdav:%ld:%s", index, path);
+        const char *slash = strrchr(path, '/');
+        wd_url_decode(slash ? slash + 1 : path, name, sizeof(name));
+        return key_frame_view(decoded, input, name);
+    }
     bool small = false;
     decoded = trim_border(decoded, &small);
     return decoded ? prepare(decoded) : NULL;
@@ -329,6 +470,8 @@ static struct ui_image *load(const struct jf_config *config,
 {
     if (strncmp(source, "file:", 5) == 0)
         return load_local(source + 5);
+    if (strncmp(source, "webdav:", 7) == 0)
+        return load_webdav(source + 7);
     const char *separator = strchr(source, '|');
     if (!separator)
         return NULL;
@@ -486,6 +629,17 @@ void thumbnail_loader_request(struct thumbnail_loader *loader,
                                                          copy};
         pthread_cond_signal(&loader->changed);
     }
+    pthread_mutex_unlock(&loader->mutex);
+}
+
+void thumbnail_loader_cancel(struct thumbnail_loader *loader)
+{
+    if (!loader)
+        return;
+    pthread_mutex_lock(&loader->mutex);
+    for (size_t i = 0; i < loader->job_count; ++i)
+        free(loader->jobs[i].source);
+    loader->job_count = 0;
     pthread_mutex_unlock(&loader->mutex);
 }
 

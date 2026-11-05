@@ -6,6 +6,7 @@
 #include "settings.h"
 #include "thumbnails.h"
 #include "ui-draw.h"
+#include "webdav.h"
 
 #include <inttypes.h>
 #include <stdio.h>
@@ -65,6 +66,11 @@
 #define MENU_Y (SORT_Y + SORT_H + 8)
 #define MENU_H (JF_SORT_COUNT * MENU_ITEM_H + 16)
 
+/* Breadcrumb row below the title: one chip per part of the location. */
+#define CRUMB_Y 126
+#define CRUMB_H 46
+#define CRUMB_MAX 10
+
 /* Filter chip at the right end of the breadcrumb row and its menu. */
 #define FILTER_W 190
 #define FILTER_H 46
@@ -75,8 +81,9 @@
 #define FILTER_MENU_Y (FILTER_Y + FILTER_H + 8)
 #define FILTER_MENU_H (4 * MENU_ITEM_H + 16)
 
-/* On-screen keyboard of the search over the grid: four rows of eleven
- * keys and a row of actions. */
+/* On-screen keyboard over the grid (the search and the fields of a
+ * WebDAV server): four rows of eleven keys, or of five large ones on the
+ * number pad, and a row of actions. */
 #define KB_W 1120
 #define KB_X (CENTER_X + (CENTER_W - KB_W) / 2)
 #define KB_Y 180
@@ -87,6 +94,8 @@
 #define KB_H (120 + 5 * (KEY_H + KEY_GAP) + 16)
 #define KEY_ROWS 4
 #define KEY_COLUMNS 11
+#define PAD_COLUMNS 5
+#define PAD_KEY_W 205
 
 /* Keys row by row; a language can bring its own layout. */
 static const char english_keyboard[] =
@@ -95,11 +104,52 @@ static const char english_keyboard[] =
     "a s d f g h j k l & : "
     "z x c v b n m , . ! ?";
 
-/* Key `index` of the language's keyboard ("" past its end). */
-static const char *keyboard_key(int index, char key[8])
+/* The same for every language: what addresses and passwords need. */
+static const char symbol_keyboard[] =
+    "1 2 3 4 5 6 7 8 9 0 - "
+    "/ : @ . _ ~ ? = & # % "
+    "! \" $ ' ( ) * + , ; ^ "
+    "< > [ ] { } | \\ `";
+
+/* Addresses: an IP and port on large keys, letters one layer away. */
+static const char *const number_pad[KEY_ROWS * PAD_COLUMNS] = {
+    "7", "8", "9", ".", "http://",
+    "4", "5", "6", ":", "https://",
+    "1", "2", "3", "@", "/",
+    "-", "0", "_", "[", "]",
+};
+
+/* What the keyboard edits. */
+enum {
+    KEYBOARD_SEARCH,
+    KEYBOARD_SERVER_URL,
+    KEYBOARD_SERVER_USER,
+    KEYBOARD_SERVER_PASSWORD,
+};
+
+/* Its layers; the number pad only for addresses. */
+enum {
+    LAYER_LETTERS,
+    LAYER_SYMBOLS,
+    LAYER_NUMBERS,
+};
+
+/* Key `index` of the layer: the language's letters (capitals for shift),
+ * the symbols or the number pad ("" past its end). */
+static const char *keyboard_key(const struct browser_ui *ui, int index,
+                                char key[16])
 {
+    if (ui->keyboard_layer == LAYER_NUMBERS) {
+        snprintf(key, 16, "%s",
+                 index >= 0 && index < KEY_ROWS * PAD_COLUMNS
+                     ? number_pad[index]
+                     : "");
+        return key;
+    }
     const char *layout = i18n_languages[i18n_current()]->keyboard;
-    const char *cursor = layout ? layout : english_keyboard;
+    const char *cursor = ui->keyboard_layer == LAYER_SYMBOLS ? symbol_keyboard
+                         : layout                            ? layout
+                                                  : english_keyboard;
     for (int i = 0; i < index && *cursor; ++i) {
         cursor += strcspn(cursor, " ");
         cursor += strspn(cursor, " ");
@@ -109,6 +159,14 @@ static const char *keyboard_key(int index, char key[8])
         length = 0;
     memcpy(key, cursor, length);
     key[length] = '\0';
+    if (ui->keyboard_shift && ui->keyboard_layer == LAYER_LETTERS) {
+        unsigned char *c = (unsigned char *)key;
+        if (length == 1 && c[0] >= 'a' && c[0] <= 'z')
+            c[0] -= 32;
+        else if (length == 2 && c[0] == 0xC3 && c[1] >= 0xA0 &&
+                 c[1] <= 0xBE && c[1] != 0xB7) /* à .. þ, not ÷ */
+            c[1] -= 32;
+    }
     return key;
 }
 
@@ -125,6 +183,14 @@ static const char *keyboard_key(int index, char key[8])
 
 /* Titles watched less than this are offered from the start only. */
 #define RESUME_MINIMUM_US INT64_C(30000000)
+
+/* What the prompt asks (browser_ui.prompt_kind). */
+enum {
+    PROMPT_RESUME,
+    PROMPT_REMOVE_SERVER, /* on "webdav:remove:N" */
+    PROMPT_LOGIN,         /* on "webdav:edit:N" after a refused login */
+    PROMPT_ADDRESS,       /* on "webdav:edit:N", the server unreachable */
+};
 
 /* Control ids returned by browser_ui_hit_test. */
 enum {
@@ -145,35 +211,61 @@ enum {
     ID_FILTER = 83,
     ID_FILTER_ITEM = 84, /* 84 .. 87 */
     ID_FILTER_AREA = 88, /* hit test only: resolved with the model */
+    ID_CRUMB_AREA = 89,  /* hit test only: resolved with the model */
+    ID_CRUMB = 90,       /* 90 .. 90+CRUMB_MAX-1, chips from the left */
     ID_KEY = 100,        /* 100 .. 143: keyboard_keys row by row */
-    ID_KEY_SPACE = 144,
-    ID_KEY_BACKSPACE = 145,
-    ID_KEY_CANCEL = 146,
-    ID_KEY_SEARCH = 147,
-    ID_KEYBOARD_AREA = 148, /* hit test only: resolved with the model */
+    ID_KEY_SHIFT = 144,
+    ID_KEY_LAYER = 145,
+    ID_KEY_SPACE = 146,
+    ID_KEY_BACKSPACE = 147,
+    ID_KEY_CANCEL = 148,
+    ID_KEY_ENTER = 149,  /* search, next field or save */
+    ID_KEYBOARD_AREA = 150, /* hit test only: resolved with the model */
 };
 
 /* What the stateless hit test reports (menus are open or not). */
 enum { HIT_MENU = 1, HIT_PROMPT = 2, HIT_FILTER = 4, HIT_KEYBOARD = 8 };
 
-/* Rectangle of keyboard control `id`; false for other ids. */
-static bool key_rect(int id, int *x, int *y, int *width)
+/* The layer the layer key switches to: letters, symbols and, for an
+ * address, the number pad in turn. */
+static int next_layer(const struct browser_ui *ui)
+{
+    if (ui->keyboard_layer == LAYER_LETTERS)
+        return LAYER_SYMBOLS;
+    if (ui->keyboard_layer == LAYER_SYMBOLS &&
+        ui->keyboard_purpose == KEYBOARD_SERVER_URL)
+        return LAYER_NUMBERS;
+    return LAYER_LETTERS;
+}
+
+/* Rectangle of keyboard control `id` on the current layer; false for
+ * other ids. */
+static bool key_rect(const struct browser_ui *ui, int id, int *x, int *y,
+                     int *width)
 {
     *width = KEY_W;
-    if (id >= ID_KEY && id < ID_KEY + KEY_ROWS * KEY_COLUMNS) {
+    if (ui->keyboard_layer == LAYER_NUMBERS) {
+        if (id >= ID_KEY && id < ID_KEY + KEY_ROWS * PAD_COLUMNS) {
+            int index = id - ID_KEY;
+            *width = PAD_KEY_W;
+            *x = KB_X + 26 + (index % PAD_COLUMNS) * (PAD_KEY_W + KEY_GAP);
+            *y = KEY_TOP + (index / PAD_COLUMNS) * (KEY_H + KEY_GAP);
+            return true;
+        }
+    } else if (id >= ID_KEY && id < ID_KEY + KEY_ROWS * KEY_COLUMNS) {
         int index = id - ID_KEY;
         *x = KB_X + 26 + (index % KEY_COLUMNS) * (KEY_W + KEY_GAP);
         *y = KEY_TOP + (index / KEY_COLUMNS) * (KEY_H + KEY_GAP);
         return true;
     }
-    static const int widths[4] = {438, 200, 200, 200};
-    if (id < ID_KEY_SPACE || id > ID_KEY_SEARCH)
+    static const int widths[6] = {120, 120, 268, 170, 170, 170};
+    if (id < ID_KEY_SHIFT || id > ID_KEY_ENTER)
         return false;
     *x = KB_X + 26;
-    for (int i = ID_KEY_SPACE; i < id; ++i)
-        *x += widths[i - ID_KEY_SPACE] + KEY_GAP;
+    for (int i = ID_KEY_SHIFT; i < id; ++i)
+        *x += widths[i - ID_KEY_SHIFT] + KEY_GAP;
     *y = KEY_TOP + KEY_ROWS * (KEY_H + KEY_GAP);
-    *width = widths[id - ID_KEY_SPACE];
+    *width = widths[id - ID_KEY_SHIFT];
     return true;
 }
 
@@ -198,7 +290,8 @@ static const char *const local_sort_labels[FILE_BROWSER_SORT_COUNT] = {
 static bool local_location(const struct browser_ui *ui)
 {
     return ui->location[0] && strcmp(ui->location, "root:") != 0 &&
-           strncmp(ui->location, "jf:", 3) != 0;
+           strncmp(ui->location, "jf:", 3) != 0 &&
+           strncmp(ui->location, "webdav:", 7) != 0;
 }
 
 /* Folder listings of a Jellyfin library and local directories can be
@@ -262,6 +355,7 @@ enum {
     RAIL_START,
     RAIL_JELLYFIN,
     RAIL_LOCAL,
+    RAIL_WEBDAV,
     RAIL_SEARCH,
     RAIL_SETTINGS,
     RAIL_COUNT,
@@ -301,6 +395,8 @@ static int rail_active(const struct browser_ui *ui)
         return RAIL_SEARCH;
     if (strncmp(ui->location, "jf:", 3) == 0)
         return RAIL_JELLYFIN;
+    if (strncmp(ui->location, "webdav:", 7) == 0)
+        return RAIL_WEBDAV;
     if (!ui->location[0] || strcmp(ui->location, "root:") == 0)
         return RAIL_START;
     return RAIL_LOCAL;
@@ -405,6 +501,7 @@ static void draw_rail(struct browser_ui *ui, struct ui_canvas *canvas,
         {UI_ICON_HOME, N_("Home")},
         {UI_ICON_SERVER, "Jellyfin"},
         {UI_ICON_DISK, N_("Local files")},
+        {UI_ICON_SERVER, "WebDAV"},
         {UI_ICON_SEARCH, N_("Search")},
         {UI_ICON_SETTINGS, N_("Settings")},
     };
@@ -490,37 +587,102 @@ static void draw_tile(struct browser_ui *ui, struct ui_canvas *canvas,
                          entry->name);
 }
 
-static void draw_breadcrumbs(struct browser_ui *ui, struct ui_canvas *canvas)
+/* A breadcrumb chip: a " / " part of the listing title. */
+struct crumb {
+    const char *text;
+    size_t length;
+    size_t segment; /* index of the part in the title */
+    int x, width;
+    bool last;
+};
+
+/* Lays out the breadcrumb chips; when not all fit, the first ones are
+ * left out (the current folder always shows). Returns the count. */
+static int crumb_layout(struct browser_ui *ui, struct crumb chips[CRUMB_MAX],
+                        size_t *segments)
 {
-    const char *path = ui->listing.path ? ui->listing.path : "";
-    char segment[256];
-    int x = GRID_X;
-    const char *cursor = path;
-    const int limit = filterable(ui) ? FILTER_X - 16 : CENTER_X + CENTER_W - 60;
-    while (*cursor && x < limit - 60) {
+    *segments = 0;
+    if (!ui->font || !ui->bold || !ui->listing.path)
+        return 0;
+    struct crumb all[32];
+    size_t count = 0;
+    for (const char *cursor = ui->listing.path; *cursor && count < 32;) {
         const char *separator = strstr(cursor, " / ");
         size_t length = separator ? (size_t)(separator - cursor)
                                   : strlen(cursor);
-        if (length >= sizeof(segment))
-            length = sizeof(segment) - 1;
-        memcpy(segment, cursor, length);
-        segment[length] = '\0';
         bool last = !separator;
-        int width = ui_text_width(last ? ui->bold : ui->font, 24, segment) +
-                    44;
-        if (width > 420)
-            width = 420;
-        if (x + width > limit)
-            width = limit - x;
-        ui_fill_round_rect(canvas, x, 126, width, 46, 23,
-                           last ? color_accent : color_chip);
-        ui_draw_text(canvas, last ? ui->bold : ui->font, 24, x + width / 2,
-                     134, width - 32, UI_ALIGN_CENTER,
-                     last ? UI_RGBA(255, 255, 255, 255) : color_text, segment);
-        x += width + 10;
+        int width = ui_text_width_n(last ? ui->bold : ui->font, 24, cursor,
+                                    length) + 44;
+        all[count] = (struct crumb){cursor, length, count, 0,
+                                    width > 420 ? 420 : width, last};
+        ++count;
         if (!separator)
             break;
         cursor = separator + 3;
+    }
+    *segments = count;
+    const int limit = filterable(ui) ? FILTER_X - 16 : CENTER_X + CENTER_W - 60;
+    size_t first = count > CRUMB_MAX ? count - CRUMB_MAX : 0;
+    for (;;) {
+        int total = 0;
+        for (size_t i = first; i < count; ++i)
+            total += all[i].width + 10;
+        if (GRID_X + total - 10 <= limit || first + 1 >= count)
+            break;
+        ++first;
+    }
+    int x = GRID_X, shown = 0;
+    for (size_t i = first; i < count; ++i) {
+        chips[shown] = all[i];
+        chips[shown].x = x;
+        if (x + chips[shown].width > limit)
+            chips[shown].width = limit - x;
+        x += chips[shown].width + 10;
+        ++shown;
+    }
+    return shown;
+}
+
+/* Location chip `chip` leads to, or NULL (the current folder, or none
+ * known). */
+static const char *crumb_location(struct browser_ui *ui, int chip)
+{
+    struct crumb chips[CRUMB_MAX];
+    size_t segments;
+    int count = crumb_layout(ui, chips, &segments);
+    if (chip < 0 || chip >= count || chips[chip].last ||
+        segments != ui->listing.crumb_count)
+        return NULL;
+    const char *location = ui->listing.crumbs[chips[chip].segment];
+    return location[0] ? location : NULL;
+}
+
+/* All chips, or with `hover` only that one highlighted. */
+static void draw_breadcrumbs(struct browser_ui *ui, struct ui_canvas *canvas,
+                             int hover)
+{
+    struct crumb chips[CRUMB_MAX];
+    size_t segments;
+    int count = crumb_layout(ui, chips, &segments);
+    for (int i = 0; i < count; ++i) {
+        if (hover >= 0 && hover != ID_CRUMB + i)
+            continue;
+        char segment[256];
+        size_t length = chips[i].length < sizeof(segment)
+                            ? chips[i].length
+                            : sizeof(segment) - 1;
+        memcpy(segment, chips[i].text, length);
+        segment[length] = '\0';
+        bool last = chips[i].last;
+        ui_fill_round_rect(canvas, chips[i].x, CRUMB_Y, chips[i].width,
+                           CRUMB_H, CRUMB_H / 2.0f,
+                           last              ? color_accent
+                           : hover == ID_CRUMB + i ? color_tile_hover
+                                                   : color_chip);
+        ui_draw_text(canvas, last ? ui->bold : ui->font, 24,
+                     chips[i].x + chips[i].width / 2, CRUMB_Y + 8,
+                     chips[i].width - 32, UI_ALIGN_CENTER,
+                     last ? UI_RGBA(255, 255, 255, 255) : color_text, segment);
     }
 }
 
@@ -715,7 +877,7 @@ static void draw_base(struct browser_ui *ui, struct ui_canvas *canvas)
                  current_title(ui));
     draw_sort_chip(ui, canvas, false);
     draw_filter_chip(ui, canvas, false);
-    draw_breadcrumbs(ui, canvas);
+    draw_breadcrumbs(ui, canvas, -1);
     for (int slot = 0; slot < (int)PAGE_ENTRIES; ++slot)
         draw_tile(ui, canvas, slot, false);
     if (!ui->grid_count && ui->listing.path)
@@ -731,18 +893,6 @@ static void draw_base(struct browser_ui *ui, struct ui_canvas *canvas)
         ui_draw_icon(canvas, UI_ICON_INFO, GRID_X + 32, 882, 32, color_text);
         ui_draw_text(canvas, ui->font, 26, GRID_X + 62, 866, CENTER_W - 140,
                      UI_ALIGN_LEFT, color_text, message);
-    }
-    if (page_count(ui) > 1) {
-        int track = (int)GRID_ROWS * (TILE_H + TILE_GAP_Y) - TILE_GAP_Y;
-        int height = track / (int)page_count(ui);
-        if (height < 40)
-            height = 40;
-        int top = GRID_Y + (int)((size_t)(track - height) * ui->page /
-                                 (page_count(ui) - 1));
-        ui_fill_round_rect(canvas, CENTER_X + CENTER_W - 20, GRID_Y, 6,
-                           track, 3, color_chip);
-        ui_fill_round_rect(canvas, CENTER_X + CENTER_W - 20, top, 6, height,
-                           3, color_dim);
     }
     draw_pager(ui, canvas, -1);
 }
@@ -811,7 +961,10 @@ static void draw_detail(struct browser_ui *ui, struct ui_canvas *canvas)
         {tr("Stopped"), format_duration(entry->resume_us, resume)},
         {tr("Watched"), entry->played ? tr("Yes") : ""},
         {tr("Year"), year},
-        {tr("Source"), jellyfin ? "Jellyfin" : tr("Local")},
+        {tr("Source"),
+         jellyfin                                     ? "Jellyfin"
+         : strncmp(entry->path, "webdav:", 7) == 0 ? "WebDAV"
+                                                      : tr("Local")},
         {tr("Format"), extension_badge(entry, badge)},
         {"Codec", entry->codec},
         {tr("Size"), size},
@@ -833,44 +986,119 @@ static void draw_detail(struct browser_ui *ui, struct ui_canvas *canvas)
                              tr("Pull the trigger to play"));
 }
 
+/* The text the keyboard edits and its capacity. */
+static char *keyboard_text(struct browser_ui *ui, size_t *size)
+{
+    switch (ui->keyboard_purpose) {
+    case KEYBOARD_SERVER_URL:
+        *size = sizeof(ui->server_url);
+        return ui->server_url;
+    case KEYBOARD_SERVER_USER:
+        *size = sizeof(ui->server_user);
+        return ui->server_user;
+    case KEYBOARD_SERVER_PASSWORD:
+        *size = sizeof(ui->server_password);
+        return ui->server_password;
+    default:
+        *size = sizeof(ui->query);
+        return ui->query;
+    }
+}
+
 static void draw_keyboard(struct browser_ui *ui, struct ui_canvas *canvas,
                           int hover)
 {
     ui_fill_round_rect(canvas, CENTER_X, CARD_Y, CENTER_W, CARD_H, 28,
                        UI_RGBA(0, 0, 0, 150));
+    bool search = ui->keyboard_purpose == KEYBOARD_SEARCH;
+    if (!search) {
+        static const char *const steps[2][3] = {
+            {N_("Add a WebDAV server · 1/3 address"),
+             N_("Add a WebDAV server · 2/3 user name"),
+             N_("Add a WebDAV server · 3/3 password")},
+            {N_("Change the WebDAV server · 1/3 address"),
+             N_("Change the WebDAV server · 2/3 user name"),
+             N_("Change the WebDAV server · 3/3 password")},
+        };
+        /* On its own plate: the header below is only dimmed. */
+        ui_fill_round_rect(canvas, KB_X, KB_Y - 92, KB_W, 76, 22,
+                           UI_RGBA(30, 32, 39, 255));
+        ui_stroke_round_rect(canvas, KB_X, KB_Y - 92, KB_W, 76, 22, 2,
+                             color_border);
+        ui_draw_text(canvas, ui->bold, 34, CENTER_X + CENTER_W / 2,
+                     KB_Y - 76, KB_W - 64, UI_ALIGN_CENTER, color_text,
+                     tr(steps[ui->server_edit >= 0]
+                             [ui->keyboard_purpose - KEYBOARD_SERVER_URL]));
+    }
     ui_shadow_round_rect(canvas, KB_X, KB_Y + 8, KB_W, KB_H, 26, 28,
                          color_shadow);
     ui_fill_round_rect(canvas, KB_X, KB_Y, KB_W, KB_H, 26,
                        UI_RGBA(30, 32, 39, 255));
     ui_stroke_round_rect(canvas, KB_X, KB_Y, KB_W, KB_H, 26, 2,
                          color_border);
-    /* Text field with the query (or a placeholder) and a caret. */
+    /* Text field with the text (or a placeholder) and a caret; a long
+     * address shows its end, a password only dots. */
     ui_fill_round_rect(canvas, KB_X + 26, KB_Y + 24, KB_W - 52, 72, 20,
                        color_tile);
-    ui_draw_icon(canvas, UI_ICON_SEARCH, KB_X + 66, KB_Y + 60, 34,
-                 color_dim);
-    char shown[80];
-    snprintf(shown, sizeof(shown), "%s|", ui->query);
-    ui_draw_text(canvas, ui->font, 32, KB_X + 100, KB_Y + 40, KB_W - 160,
-                 UI_ALIGN_LEFT, ui->query[0] ? color_text : color_dim,
-                 ui->query[0] ? shown : tr("Search Jellyfin for a title …"));
-    for (int id = ID_KEY; id <= ID_KEY_SEARCH; ++id) {
+    ui_draw_icon(canvas, search ? UI_ICON_SEARCH : UI_ICON_SERVER, KB_X + 66,
+                 KB_Y + 60, 34, color_dim);
+    size_t size;
+    const char *text = keyboard_text(ui, &size);
+    char shown[1024];
+    if (ui->keyboard_purpose == KEYBOARD_SERVER_PASSWORD) {
+        size_t used = 0;
+        for (const char *c = text; *c && used + 4 < sizeof(shown); ++c)
+            if ((*c & 0xC0) != 0x80) {
+                memcpy(shown + used, "\xe2\x80\xa2", 3); /* bullet */
+                used += 3;
+            }
+        memcpy(shown + used, "|", 2);
+    } else {
+        snprintf(shown, sizeof(shown), "%s|", text);
+    }
+    const int field_width = KB_W - 160;
+    const char *visible = shown;
+    while (*visible && ui_text_width(ui->font, 32, visible) > field_width) {
+        ++visible;
+        while ((*visible & 0xC0) == 0x80)
+            ++visible;
+    }
+    static const char *const placeholders[] = {
+        N_("Search Jellyfin for a title …"),
+        N_("Address, e.g. http://host:8080/videos"),
+        N_("User name (empty without a login)"),
+        N_("Password"),
+    };
+    ui_draw_text(canvas, ui->font, 32, KB_X + 100, KB_Y + 40, field_width,
+                 UI_ALIGN_LEFT, text[0] ? color_text : color_dim,
+                 text[0] ? visible : tr(placeholders[ui->keyboard_purpose]));
+    for (int id = ID_KEY; id <= ID_KEY_ENTER; ++id) {
         int x, y, width;
-        if (!key_rect(id, &x, &y, &width))
+        if (!key_rect(ui, id, &x, &y, &width))
             continue;
         bool focused = hover == id;
-        bool primary = id == ID_KEY_SEARCH;
+        bool primary = id == ID_KEY_ENTER;
+        bool toggled = id == ID_KEY_SHIFT && ui->keyboard_shift;
         ui_fill_round_rect(canvas, x, y, width, KEY_H, 14,
                            primary ? (focused ? UI_RGBA(90, 180, 255, 255)
                                               : color_accent)
                            : focused ? color_tile_hover
+                           : toggled ? color_accent_soft
                                      : color_chip);
-        char key[8];
-        const char *label = id < ID_KEY_SPACE ? keyboard_key(id - ID_KEY, key)
-                            : id == ID_KEY_SPACE     ? tr("Space")
-                            : id == ID_KEY_BACKSPACE ? tr("Delete")
-                            : id == ID_KEY_CANCEL    ? tr("Cancel")
-                                                     : tr("Search");
+        char key[16];
+        const char *enter = search ? tr("Search")
+                            : ui->keyboard_purpose == KEYBOARD_SERVER_PASSWORD
+                                ? tr("Save")
+                                : tr("Continue");
+        static const char *const layer_labels[] = {"abc", "#+=", "123"};
+        const char *label =
+            id < ID_KEY_SHIFT        ? keyboard_key(ui, id - ID_KEY, key)
+            : id == ID_KEY_SHIFT     ? "Aa"
+            : id == ID_KEY_LAYER     ? layer_labels[next_layer(ui)]
+            : id == ID_KEY_SPACE     ? tr("Space")
+            : id == ID_KEY_BACKSPACE ? tr("Delete")
+            : id == ID_KEY_CANCEL    ? tr("Cancel")
+                                     : enter;
         ui_draw_text(canvas, id < ID_KEY_SPACE ? ui->bold : ui->font, 28,
                      x + width / 2, y + 14, width - 12, UI_ALIGN_CENTER,
                      color_text, label);
@@ -890,22 +1118,35 @@ static void draw_resume_prompt(struct browser_ui *ui,
                        UI_RGBA(30, 32, 39, 255));
     ui_stroke_round_rect(canvas, PROMPT_X, PROMPT_Y, PROMPT_W, PROMPT_H, 26,
                          2, color_border);
+    bool resume = ui->prompt_kind == PROMPT_RESUME;
     ui_draw_text(canvas, ui->bold, 34, PROMPT_X + PROMPT_W / 2,
                  PROMPT_Y + 34, PROMPT_W - 64, UI_ALIGN_CENTER, color_text,
-                 entry->name);
+                 resume ? entry->name : current_title(ui));
     char position[16], text[64];
     format_duration(entry->resume_us, position);
     ui_draw_text(canvas, ui->font, 26, PROMPT_X + PROMPT_W / 2,
                  PROMPT_Y + 96, PROMPT_W - 64, UI_ALIGN_CENTER, color_dim,
-                 tr("Stopped last time – where to continue?"));
-    snprintf(text, sizeof(text), tr("From %s"), position);
+                 resume ? tr("Stopped last time – where to continue?")
+                 : ui->prompt_kind == PROMPT_REMOVE_SERVER
+                     ? tr("Remove this server from the list?")
+                 : ui->prompt_kind == PROMPT_LOGIN
+                     ? tr("The server refused the sign-in. Enter it again?")
+                     : tr("The server cannot be reached. Check the address?"));
+    if (resume)
+        snprintf(text, sizeof(text), tr("From %s"), position);
+    else
+        snprintf(text, sizeof(text), "%s",
+                 ui->prompt_kind == PROMPT_REMOVE_SERVER ? tr("Remove")
+                 : ui->prompt_kind == PROMPT_LOGIN       ? tr("Enter again")
+                                                   : tr("Change address"));
     const struct {
         int id, x;
         const char *label;
         bool primary;
     } buttons[] = {
         {ID_RESUME, PROMPT_RESUME_X, text, true},
-        {ID_RESTART, PROMPT_RESTART_X, tr("From the start"), false},
+        {ID_RESTART, PROMPT_RESTART_X,
+         resume ? tr("From the start") : tr("Cancel"), false},
     };
     for (size_t i = 0; i < 2; ++i) {
         bool focused = hover == buttons[i].id;
@@ -966,6 +1207,8 @@ void browser_ui_render(struct browser_ui *ui, uint32_t *pixels, bool bgra)
         draw_tile(ui, &canvas, hover - ID_TILE, true);
     else if (hover == ID_BACK)
         draw_back_button(ui, &canvas, true);
+    else if (hover >= ID_CRUMB && hover < ID_CRUMB + CRUMB_MAX)
+        draw_breadcrumbs(ui, &canvas, hover);
     else if ((hover >= ID_RAIL && hover < ID_RAIL + RAIL_COUNT) ||
              hover == ID_EXIT)
         draw_rail(ui, &canvas, hover);
@@ -1011,6 +1254,9 @@ static int hit_test(int x, int y, int layers)
     if ((layers & HIT_MENU) && x >= MENU_X && x < MENU_X + MENU_W &&
         y >= MENU_Y && y < MENU_Y + MENU_H)
         return ID_SORT_AREA;
+    if (y >= CRUMB_Y && y < CRUMB_Y + CRUMB_H && x >= GRID_X &&
+        x < CENTER_X + CENTER_W - 60)
+        return ID_CRUMB_AREA;
     for (int slot = 0; slot < (int)PAGE_ENTRIES; ++slot) {
         int tx, ty;
         tile_rect(slot, &tx, &ty);
@@ -1067,10 +1313,10 @@ void browser_ui_set_pointer(struct browser_ui *ui, bool visible, int x, int y,
     if (ui->keyboard_open) {
         /* Modal: keys only; a click elsewhere closes the keyboard. */
         int key = -1;
-        for (int id = ID_KEY; hover == ID_KEYBOARD_AREA && id <= ID_KEY_SEARCH;
+        for (int id = ID_KEY; hover == ID_KEYBOARD_AREA && id <= ID_KEY_ENTER;
              ++id) {
             int kx, ky, width;
-            if (key_rect(id, &kx, &ky, &width) && x >= kx &&
+            if (key_rect(ui, id, &kx, &ky, &width) && x >= kx &&
                 x < kx + width && y >= ky && y < ky + KEY_H)
                 key = id;
         }
@@ -1123,8 +1369,8 @@ void browser_ui_set_pointer(struct browser_ui *ui, bool visible, int x, int y,
     if (ui->filter_menu_open && hover != ID_FILTER &&
         (hover < ID_FILTER_ITEM || hover >= ID_FILTER_ITEM + 4))
         hover = -1; /* clicks outside the menu only close it */
-    if (hover == ID_FILTER && !filterable(ui))
-        hover = -1;
+    if (hover == ID_FILTER && !filterable(ui)) /* no chip: breadcrumbs */
+        hover = y >= CRUMB_Y && y < CRUMB_Y + CRUMB_H ? ID_CRUMB_AREA : -1;
     if (hover == ID_SORT_AREA) {
         /* The menu hides everything below it while open; closed, the area
          * is just grid. */
@@ -1144,6 +1390,17 @@ void browser_ui_set_pointer(struct browser_ui *ui, bool visible, int x, int y,
         hover = -1;
     if (hover == ID_PAGE_AREA)
         hover = resolve_page_button(ui, x);
+    if (hover == ID_CRUMB_AREA) {
+        /* Only chips that lead somewhere react. */
+        struct crumb chips[CRUMB_MAX];
+        size_t segments;
+        int count = crumb_layout(ui, chips, &segments);
+        hover = -1;
+        for (int i = 0; i < count; ++i)
+            if (x >= chips[i].x && x < chips[i].x + chips[i].width &&
+                crumb_location(ui, i))
+                hover = ID_CRUMB + i;
+    }
     if ((hover == ID_PREVIOUS || hover == ID_NEXT) && page_count(ui) <= 1)
         hover = -1;
     if (hover == ID_BACK && ui->parent < 0)
@@ -1203,21 +1460,32 @@ static void request_streams(struct browser_ui *ui)
         ui->streams_requested[indices[i]] = true;
 }
 
+/* Memory for the loaded thumbnails of a listing (a tile is at most
+ * THUMBNAIL_WIDTH wide and about 260 kB): pages around the current one
+ * stay loaded within it, i.e. a usual folder entirely. Others come back
+ * from the disk cache. */
+#define THUMBNAIL_MEMORY (500U * 1024U * 1024U)
+#define KEPT_PAGES (THUMBNAIL_MEMORY / (2U * PAGE_ENTRIES * 260U * 1024U))
+
 /* Loads the thumbnails of the current and the next page and releases those
- * more than one page away, so memory stays bounded for long listings. */
+ * more than KEPT_PAGES away, so memory stays bounded for long listings.
+ * Requests not started yet are dropped first: pages flipped past would
+ * otherwise be made before the one shown. */
 static void request_thumbnails(struct browser_ui *ui)
 {
     request_streams(ui);
     if (!ui->thumbs || !ui->thumb_requested)
         return;
+    thumbnail_loader_cancel(ui->loader);
     for (size_t position = 0; position < ui->grid_count; ++position) {
         size_t page = position / PAGE_ENTRIES;
         size_t index = ui->grid[position];
-        if (page + 1 < ui->page || page > ui->page + 1) {
+        if (page + KEPT_PAGES < ui->page || page > ui->page + KEPT_PAGES) {
             ui_image_free(ui->thumbs[index]);
             ui->thumbs[index] = NULL;
-            ui->thumb_requested[index] = false;
         }
+        if (!ui->thumbs[index])
+            ui->thumb_requested[index] = false;
     }
     for (size_t page = ui->page; page <= ui->page + 1; ++page)
         for (size_t slot = 0; slot < PAGE_ENTRIES; ++slot) {
@@ -1297,54 +1565,178 @@ static void set_page(struct browser_ui *ui, size_t page)
     ui->dirty = true;
 }
 
+/* The server form keeps no password once the keyboard is closed. */
+static void forget_server_form(struct browser_ui *ui)
+{
+    memset(ui->server_url, 0, sizeof(ui->server_url));
+    memset(ui->server_user, 0, sizeof(ui->server_user));
+    memset(ui->server_password, 0, sizeof(ui->server_password));
+    ui->server_edit = -1;
+}
+
+static void open_keyboard(struct browser_ui *ui, int purpose)
+{
+    ui->keyboard_open = true;
+    ui->keyboard_purpose = purpose;
+    ui->keyboard_shift = false;
+    ui->keyboard_layer =
+        purpose == KEYBOARD_SERVER_URL ? LAYER_NUMBERS : LAYER_LETTERS;
+    ui->sort_menu_open = ui->filter_menu_open = false;
+    ui->hover = -1;
+    ui->dirty = true;
+}
+
+static void close_keyboard(struct browser_ui *ui)
+{
+    ui->keyboard_open = false;
+    ui->keyboard_purpose = KEYBOARD_SEARCH;
+    forget_server_form(ui);
+    ui->hover = -1;
+    ui->dirty = true;
+}
+
 void browser_ui_close_menus(struct browser_ui *ui)
 {
+    if (ui->keyboard_open)
+        close_keyboard(ui);
     if (ui->sort_menu_open || ui->filter_menu_open ||
-        ui->resume_prompt >= 0 || ui->keyboard_open) {
+        ui->resume_prompt >= 0) {
         ui->sort_menu_open = false;
         ui->filter_menu_open = false;
-        ui->keyboard_open = false;
         ui->resume_prompt = -1;
         ui->dirty = true;
     }
 }
 
-/* A key of the search keyboard (or a click outside it, which closes it). */
-static void type_key(struct browser_ui *ui, int hover)
+/* "Search", "Continue" or "Save" on the keyboard. */
+static void keyboard_enter(struct browser_ui *ui)
 {
-    size_t length = strlen(ui->query);
-    ui->dirty = true;
-    if (hover >= ID_KEY && hover < ID_KEY + KEY_ROWS * KEY_COLUMNS) {
-        char key[8];
-        keyboard_key(hover - ID_KEY, key);
-        if (length + strlen(key) < sizeof(ui->query))
-            memcpy(ui->query + length, key, strlen(key) + 1);
-    } else if (hover == ID_KEY_SPACE) {
-        if (length && ui->query[length - 1] != ' ' &&
-            length + 1 < sizeof(ui->query))
-            memcpy(ui->query + length, " ", 2);
-    } else if (hover == ID_KEY_BACKSPACE) {
-        /* Drop one UTF-8 character (continuation bytes are 10xxxxxx). */
-        while (length && (ui->query[length - 1] & 0xC0) == 0x80)
-            --length;
-        if (length)
-            --length;
-        ui->query[length] = '\0';
-    } else if (hover == ID_KEY_SEARCH) {
+    switch (ui->keyboard_purpose) {
+    case KEYBOARD_SEARCH: {
+        size_t length = strlen(ui->query);
         while (length && ui->query[length - 1] == ' ')
             ui->query[--length] = '\0';
         if (!length)
             return;
         char location[96];
         snprintf(location, sizeof(location), "jf:search:%s", ui->query);
-        ui->keyboard_open = false;
-        ui->hover = -1;
+        close_keyboard(ui);
         ui->restore_page = 0;
         request(ui, location);
-    } else if (hover != ID_KEYBOARD_AREA) {
-        ui->keyboard_open = false; /* "Cancel" or a click outside */
-        ui->hover = -1;
+        return;
     }
+    case KEYBOARD_SERVER_URL:
+        if (ui->server_url[0])
+            open_keyboard(ui, KEYBOARD_SERVER_USER);
+        return;
+    case KEYBOARD_SERVER_USER:
+        if (ui->server_user[0]) {
+            open_keyboard(ui, KEYBOARD_SERVER_PASSWORD);
+            return;
+        }
+        break; /* no login: save right away */
+    default:
+        break;
+    }
+    struct wd_server server = {0};
+    snprintf(server.url, sizeof(server.url), "%s", ui->server_url);
+    snprintf(server.user, sizeof(server.user), "%s", ui->server_user);
+    if (server.user[0])
+        snprintf(server.pass, sizeof(server.pass), "%s",
+                 ui->server_password);
+    char error[256] = "";
+    int edited = ui->server_edit;
+    int result = wd_server_save(edited, &server, error, sizeof(error));
+    close_keyboard(ui);
+    snprintf(ui->status_message, sizeof(ui->status_message), "%s",
+             result < 0 ? error : "");
+    /* A changed server opens again right away, to show the login works. */
+    char location[700] = "webdav:";
+    if (result == 0 && edited >= 0 && wd_server_get(edited, &server) == 0) {
+        char base[640];
+        wd_base_path(&server, base, sizeof(base));
+        snprintf(location, sizeof(location), "webdav:%d:%s", edited, base);
+    }
+    memset(&server, 0, sizeof(server));
+    ui->restore_page = 0;
+    request(ui, location);
+}
+
+/* A key of the keyboard (or a click outside it, which closes it). */
+static void type_key(struct browser_ui *ui, int hover)
+{
+    size_t size;
+    char *text = keyboard_text(ui, &size);
+    size_t length = strlen(text);
+    ui->dirty = true;
+    int kx, ky, width;
+    if (hover >= ID_KEY && hover < ID_KEY_SHIFT &&
+        key_rect(ui, hover, &kx, &ky, &width)) {
+        char key[16];
+        keyboard_key(ui, hover - ID_KEY, key);
+        if (length + strlen(key) < size)
+            memcpy(text + length, key, strlen(key) + 1);
+    } else if (hover == ID_KEY_SHIFT) {
+        ui->keyboard_shift = !ui->keyboard_shift;
+    } else if (hover == ID_KEY_LAYER) {
+        ui->keyboard_layer = next_layer(ui);
+    } else if (hover == ID_KEY_SPACE) {
+        /* The search skips leading and double spaces; a password keeps
+         * every one. */
+        bool search = ui->keyboard_purpose == KEYBOARD_SEARCH;
+        if ((!search || (length && text[length - 1] != ' ')) &&
+            length + 1 < size)
+            memcpy(text + length, " ", 2);
+    } else if (hover == ID_KEY_BACKSPACE) {
+        /* Drop one UTF-8 character (continuation bytes are 10xxxxxx). */
+        while (length && (text[length - 1] & 0xC0) == 0x80)
+            --length;
+        if (length)
+            --length;
+        text[length] = '\0';
+    } else if (hover == ID_KEY_ENTER) {
+        keyboard_enter(ui);
+    } else if (hover != ID_KEYBOARD_AREA) {
+        close_keyboard(ui); /* "Cancel" or a click outside */
+    }
+}
+
+static void open_prompt(struct browser_ui *ui, int index, int kind)
+{
+    ui->resume_prompt = index;
+    ui->prompt_kind = kind;
+    ui->hover = -1;
+    ui->dirty = true;
+}
+
+/* "webdav:edit:N" or "webdav:remove:N": change the server's settings
+ * (PROMPT_RESUME, i.e. no question asked, or PROMPT_ADDRESS), enter its
+ * login again or remove it. */
+static void server_action(struct browser_ui *ui, const char *path, int kind)
+{
+    int index = atoi(strrchr(path, ':') + 1);
+    struct wd_server server;
+    char error[256] = "";
+    if (kind == PROMPT_REMOVE_SERVER) {
+        wd_server_remove(index, error, sizeof(error));
+        snprintf(ui->status_message, sizeof(ui->status_message), "%s", error);
+        ui->restore_page = 0;
+        request(ui, "webdav:");
+        return;
+    }
+    if (wd_server_get(index, &server) < 0)
+        return;
+    forget_server_form(ui);
+    ui->server_edit = index;
+    snprintf(ui->server_url, sizeof(ui->server_url), "%s", server.url);
+    snprintf(ui->server_user, sizeof(ui->server_user), "%s", server.user);
+    if (kind != PROMPT_LOGIN)
+        snprintf(ui->server_password, sizeof(ui->server_password), "%s",
+                 server.pass);
+    memset(&server, 0, sizeof(server));
+    /* A refused login starts at the user name, the address is right. */
+    open_keyboard(ui, kind == PROMPT_LOGIN ? KEYBOARD_SERVER_USER
+                                           : KEYBOARD_SERVER_URL);
 }
 
 static enum browser_ui_action select_title(struct browser_ui *ui, int index,
@@ -1387,6 +1779,12 @@ enum browser_ui_action browser_ui_activate(struct browser_ui *ui, char *path,
         if ((size_t)index >= ui->listing.entry_count ||
             (hover != ID_RESUME && hover != ID_RESTART))
             return BROWSER_UI_NONE;
+        if (ui->prompt_kind != PROMPT_RESUME) {
+            if (hover == ID_RESUME)
+                server_action(ui, ui->listing.entries[index].path,
+                              ui->prompt_kind);
+            return BROWSER_UI_NONE;
+        }
         return select_title(ui, index,
                             hover == ID_RESUME
                                 ? ui->listing.entries[index].resume_us
@@ -1443,16 +1841,33 @@ enum browser_ui_action browser_ui_activate(struct browser_ui *ui, char *path,
         const struct file_browser_entry *entry = &ui->listing.entries[index];
         if (entry->kind == FILE_BROWSER_MEDIA) {
             if (entry->resume_us >= RESUME_MINIMUM_US) {
-                ui->resume_prompt = index;
-                ui->hover = -1;
-                ui->dirty = true;
+                open_prompt(ui, index, PROMPT_RESUME);
                 return BROWSER_UI_NONE;
             }
             return select_title(ui, index, 0, path, path_size);
         }
+        if (strcmp(entry->path, "webdav:add") == 0) {
+            forget_server_form(ui);
+            open_keyboard(ui, KEYBOARD_SERVER_URL);
+            return BROWSER_UI_NONE;
+        }
+        if (strncmp(entry->path, "webdav:edit:", 12) == 0) {
+            server_action(ui, entry->path, PROMPT_RESUME);
+            return BROWSER_UI_NONE;
+        }
+        if (strncmp(entry->path, "webdav:remove:", 14) == 0) {
+            open_prompt(ui, index, PROMPT_REMOVE_SERVER);
+            return BROWSER_UI_NONE;
+        }
         request(ui, entry->path);
     } else if (hover == ID_BACK && ui->parent >= 0) {
         request(ui, ui->listing.entries[ui->parent].path);
+    } else if (hover >= ID_CRUMB && hover < ID_CRUMB + CRUMB_MAX) {
+        const char *location = crumb_location(ui, hover - ID_CRUMB);
+        if (location) {
+            ui->restore_page = 0;
+            request(ui, location);
+        }
     } else if (hover == ID_PREVIOUS) {
         if (ui->page > 0)
             set_page(ui, ui->page - 1);
@@ -1468,10 +1883,9 @@ enum browser_ui_action browser_ui_activate(struct browser_ui *ui, char *path,
     } else if (hover == ID_RAIL + RAIL_JELLYFIN) {
         request(ui, "jf:");
     } else if (hover == ID_RAIL + RAIL_SEARCH) {
-        ui->keyboard_open = true;
-        ui->sort_menu_open = ui->filter_menu_open = false;
-        ui->hover = -1;
-        ui->dirty = true;
+        open_keyboard(ui, KEYBOARD_SEARCH);
+    } else if (hover == ID_RAIL + RAIL_WEBDAV) {
+        request(ui, "webdav:");
     } else if (hover == ID_RAIL + RAIL_LOCAL) {
         const char *home = getenv("HOME");
         request(ui, home && home[0] ? home : "/");
@@ -1556,6 +1970,18 @@ static void install_listing(struct browser_ui *ui,
     ui->content_dirty = true;
     ui->dirty = true;
     request_thumbnails(ui);
+    /* A refused WebDAV login or an unreachable server asks right away to
+     * enter the login or the address again. */
+    bool ask = ui->listing.login_rejected || ui->listing.unreachable;
+    for (size_t i = 0; ask && !ui->keyboard_open &&
+                       i < ui->listing.entry_count;
+         ++i)
+        if (strncmp(ui->listing.entries[i].path, "webdav:edit:", 12) == 0) {
+            open_prompt(ui, (int)i,
+                        ui->listing.login_rejected ? PROMPT_LOGIN
+                                                   : PROMPT_ADDRESS);
+            break;
+        }
 }
 
 void browser_ui_set_thumbnail(struct browser_ui *ui, size_t index,
@@ -1629,6 +2055,7 @@ int browser_ui_open(struct browser_ui *ui, const char *location,
     ui->hover = -1;
     ui->detail = -1;
     ui->resume_prompt = -1;
+    ui->server_edit = -1;
     ui->parent = -1;
     ui->dirty = true;
     ui->content_dirty = true;

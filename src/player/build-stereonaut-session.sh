@@ -31,6 +31,7 @@ cc -std=c11 -O2 -Wall -Wextra -Werror \
   "$script_dir/audio-output.c" \
   "$script_dir/media-demux.c" \
   "$script_dir/jellyfin.c" \
+  "$script_dir/webdav.c" \
   "$script_dir/playback-report.c" \
   "$script_dir/title-settings.c" \
   "$script_dir/format-detect.c" \
@@ -55,8 +56,10 @@ cc -std=c11 -O2 -Wall -Wextra -Werror \
   "$script_dir/ui-control.c" "$script_dir/render-pipeline.c" \
   "$script_dir/browser-ui.c" \
   "$script_dir/player-ui.c" "$script_dir/ui-draw.c" "$script_dir/ui-layout.c" \
-  "$script_dir/thumbnails.c" \
+  "$script_dir/thumbnails.c" "$script_dir/eye-view.c" \
+  "$script_dir/format-detect.c" \
   "$script_dir/file-browser.c" "$script_dir/jellyfin.c" \
+  "$script_dir/webdav.c" \
   "$script_dir/trickplay.c" "$script_dir/settings.c" \
   "$script_dir/title-settings.c" "$script_dir/local-thumbnail.c" \
   "$script_dir/controller-bindings.c" "$script_dir/render-models.c" \

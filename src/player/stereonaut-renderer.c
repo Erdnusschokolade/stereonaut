@@ -3,6 +3,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "renderer.h"
+#include "thumbnails.h"
 
 static uint64_t parse_u64(const char *text, const char *name)
 {
@@ -129,6 +130,7 @@ static void begin_playback(struct app *app, int fd, const char *location)
 {
     if (app->playing)
         end_playback(app);
+    thumbnail_loader_cancel(app->browser.loader);
     snprintf(app->location, sizeof(app->location), "%s", location);
     app->link.title_finished = false;
     app->last_input_time = monotonic_seconds();

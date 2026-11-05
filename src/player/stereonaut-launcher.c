@@ -235,6 +235,14 @@ static void selected_parent(const char *path, char *directory, size_t size)
     }
     snprintf(directory, size, "%s", path);
     char *slash = strrchr(directory, '/');
+    if (strncmp(path, "webdav:", 7) == 0) {
+        /* webdav:N:/folder/title -> webdav:N:/folder/ */
+        if (slash)
+            slash[1] = '\0';
+        else
+            snprintf(directory, size, "webdav:");
+        return;
+    }
     if (!slash || slash == directory)
         snprintf(directory, size, "/");
     else
@@ -409,6 +417,10 @@ int main(int argc, char **argv)
                 snprintf(browser_message, sizeof(browser_message), "%s",
                          N_("Another program is using the video decoder "
                             "(e.g. a video in Steam)"));
+            else if (exit_code == EXIT_SOURCE_FAILED &&
+                     strncmp(result.path, "webdav:", 7) == 0)
+                snprintf(browser_message, sizeof(browser_message), "%s",
+                         N_("Cannot reach the WebDAV server or the network"));
             else if (exit_code == EXIT_SOURCE_FAILED)
                 snprintf(browser_message, sizeof(browser_message), "%s",
                          N_("Cannot reach Jellyfin or the network"));

@@ -44,8 +44,20 @@ struct browser_ui {
     bool local_sort_descending;
     bool sort_menu_open;
     bool filter_menu_open;
-    bool keyboard_open;   /* on-screen keyboard of the search */
+    bool keyboard_open;   /* on-screen keyboard */
+    int keyboard_purpose; /* what it edits: the search or a server field */
+    bool keyboard_shift;  /* capitals */
+    int keyboard_layer;   /* letters, symbols or (addresses) a number pad */
     char query[64];       /* search text (UTF-8) */
+    /* WebDAV server being added (server_edit -1) or changed, field by
+     * field on the keyboard. */
+    int server_edit;
+    char server_url[512];
+    char server_user[128];
+    char server_password[256];
+    /* What resume_prompt asks about its entry: resume the title, or for a
+     * WebDAV server's settings entry remove it / enter the login again. */
+    int prompt_kind;
     size_t page;
     size_t selected_page; /* page of the last started title */
     char selected_title[256]; /* name of the last started title */

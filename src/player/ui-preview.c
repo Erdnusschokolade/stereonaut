@@ -284,7 +284,15 @@ int main(int argc, char **argv)
     browser_ui_open(&ui, location ? location : "jf:view:x", NULL, error,
                     sizeof(error));
     struct file_browser_listing listing = {.generation = 1};
-    listing.path = strdup("Jellyfin / VR Films");
+    const char *title = getenv("STEREONAUT_PREVIEW_PATH");
+    listing.path = strdup(title ? title : "Jellyfin / VR Films");
+    /* Every breadcrumb but the last leads somewhere. */
+    listing.crumb_count = 1;
+    for (const char *c = listing.path; (c = strstr(c, " / ")); c += 3)
+        ++listing.crumb_count;
+    listing.crumbs = calloc(listing.crumb_count, sizeof(*listing.crumbs));
+    for (size_t i = 0; i < listing.crumb_count; ++i)
+        listing.crumbs[i] = strdup("jf:");
     add(&listing, FILE_BROWSER_PARENT, "..", "jf:");
     const char *names[] = {
         "Above the Clouds – Alpine Flight 8K", "Autumn Forest in the Fog",
@@ -343,18 +351,41 @@ int main(int argc, char **argv)
         ui.sort = 4;
         ui.sort_descending = true;
     }
-    if (hover == 150) { /* search keyboard, key "g" focused */
+    if (hover >= 150 && hover <= 152) { /* keyboard, key "g" focused */
         ui.keyboard_open = true;
         snprintf(ui.query, sizeof(ui.query), "northern li");
+        if (hover == 151) { /* WebDAV address on the number pad */
+            ui.keyboard_purpose = 1;
+            ui.keyboard_layer = 2; /* number pad */
+            snprintf(ui.server_url, sizeof(ui.server_url),
+                     "http://host:8080/videos/a/very/long/path/to/the/"
+                     "collection");
+        } else if (hover == 152) { /* WebDAV password with shift */
+            ui.keyboard_purpose = 3;
+            ui.keyboard_shift = true;
+            snprintf(ui.server_password, sizeof(ui.server_password),
+                     "secret 123");
+        }
         px = 464 + 26 + 4 * 98 + 40;
         py = 180 + 120 + 2 * 76 + 30;
-        hover = 148;
+        hover = 150;
     }
     if (hover >= 84 && hover <= 87) { /* filter menu, item focused */
         ui.filter_menu_open = true;
         px = 1406 + 190 - 360 + 60;
         py = 126 + 46 + 8 + 8 + (hover - 84) * 52 + 20;
         hover = 88;
+    }
+    if (hover == 156) { /* first breadcrumb focused */
+        browser_ui_render(&ui, malloc((size_t)BROWSER_UI_WIDTH *
+                                      BROWSER_UI_HEIGHT * 4), false);
+        px = 452 + 20;
+        py = 140;
+        hover = 89;
+    }
+    if (hover >= 153 && hover <= 155) { /* remove server, login, address */
+        ui.prompt_kind = hover - 152;
+        hover = 80;
     }
     if (hover == 80 || hover == 81) { /* resume prompt, button focused */
         ui.resume_prompt = 1;

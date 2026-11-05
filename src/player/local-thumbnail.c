@@ -37,7 +37,8 @@ static char *read_whole(const char *path, size_t *size)
     return data;
 }
 
-static char *read_sidecar(const char *path, size_t *size)
+/* The sidecar picture of `path` (read when `size` is given), else NULL. */
+static char *read_sidecar(const char *path, size_t *size, bool *exists)
 {
     static const char *const suffixes[] = {
         "-poster.jpg", ".jpg", "-thumb.jpg", "-fanart.jpg",
@@ -51,11 +52,26 @@ static char *read_sidecar(const char *path, size_t *size)
     for (size_t i = 0; i < sizeof(suffixes) / sizeof(suffixes[0]); ++i) {
         char candidate[4200];
         snprintf(candidate, sizeof(candidate), "%s%s", base, suffixes[i]);
+        struct stat status;
+        if (exists) {
+            if (stat(candidate, &status) == 0 && S_ISREG(status.st_mode)) {
+                *exists = true;
+                return NULL;
+            }
+            continue;
+        }
         char *data = read_whole(candidate, size);
         if (data)
             return data;
     }
     return NULL;
+}
+
+bool local_thumbnail_has_sidecar(const char *path)
+{
+    bool exists = false;
+    read_sidecar(path, NULL, &exists);
+    return exists;
 }
 
 /* ---- key frame -------------------------------------------------------- */
@@ -170,16 +186,27 @@ static int encode_jpeg(const uint8_t *rgb, int width, int height, char **data,
     return 0;
 }
 
-static int key_frame_jpeg(const char *path, int max_width, char **data,
-                          size_t *size)
+/* `headers` (CRLF-terminated lines) only for an http(s) URL. */
+static int key_frame_jpeg(const char *path, const char *headers,
+                          int max_width, char **data, size_t *size)
 {
     AVFormatContext *format = NULL;
     AVCodecContext *decoder = NULL;
     AVPacket *packet = av_packet_alloc();
     AVFrame *frame = av_frame_alloc();
+    AVDictionary *options = NULL;
     int result = -1;
-    if (!packet || !frame ||
-        avformat_open_input(&format, path, NULL, NULL) < 0 ||
+    if (headers) {
+        if (headers[0])
+            av_dict_set(&options, "headers", headers, 0);
+        av_dict_set(&options, "user_agent", "Stereonaut", 0);
+        av_dict_set(&options, "rw_timeout", "10000000", 0);
+    }
+    int opened = packet && frame
+                     ? avformat_open_input(&format, path, NULL, &options)
+                     : -1;
+    av_dict_free(&options);
+    if (opened < 0 ||
         avformat_find_stream_info(format, NULL) < 0)
         goto done;
     const AVCodec *codec = NULL;
@@ -233,8 +260,16 @@ int local_thumbnail_jpeg(const char *path, int max_width, char **data,
 {
     *data = NULL;
     *size = 0;
-    *data = read_sidecar(path, size);
+    *data = read_sidecar(path, size, NULL);
     if (*data)
         return 0;
-    return key_frame_jpeg(path, max_width, data, size);
+    return key_frame_jpeg(path, NULL, max_width, data, size);
+}
+
+int local_thumbnail_url_jpeg(const char *url, const char *headers,
+                             int max_width, char **data, size_t *size)
+{
+    *data = NULL;
+    *size = 0;
+    return key_frame_jpeg(url, headers ? headers : "", max_width, data, size);
 }
