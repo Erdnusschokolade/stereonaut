@@ -203,9 +203,14 @@ static void handle_control(struct app *app)
                 begin_playback(app, fd, command.path);
             }
         } else if (command.type == PLAYER_UI_BROWSE) {
-            bool finished = app->playing && app->link.title_finished;
-            if (app->playing)
+            /* The session's EOS usually ended playback already (main
+             * loop); title_finished outlives that until this command. */
+            if (app->playing) {
+                receive_frame_messages(app); /* an EOS not read yet */
                 end_playback(app);
+            }
+            bool finished = app->link.title_finished;
+            app->link.title_finished = false;
             command.path[sizeof(command.path) - 1] = '\0';
             command.message[sizeof(command.message) - 1] = '\0';
             /* A title that played to its end may lead straight into the
