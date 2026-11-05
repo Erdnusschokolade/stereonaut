@@ -134,7 +134,11 @@ static int compare_entries(const void *left_pointer, const void *right_pointer)
     if (order)
         return compare_descending ? -order : order;
     int folded = strcasecmp(left->name, right->name);
-    return folded ? folded : strcmp(left->name, right->name);
+    if (!folded)
+        folded = strcmp(left->name, right->name);
+    return compare_descending && compare_sort == FILE_BROWSER_SORT_NAME
+               ? -folded
+               : folded;
 }
 
 static int append_entry(struct file_browser_listing *listing,
