@@ -77,9 +77,11 @@ static void apply_token(const char *token, struct format_guess *guess)
                                                               : 190;
         return;
     }
+    /* "flat" is mono unless a stereo tag says otherwise ("sbs.flat"). */
     if (strcmp(token, "flat") == 0 || strcmp(token, "2d") == 0) {
         guess->projection = NV12_PROJECTION_FLAT;
-        guess->stereo = NV12_STEREO_MONO;
+        if (token[0] == '2' || guess->stereo == FORMAT_UNKNOWN)
+            guess->stereo = NV12_STEREO_MONO;
         return;
     }
     size_t length;
