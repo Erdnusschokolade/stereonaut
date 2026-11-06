@@ -141,23 +141,39 @@ static void *audio_worker(void *argument)
     struct media_pipeline *pipeline = argument;
     char error[512] = {0};
     bool reached_eof = false;
+    struct media_packet packet;
+    bool holding = false; /* `packet` popped, not yet written */
     while (wait_until_playing(pipeline)) {
-        struct media_packet packet;
-        int result = packet_queue_pop(&pipeline->audio_queue, &packet, 100);
-        if (result < 0) {
-            pthread_mutex_lock(&pipeline->state_mutex);
-            reached_eof = !pipeline->stopping && !pipeline->failed;
-            pthread_mutex_unlock(&pipeline->state_mutex);
-            break;
+        if (!holding) {
+            int result = packet_queue_pop(&pipeline->audio_queue, &packet,
+                                          100);
+            if (result < 0) {
+                pthread_mutex_lock(&pipeline->state_mutex);
+                reached_eof = !pipeline->stopping && !pipeline->failed;
+                pthread_mutex_unlock(&pipeline->state_mutex);
+                break;
+            }
+            if (result == 0)
+                continue;
+            holding = true;
         }
-        if (result == 0)
-            continue;
         pthread_mutex_lock(&pipeline->audio_mutex);
-        result = audio_output_push(pipeline->audio, packet.packet,
-                                   error, sizeof(error));
+        /* A pause since wait_until_playing may have paused the device
+         * already; a blocking write to it would keep audio_mutex and so
+         * the resume waiting for good. The packet waits for the resume. */
+        pthread_mutex_lock(&pipeline->state_mutex);
+        bool paused = pipeline->paused;
+        pthread_mutex_unlock(&pipeline->state_mutex);
+        if (paused) {
+            pthread_mutex_unlock(&pipeline->audio_mutex);
+            continue;
+        }
+        int result = audio_output_push(pipeline->audio, packet.packet,
+                                       error, sizeof(error));
         int64_t audio_clock = audio_output_clock_us(pipeline->audio);
         pthread_mutex_unlock(&pipeline->audio_mutex);
         media_packet_unref(&packet);
+        holding = false;
         if (result < 0) {
             fail_pipeline(pipeline, error);
             return NULL;
@@ -168,6 +184,8 @@ static void *audio_worker(void *argument)
         pipeline->cached_audio_clock_at_us = monotonic_us();
         pthread_mutex_unlock(&pipeline->state_mutex);
     }
+    if (holding)
+        media_packet_unref(&packet);
     if (reached_eof) {
         pthread_mutex_lock(&pipeline->audio_mutex);
         int result = audio_output_finish(pipeline->audio,
@@ -360,10 +378,14 @@ int media_pipeline_pause(struct media_pipeline *pipeline, bool paused,
 {
     if (!pipeline)
         return -1;
+    /* Pausing stops the audio worker before the device, resuming starts
+     * the device before the worker: it never writes to a paused device. */
     pthread_mutex_lock(&pipeline->state_mutex);
     bool audio_has_started = pipeline->audio_has_started;
-    pipeline->paused = paused;
-    pthread_cond_broadcast(&pipeline->state_changed);
+    if (paused || !audio_has_started) {
+        pipeline->paused = paused;
+        pthread_cond_broadcast(&pipeline->state_changed);
+    }
     pthread_mutex_unlock(&pipeline->state_mutex);
     if (!audio_has_started)
         return 0;
@@ -372,13 +394,17 @@ int media_pipeline_pause(struct media_pipeline *pipeline, bool paused,
                                     error, error_size);
     int64_t audio_clock = audio_output_clock_us(pipeline->audio);
     pthread_mutex_unlock(&pipeline->audio_mutex);
-    if (result < 0)
-        return -1;
     pthread_mutex_lock(&pipeline->state_mutex);
-    pipeline->cached_audio_clock_us = audio_clock;
-    pipeline->cached_audio_clock_at_us = monotonic_us();
+    if (!paused) {
+        pipeline->paused = false;
+        pthread_cond_broadcast(&pipeline->state_changed);
+    }
+    if (result == 0) {
+        pipeline->cached_audio_clock_us = audio_clock;
+        pipeline->cached_audio_clock_at_us = monotonic_us();
+    }
     pthread_mutex_unlock(&pipeline->state_mutex);
-    return 0;
+    return result < 0 ? -1 : 0;
 }
 
 int media_pipeline_seek(struct media_pipeline *pipeline, int64_t target_us,
