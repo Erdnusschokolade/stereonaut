@@ -905,6 +905,12 @@ static void start_renderer(
     log_seek_phase("renderer_imported");
 }
 
+/* A pause, seek or stop arrived and waits for the playback loop. */
+static bool player_input_pending(void)
+{
+    return renderer_action || renderer_pause_action || stop_requested;
+}
+
 static bool process_renderer_messages(
     struct capture_buffer buffers[MAX_CAPTURE_BUFFERS], unsigned count)
 {
@@ -2773,7 +2779,8 @@ static int play_decoded(char **argv, struct playback_options *options,
         }
         int64_t audio_clock = media_pipeline_clock_us(pipeline);
         while (audio_clock != AV_NOPTS_VALUE &&
-               pts_us > audio_clock + INT64_C(10000)) {
+               pts_us > audio_clock + INT64_C(10000) &&
+               !player_input_pending()) {
             int64_t wait_us = pts_us - audio_clock - 10000;
             if (wait_us > 5000)
                 wait_us = 5000;
@@ -2783,8 +2790,11 @@ static int play_decoded(char **argv, struct playback_options *options,
                 fail_message("unexpected renderer FLUSHED response");
             audio_clock = media_pipeline_clock_us(pipeline);
         }
+        /* A pending pause, seek or stop ends the wait; the picture then
+         * goes back like a late one. */
         bool late = audio_clock != AV_NOPTS_VALUE &&
-                    pts_us + VIDEO_LATE_DROP_US < audio_clock;
+                    (pts_us + VIDEO_LATE_DROP_US < audio_clock ||
+                     pts_us > audio_clock + INT64_C(10000));
         if (late) {
             late_drops++;
             decoded_video_release(decoded_video, index);
@@ -3472,7 +3482,8 @@ open_decoder:
                         fail_message("Iris returned a renderer-owned buffer");
                     int64_t audio_clock = media_pipeline_clock_us(pipeline);
                     while (audio_clock != AV_NOPTS_VALUE &&
-                           frame_pts_us > audio_clock + INT64_C(10000)) {
+                           frame_pts_us > audio_clock + INT64_C(10000) &&
+                           !player_input_pending()) {
                         int64_t wait_us = frame_pts_us - audio_clock - 10000;
                         if (wait_us > 5000)
                             wait_us = 5000;
@@ -3485,8 +3496,12 @@ open_decoder:
                             fail_message("unexpected renderer FLUSHED response");
                         audio_clock = media_pipeline_clock_us(pipeline);
                     }
-                    bool late = audio_clock != AV_NOPTS_VALUE &&
-                                frame_pts_us + VIDEO_LATE_DROP_US < audio_clock;
+                    /* A pending pause, seek or stop ends the wait; the
+                     * picture then goes back like a late one. */
+                    bool late =
+                        audio_clock != AV_NOPTS_VALUE &&
+                        (frame_pts_us + VIDEO_LATE_DROP_US < audio_clock ||
+                         frame_pts_us > audio_clock + INT64_C(10000));
                     if (late) {
                         late_video_drops++;
                         queue_capture(dequeued.index,
