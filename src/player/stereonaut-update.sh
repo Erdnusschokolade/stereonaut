@@ -26,8 +26,15 @@ else
     asset=stereonaut-linux-source.tar.gz
 fi
 
+# Status lines for the XR host. Stereonaut may quit during an installation
+# and close its end: that must not stop the installation (SIGPIPE).
+trap '' PIPE
+say() {
+    echo "$*" 2>/dev/null || true
+}
+
 fail() {
-    echo "error $*"
+    say "error $*"
     exit 1
 }
 
@@ -43,7 +50,7 @@ check)
     if [ -z "$url" ] || [ "$tag" = "$url" ] || [ -z "$tag" ]; then
         fail "no release found"
     fi
-    echo "latest $tag"
+    say "latest $tag"
     ;;
 install)
     tag=${2:-}
@@ -58,19 +65,19 @@ install)
     mkdir -p "$work"
     cd "$work"
 
-    echo "phase download"
+    say "phase download"
     base="$repository/releases/download/$tag/$asset"
     curl -fsSL --max-time 600 -o "$asset" "$base" >&2 ||
         fail "download failed"
     curl -fsSL --max-time 60 -o "$asset.sig" "$base.sig" >&2 ||
         fail "the release has no signature"
 
-    echo "phase verify"
+    say "phase verify"
     ssh-keygen -Y verify -f "$signers" -I stereonaut-release \
         -n stereonaut-release -s "$asset.sig" <"$asset" >&2 ||
         fail "invalid signature"
 
-    echo "phase unpack"
+    say "phase unpack"
     mkdir package
     tar -C package -xzf "$asset" >&2 || fail "damaged package"
     set -- package/stereonaut-*/install.sh
@@ -80,11 +87,11 @@ install)
     version=$(sed -n 's/^STEREONAUT_VERSION=//p' "$package/MANIFEST")
     [ "$version" = "$tag" ] || fail "the package holds version $version"
 
-    echo "phase install"
+    say "phase install"
     "$package/install.sh" >&2 || fail "installation failed"
     cd /
     rm -rf "$work"
-    echo "done"
+    say "done"
     ;;
 *)
     echo "usage: $0 check | install TAG" >&2
