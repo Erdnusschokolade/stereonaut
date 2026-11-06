@@ -247,13 +247,14 @@ static struct ui_image *trim_border(struct ui_image *image, bool *small)
     return result;
 }
 
-/* Side-by-side frames (about 2:1 and wider) show both eyes; keep the left.
- * Portrait images (posters) keep their top 16:9 part, where the faces
- * usually are; the tile would otherwise show the middle. */
-static struct ui_image *prepare(struct ui_image *decoded)
+/* Side-by-side frames (about 2:1 and wider) show both eyes; keep the left,
+ * unless `one_eye` says the picture is one already (a 360 degree eye is
+ * 2:1 too). Portrait images (posters) keep their top 16:9 part, where the
+ * faces usually are; the tile would otherwise show the middle. */
+static struct ui_image *prepare(struct ui_image *decoded, bool one_eye)
 {
     struct ui_image *part = NULL;
-    if (decoded->width >= decoded->height * 195 / 100)
+    if (!one_eye && decoded->width >= decoded->height * 195 / 100)
         part = crop(decoded, 0, 0, decoded->width / 2, decoded->height);
     else if (decoded->height > decoded->width)
         part = crop(decoded, 0, 0, decoded->width, decoded->width * 9 / 16);
@@ -348,9 +349,10 @@ static struct ui_image *key_frame_view(struct ui_image *picture,
             return view;
         }
     }
-    /* A known layout keeps the eye (top and bottom too); prepare() cuts
-     * a side-by-side picture itself. */
-    if (eye && guess.stereo != FORMAT_UNKNOWN) {
+    /* A known layout keeps the eye (top and bottom too), which is not cut
+     * again; otherwise prepare() cuts a side-by-side picture itself. */
+    bool one_eye = eye && guess.stereo != FORMAT_UNKNOWN;
+    if (one_eye) {
         ui_image_free(picture);
         picture = eye;
     } else {
@@ -358,13 +360,23 @@ static struct ui_image *key_frame_view(struct ui_image *picture,
     }
     bool small = false;
     picture = trim_border(picture, &small);
-    return picture ? prepare(picture) : NULL;
+    return picture ? prepare(picture, one_eye) : NULL;
 }
 
-/* "file:PATH": a local video's picture, cached under a hash of the path
- * with its modification time and size as the tag. */
+/* "file:PATH": a local video's picture. A sidecar is read each time (it
+ * may change, appear or go); a key frame is cached under a hash of the
+ * path with the video's modification time and size as the tag. */
 static struct ui_image *load_local(const char *path)
 {
+    char *data = NULL;
+    size_t size = 0;
+    if (local_thumbnail_sidecar(path, &data, &size) == 0) {
+        struct ui_image *decoded = thumbnail_decode_jpeg(data, size);
+        free(data);
+        bool small = false;
+        decoded = decoded ? trim_border(decoded, &small) : NULL;
+        return decoded ? prepare(decoded, false) : NULL;
+    }
     struct stat status;
     if (stat(path, &status) < 0)
         return NULL;
@@ -373,11 +385,11 @@ static struct ui_image *load_local(const char *path)
         hash = (hash ^ *c) * 1099511628211ULL;
     char item[32], image[64], cache[PATH_MAX];
     snprintf(item, sizeof(item), "local%016llx", (unsigned long long)hash);
-    snprintf(image, sizeof(image), "Local?tag=k%lldx%lld",
+    /* "f": key frames only (entries tagged "k" may hold a sidecar). */
+    snprintf(image, sizeof(image), "Local?tag=f%lldx%lld",
              (long long)status.st_mtime, (long long)status.st_size);
     bool cacheable = cache_path(item, image, cache, sizeof(cache));
-    size_t size = 0;
-    char *data = cacheable ? read_file(cache, &size) : NULL;
+    data = cacheable ? read_file(cache, &size) : NULL;
     if (!data) {
         if (local_thumbnail_jpeg(path, KEY_FRAME_WIDTH, &data, &size) < 0) {
             printf("local_thumbnail path=%s available=0\n", path);
@@ -390,13 +402,8 @@ static struct ui_image *load_local(const char *path)
     free(data);
     if (!decoded)
         return NULL;
-    if (!local_thumbnail_has_sidecar(path)) {
-        const char *slash = strrchr(path, '/');
-        return key_frame_view(decoded, path, slash ? slash + 1 : path);
-    }
-    bool small = false;
-    decoded = trim_border(decoded, &small);
-    return decoded ? prepare(decoded) : NULL;
+    const char *slash = strrchr(path, '/');
+    return key_frame_view(decoded, path, slash ? slash + 1 : path);
 }
 
 /* "webdav:N:SIZE:PATH": a sidecar picture (PATH ends in .jpg) or a key
@@ -462,7 +469,7 @@ static struct ui_image *load_webdav(const char *source)
     }
     bool small = false;
     decoded = trim_border(decoded, &small);
-    return decoded ? prepare(decoded) : NULL;
+    return decoded ? prepare(decoded, false) : NULL;
 }
 
 static struct ui_image *load(const struct jf_config *config,
@@ -499,7 +506,7 @@ static struct ui_image *load(const struct jf_config *config,
             picture = poster;
         }
     }
-    return picture ? prepare(picture) : NULL;
+    return picture ? prepare(picture, false) : NULL;
 }
 
 /* ---- queue ------------------------------------------------------------- */
