@@ -458,7 +458,7 @@ double monotonic_seconds(void)
 
 /* The eyes' views and the head for the display time, and the eye image
  * to draw into. */
-void locate_views(struct app *app, struct frame *f)
+bool locate_views(struct app *app, struct frame *f)
 {
     f->views[0] = f->views[1] = (XrView){.type = XR_TYPE_VIEW};
     XrViewState view_state = {.type = XR_TYPE_VIEW_STATE};
@@ -467,15 +467,21 @@ void locate_views(struct app *app, struct frame *f)
         .viewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO,
         .displayTime = f->state.predictedDisplayTime, .space = app->xr.space};
     need_xr("xrLocateViews", xrLocateViews(app->xr.session, &locate, &view_state, 2, &count, f->views));
-    need(count == 2 && (view_state.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT) &&
-             (view_state.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT), "OpenXR returned no valid stereo pose");
+    need(count == 2, "OpenXR returned no stereo views");
     f->center = (XrSpaceLocation){.type = XR_TYPE_SPACE_LOCATION};
     need_xr("xrLocateSpace(VIEW)",
             xrLocateSpace(app->xr.view_space, app->xr.space,
                           f->state.predictedDisplayTime, &f->center));
-    need((f->center.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) !=
-             0,
-         "OpenXR returned no valid VIEW orientation");
+    bool valid =
+        (view_state.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT) &&
+        (view_state.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT) &&
+        (f->center.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT);
+    if (valid != app->xr.pose_valid) {
+        printf("openxr_head_pose valid=%d\n", valid);
+        app->xr.pose_valid = valid;
+    }
+    if (!valid)
+        return false;
     if (!app->xr.view_geometry_logged) {
         printf("openxr_view_geometry"
                " left_pose=(%.9f,%.9f,%.9f;%.9f,%.9f,%.9f,%.9f)"
@@ -508,4 +514,5 @@ void locate_views(struct app *app, struct frame *f)
     need(f->image_index < app->xr.image_count,
          "invalid OpenXR swapchain index");
     f->acquired = monotonic_seconds();
+    return true;
 }

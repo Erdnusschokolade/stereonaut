@@ -32,6 +32,7 @@ struct xr_state {
     bool running;
     bool should_render;
     bool view_geometry_logged;
+    bool pose_valid; /* last frame had a head pose (logged on change) */
     /* Eye tracking (XR_EXT_eye_gaze_interaction): the gaze ray steers the
      * autofocus measurement; without it the head's forward direction. */
     bool has_eye_gaze_extension, has_eye_gaze;
@@ -86,7 +87,8 @@ void hide_dashboard_at_startup(const struct app *app);
 
 struct frame;
 /* The eyes' views and the head for the display time, and the eye image
- * to draw into. */
-void locate_views(struct app *app, struct frame *f);
+ * to draw into; false (nothing acquired) while the runtime has no valid
+ * head pose, e.g. while tracking is lost. */
+bool locate_views(struct app *app, struct frame *f);
 
 #endif

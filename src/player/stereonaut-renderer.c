@@ -476,7 +476,8 @@ static void render_frame(struct app *app)
         }
     }
     f.inputs_done = monotonic_seconds();
-    if (!f.state.shouldRender) {
+    /* Without a head pose (tracking lost) the frame stays empty. */
+    if (!f.state.shouldRender || !locate_views(app, &f)) {
         XrFrameEndInfo end = {.type = XR_TYPE_FRAME_END_INFO, .displayTime = f.state.predictedDisplayTime,
             .environmentBlendMode = environment_blend_mode(app)};
         need_xr("xrEndFrame(empty)", xrEndFrame(app->xr.session, &end));
@@ -489,7 +490,6 @@ static void render_frame(struct app *app)
         f.video = &app->video.buffers[app->video.current];
     else if (app->playing && app->video.has_held)
         f.video = &app->video.held;
-    locate_views(app, &f);
     place_video(app, &f);
     plan_measurement(app, &f);
     write_view_uniforms(app, &f);
