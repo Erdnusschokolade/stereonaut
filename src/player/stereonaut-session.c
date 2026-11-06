@@ -286,12 +286,8 @@ static int resolve_webdav_input(const char *spec, char *url, size_t size)
         fprintf(stderr, "WebDAV: no server %ld\n", index);
         return -1;
     }
-    char header[1024], origin[512];
-    wd_authorization_header(&server, header, sizeof(header));
-    if (header[0])
-        setenv("STEREONAUT_HTTP_HEADERS", header, 1);
-    wd_origin(&server, origin, sizeof(origin));
-    snprintf(url, size, "%s%s", origin, rest + 1);
+    wd_login_url(&server, rest + 1, url, size);
+    memset(&server, 0, sizeof(server));
     return 0;
 }
 
@@ -2971,8 +2967,9 @@ int main(int argc, char **argv)
             return EXIT_SOURCE_FAILED;
         input = input_url;
         if (detect_format) {
+            /* The path only: the URL holds the login. */
             char name[sizeof(input_url)];
-            wd_url_decode(input_url, name, sizeof(name));
+            wd_url_decode(strchr(argv[1] + 7, ':') + 1, name, sizeof(name));
             format_from_name(name, &format_name_guess);
         }
     } else if (detect_format) {

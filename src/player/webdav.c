@@ -279,47 +279,44 @@ int wd_server_get(int id, struct wd_server *out)
 
 /* ---- URL helpers -------------------------------------------------------- */
 
-static void base64_encode(const unsigned char *in, size_t length, char *out,
-                          size_t size)
+/* `in` percent-encoded into `out` (unreserved characters stay). */
+static size_t percent_encode(const char *in, char *out, size_t size)
 {
-    static const char digits[] =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    static const char digits[] = "0123456789ABCDEF";
     size_t used = 0;
-    for (size_t i = 0; i < length; i += 3) {
-        size_t left = length - i;
-        unsigned value = (unsigned)in[i] << 16;
-        if (left > 1)
-            value |= (unsigned)in[i + 1] << 8;
-        if (left > 2)
-            value |= in[i + 2];
-        const char quad[4] = {
-            digits[(value >> 18) & 0x3F],
-            digits[(value >> 12) & 0x3F],
-            left > 1 ? digits[(value >> 6) & 0x3F] : '=',
-            left > 2 ? digits[value & 0x3F] : '=',
-        };
-        for (int k = 0; k < 4 && used + 1 < size; ++k)
-            out[used++] = quad[k];
+    for (const unsigned char *c = (const unsigned char *)in;
+         *c && used + 4 < size; ++c) {
+        if ((*c >= 'A' && *c <= 'Z') || (*c >= 'a' && *c <= 'z') ||
+            (*c >= '0' && *c <= '9') || strchr("-._~", *c)) {
+            out[used++] = (char)*c;
+        } else {
+            out[used++] = '%';
+            out[used++] = digits[*c >> 4];
+            out[used++] = digits[*c & 15];
+        }
     }
-    if (size)
-        out[used < size ? used : size - 1] = '\0';
+    out[used] = '\0';
+    return used;
 }
 
-void wd_authorization_header(const struct wd_server *server, char *out,
-                             size_t size)
+void wd_login_url(const struct wd_server *server, const char *path,
+                  char *out, size_t size)
 {
-    out[0] = '\0';
-    if (!server->user[0])
+    char origin[512];
+    wd_origin(server, origin, sizeof(origin));
+    const char *host = strstr(origin, "://");
+    if (!server->user[0] || !host) {
+        snprintf(out, size, "%s%s", origin, path);
         return;
-    char pair[sizeof(server->user) + sizeof(server->pass) + 1];
-    int length = snprintf(pair, sizeof(pair), "%s:%s", server->user,
-                          server->pass);
-    if (length <= 0)
-        return;
-    char encoded[((sizeof(pair) + 2) / 3) * 4 + 1];
-    base64_encode((const unsigned char *)pair, (size_t)length, encoded,
-                  sizeof(encoded));
-    snprintf(out, size, "Authorization: Basic %s", encoded);
+    }
+    host += 3;
+    char user[sizeof(server->user) * 3], pass[sizeof(server->pass) * 3];
+    percent_encode(server->user, user, sizeof(user));
+    percent_encode(server->pass, pass, sizeof(pass));
+    snprintf(out, size, "%.*s%s:%s@%s%s", (int)(host - origin), origin, user,
+             pass, host, path);
+    memset(user, 0, sizeof(user));
+    memset(pass, 0, sizeof(pass));
 }
 
 /* Start of the path in `url` (after scheme://host[:port]), NULL if none. */

@@ -8,8 +8,8 @@
 /* Saved WebDAV servers ($XDG_CONFIG_HOME/stereonaut/webdav.json, 0600) and
  * PROPFIND directory listings over libcurl (blocking: callers run it on a
  * worker thread). Files play through the session's http(s) path;
- * wd_authorization_header() hands Basic credentials to libavformat through
- * STEREONAUT_HTTP_HEADERS, never through argv. */
+ * wd_login_url() hands the credentials to libavformat inside the process,
+ * never through argv. */
 
 #define WD_MAX_SERVERS 16
 
@@ -37,10 +37,12 @@ int wd_server_remove(int id, char *error, size_t error_size);
  * none. */
 int wd_server_get(int id, struct wd_server *out);
 
-/* "Authorization: Basic <base64(user:pass)>" into `out`; "" without a
- * user. */
-void wd_authorization_header(const struct wd_server *server, char *out,
-                             size_t size);
+/* scheme://user:pass@host[:port]`path` into `out` (user and password
+ * percent-encoded), without a login just the URL: libavformat then answers
+ * Basic and Digest challenges like libcurl does for the listings. Holds
+ * the password, so never log it or pass it on the command line. */
+void wd_login_url(const struct wd_server *server, const char *path,
+                  char *out, size_t size);
 /* scheme://host[:port] of the server's URL into `out`. */
 void wd_origin(const struct wd_server *server, char *out, size_t size);
 /* Path of the server's URL below the origin with a trailing slash ("/" if

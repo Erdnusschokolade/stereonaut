@@ -454,13 +454,11 @@ static struct ui_image *load_webdav(const char *source)
         if (dot && strcasecmp(dot, ".jpg") == 0) {
             got = wd_fetch(&server, path, &data, &size);
         } else {
-            char authorization[1024], headers[1100];
-            wd_authorization_header(&server, authorization,
-                                    sizeof(authorization));
-            snprintf(headers, sizeof(headers), "%s%s", authorization,
-                     authorization[0] ? "\r\n" : "");
-            got = local_thumbnail_url_jpeg(url, headers, KEY_FRAME_WIDTH,
+            char login_url[2048];
+            wd_login_url(&server, path, login_url, sizeof(login_url));
+            got = local_thumbnail_url_jpeg(login_url, "", KEY_FRAME_WIDTH,
                                            &data, &size);
+            memset(login_url, 0, sizeof(login_url));
         }
         if (got < 0) {
             printf("webdav_thumbnail server=%ld available=0\n", index);
