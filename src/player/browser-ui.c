@@ -2065,11 +2065,16 @@ int browser_ui_open(struct browser_ui *ui, const char *location,
                  message);
     ui->loader = thumbnail_loader_create();
     load_sort(ui);
-    int opened = file_browser_open(&ui->browser, location, error, error_size);
+    /* The saved order applies from the first listing on. */
+    int opened = file_browser_open(&ui->browser, NULL, error, error_size);
     if (opened == 0) {
         file_browser_set_sort(ui->browser, ui->sort, ui->sort_descending);
         file_browser_set_local_sort(ui->browser, ui->local_sort,
                                     ui->local_sort_descending);
+        opened = file_browser_request(ui->browser, location, error,
+                                      error_size);
+        if (opened < 0)
+            file_browser_close(&ui->browser);
     }
     return opened;
 }

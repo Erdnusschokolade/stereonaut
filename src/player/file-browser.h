@@ -69,6 +69,8 @@ struct file_browser_streams {
 
 struct file_browser;
 
+/* Starts the listing worker and requests `initial_path`; NULL requests
+ * nothing yet (set the sort orders first). */
 int file_browser_open(struct file_browser **result, const char *initial_path,
                       char *error, size_t error_size);
 int file_browser_request(struct file_browser *browser, const char *path,

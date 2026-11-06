@@ -1074,7 +1074,8 @@ int file_browser_open(struct file_browser **result, const char *initial_path,
     }
     browser->worker_started = true;
     *result = browser;
-    if (file_browser_request(browser, initial_path, error, error_size) < 0) {
+    if (initial_path &&
+        file_browser_request(browser, initial_path, error, error_size) < 0) {
         file_browser_close(result);
         return -1;
     }
@@ -1087,6 +1088,12 @@ int file_browser_poll(struct file_browser *browser,
     if (!browser || !listing)
         return -1;
     pthread_mutex_lock(&browser->mutex);
+    /* A listing finished before the next request is no longer wanted. */
+    if (browser->has_ready &&
+        browser->ready.generation != browser->request_generation) {
+        file_browser_listing_clear(&browser->ready);
+        browser->has_ready = false;
+    }
     if (!browser->has_ready) {
         pthread_mutex_unlock(&browser->mutex);
         return 0;
