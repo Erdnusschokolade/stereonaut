@@ -700,7 +700,21 @@ static struct {
     int64_t next_pts_us;
     struct format_samples samples;
     const uint8_t *mappings[MAX_CAPTURE_BUFFERS];
+    size_t mapped_lengths[MAX_CAPTURE_BUFFERS]; /* own mmap; 0: borrowed */
 } frame_detection;
+
+/* Drops the analysis mappings of a CAPTURE generation that ends: its
+ * buffers close, and the next generation reuses the indices. */
+static void unmap_frame_samples(void)
+{
+    for (unsigned i = 0; i < MAX_CAPTURE_BUFFERS; ++i) {
+        if (frame_detection.mapped_lengths[i])
+            munmap((void *)frame_detection.mappings[i],
+                   frame_detection.mapped_lengths[i]);
+        frame_detection.mappings[i] = NULL;
+        frame_detection.mapped_lengths[i] = 0;
+    }
+}
 
 static bool sample_frame(const struct capture_buffer *buffer, unsigned index,
                          const struct video_layout *layout)
@@ -714,6 +728,7 @@ static bool sample_frame(const struct capture_buffer *buffer, unsigned index,
             return false;
         }
         frame_detection.mappings[index] = mapping;
+        frame_detection.mapped_lengths[index] = buffer->length;
     }
     uint32_t width = layout->visible_width, height = layout->visible_height;
     int thumb_w = FRAME_THUMBNAIL_WIDTH;
@@ -2334,6 +2349,7 @@ static void release_capture_generation(struct vulkan_context *vk,
     VkResult result = vkDeviceWaitIdle(vk->device);
     if (result != VK_SUCCESS)
         fail_vk("vkDeviceWaitIdle(release CAPTURE generation)", result);
+    unmap_frame_samples();
     for (unsigned i = 0; i < capture_count; i++) {
         if (captures[i].command != VK_NULL_HANDLE)
             vkFreeCommandBuffers(vk->device, vk->command_pool, 1,
@@ -3637,6 +3653,7 @@ open_decoder:
         if (close(video_fd) < 0)
             fail_errno("close /dev/video-dec0 control");
         video_fd = -1;
+        unmap_frame_samples();
         for (unsigned i = 0; i < capture_count; ++i)
             if (captures[i].dma_buf_fd >= 0 &&
                 close(captures[i].dma_buf_fd) < 0)
@@ -3724,6 +3741,7 @@ open_decoder:
     if (close(video_fd) < 0)
         fail_errno("close /dev/video-dec0");
     video_fd = -1;
+    unmap_frame_samples();
     for (unsigned i = 0; i < capture_count; ++i) {
         if (captures[i].dma_buf_fd >= 0 && close(captures[i].dma_buf_fd) < 0)
             fail_errno("close CAPTURE DMA-BUF");
