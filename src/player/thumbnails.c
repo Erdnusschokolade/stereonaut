@@ -593,8 +593,11 @@ struct thumbnail_loader *thumbnail_loader_create(void)
     pthread_mutex_init(&loader->mutex, NULL);
     pthread_mutex_init(&loader->config_mutex, NULL);
     pthread_cond_init(&loader->changed, NULL);
+    /* Started threads fill the slots from the front, which is what
+     * destroy joins. */
     for (int i = 0; i < WORKERS; ++i)
-        if (pthread_create(&loader->workers[i], NULL, worker, loader) == 0)
+        if (pthread_create(&loader->workers[loader->worker_count], NULL,
+                           worker, loader) == 0)
             ++loader->worker_count;
     return loader;
 }
