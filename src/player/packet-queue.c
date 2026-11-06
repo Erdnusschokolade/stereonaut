@@ -54,6 +54,38 @@ int packet_queue_push(struct packet_queue *queue, struct media_packet *packet)
     return 0;
 }
 
+/* Room for more packets; the queued ones keep their order. */
+int packet_queue_grow(struct packet_queue *queue, size_t capacity)
+{
+    pthread_mutex_lock(&queue->mutex);
+    if (capacity <= queue->capacity) {
+        pthread_mutex_unlock(&queue->mutex);
+        return 0;
+    }
+    struct media_packet *items = calloc(capacity, sizeof(*items));
+    if (!items) {
+        pthread_mutex_unlock(&queue->mutex);
+        return -1;
+    }
+    for (size_t i = 0; i < queue->count; ++i)
+        items[i] = queue->items[(queue->head + i) % queue->capacity];
+    free(queue->items);
+    queue->items = items;
+    queue->capacity = capacity;
+    queue->head = 0;
+    pthread_cond_broadcast(&queue->writable);
+    pthread_mutex_unlock(&queue->mutex);
+    return 0;
+}
+
+bool packet_queue_full(struct packet_queue *queue)
+{
+    pthread_mutex_lock(&queue->mutex);
+    bool full = queue->count == queue->capacity;
+    pthread_mutex_unlock(&queue->mutex);
+    return full;
+}
+
 static void timeout_from_now(struct timespec *deadline, int timeout_ms)
 {
     clock_gettime(CLOCK_REALTIME, deadline);

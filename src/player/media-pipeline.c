@@ -15,6 +15,11 @@
 
 #define VIDEO_QUEUE_CAPACITY 24
 #define AUDIO_QUEUE_CAPACITY 256
+/* Until the first audio packet is written the audio worker waits for the
+ * first picture. A container with more audio than AUDIO_QUEUE_CAPACITY
+ * ahead of the video would fill the queue and so hold back the video
+ * packets that picture needs; up to this many the queue grows instead. */
+#define AUDIO_QUEUE_START_CAPACITY 16384
 /* Reads slower than this indicate a starving source (network, transcode). */
 #define DEMUX_STALL_LOG_MS 300
 /* After a seek the demuxer starts at the preceding video keyframe, which can
@@ -116,6 +121,15 @@ static void *demux_worker(void *argument)
         struct packet_queue *queue = packet.kind == MEDIA_PACKET_VIDEO
                                          ? &pipeline->video_queue
                                          : &pipeline->audio_queue;
+        if (queue == &pipeline->audio_queue && packet_queue_full(queue) &&
+            queue->capacity < AUDIO_QUEUE_START_CAPACITY) {
+            pthread_mutex_lock(&pipeline->state_mutex);
+            bool audio_waits = !pipeline->audio_has_started;
+            pthread_mutex_unlock(&pipeline->state_mutex);
+            if (audio_waits && packet_queue_grow(queue,
+                                                 queue->capacity * 2U) == 0)
+                printf("audio_queue_grown capacity=%zu\n", queue->capacity);
+        }
         if (packet_queue_push(queue, &packet) < 0) {
             media_packet_unref(&packet);
             break;

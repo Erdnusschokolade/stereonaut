@@ -3119,8 +3119,22 @@ open_decoder:
     unsigned capture_count = 0;
 
     struct media_packet next_packet = {0};
-    int packet_result = media_pipeline_pop_video(
-        pipeline, &next_packet, -1, pipeline_error, sizeof(pipeline_error));
+    int packet_result = 0;
+    double first_packet_wait = monotonic_seconds();
+    while (packet_result == 0) {
+        if (stop_requested) {
+            printf("player_stop=signal\n");
+            exit(0);
+        }
+        if (monotonic_seconds() - first_packet_wait > 30.0) {
+            snprintf(pipeline_error, sizeof(pipeline_error),
+                     "no video packet for 30 seconds");
+            break;
+        }
+        packet_result = media_pipeline_pop_video(
+            pipeline, &next_packet, 100, pipeline_error,
+            sizeof(pipeline_error));
+    }
     if (packet_result != 1) {
         fprintf(stderr, "read first video packet: %s\n", pipeline_error);
         return 2;
