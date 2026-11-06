@@ -2547,8 +2547,10 @@ static void keep_view(struct playback_options *options)
 
 /* Seek restart: exec this program again at the new position with the
  * current view, panel and renderer, which the new process adopts. */
+/* `shown`: pictures shown so far; a test run (--frames, --seek-test)
+ * goes on with what is left of it. */
 static void restart_session(char **argv, struct playback_options *options,
-                            int64_t start_us, bool paused)
+                            int64_t start_us, bool paused, uint64_t shown)
 {
     char start_text[32];
     snprintf(start_text, sizeof(start_text), "%" PRId64, start_us);
@@ -2590,7 +2592,7 @@ static void restart_session(char **argv, struct playback_options *options,
         snprintf(renderer_text, sizeof(renderer_text), "%d,%ld",
                  renderer_fd, (long)renderer_pid);
     }
-    char *restart_argv[28];
+    char *restart_argv[40];
     size_t restart_argc = 0;
     restart_argv[restart_argc++] = argv[0];
     restart_argv[restart_argc++] = argv[1];
@@ -2639,6 +2641,26 @@ static void restart_session(char **argv, struct playback_options *options,
                  options->seek_from_us);
         restart_argv[restart_argc++] = "--seek-from-us";
         restart_argv[restart_argc++] = from_text;
+    }
+    char frames_text[24];
+    if (options->frame_limit) {
+        uint64_t left = options->frame_limit > shown
+                            ? options->frame_limit - shown
+                            : 1U;
+        snprintf(frames_text, sizeof(frames_text), "%" PRIu64, left);
+        restart_argv[restart_argc++] = "--frames";
+        restart_argv[restart_argc++] = frames_text;
+    }
+    char seek_texts[4][48];
+    for (unsigned i = options->test_seek_next; i < options->test_seek_count;
+         ++i) {
+        uint64_t frames = options->test_seek_frames[i] > shown
+                              ? options->test_seek_frames[i] - shown
+                              : 1U;
+        snprintf(seek_texts[i], sizeof(seek_texts[i]),
+                 "%" PRIu64 ":%" PRId64, frames, options->test_seek_us[i]);
+        restart_argv[restart_argc++] = "--seek-test";
+        restart_argv[restart_argc++] = seek_texts[i];
     }
     restart_argv[restart_argc] = NULL;
     /* A stop from the launcher (SIGTERM) must reach the new process: the
@@ -2846,7 +2868,7 @@ static int play_decoded(char **argv, struct playback_options *options,
         options->seek_from_us = transport.from_us;
         seek_requested_at = transport.requested_at;
         restart_session(argv, options, transport.requested_start_us,
-                        transport.paused);
+                        transport.paused, shown);
     }
 
     double elapsed = monotonic_seconds() - playback_start;
@@ -3695,7 +3717,7 @@ open_decoder:
         options.seek_from_us = transport.from_us;
         seek_requested_at = transport.requested_at;
         restart_session(argv, &options, transport.requested_start_us,
-                        transport.paused);
+                        transport.paused, frames);
     }
 
     double playback_end = monotonic_seconds();
