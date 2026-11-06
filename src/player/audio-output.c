@@ -215,6 +215,21 @@ static int write_samples(struct audio_output *audio, const uint8_t *data,
     return 0;
 }
 
+static void apply_volume(struct audio_output *audio, uint8_t *output,
+                         int count)
+{
+    int volume = atomic_load(&audio->volume_permille);
+    if (volume == 1000)
+        return;
+    int16_t *samples = (int16_t *)output;
+    for (int i = 0; i < count * OUTPUT_CHANNELS; ++i) {
+        int value = samples[i] * volume / 1000;
+        samples[i] = (int16_t)(value > 32767    ? 32767
+                               : value < -32768 ? -32768
+                                                : value);
+    }
+}
+
 static int consume_frames(struct audio_output *audio,
                           char *error, size_t error_size)
 {
@@ -284,16 +299,7 @@ static int consume_frames(struct audio_output *audio,
                     av_rescale(skipped_samples, AV_TIME_BASE, OUTPUT_RATE);
             audio->base_valid = true;
         }
-        int volume = atomic_load(&audio->volume_permille);
-        if (volume != 1000) {
-            int16_t *samples = (int16_t *)output;
-            for (int i = 0; i < result * OUTPUT_CHANNELS; ++i) {
-                int value = samples[i] * volume / 1000;
-                samples[i] = (int16_t)(value > 32767    ? 32767
-                                       : value < -32768 ? -32768
-                                                        : value);
-            }
-        }
+        apply_volume(audio, output, result);
         int write_result = write_samples(
             audio, output + skipped_samples * OUTPUT_CHANNELS * sizeof(int16_t),
             result - skipped_samples,
@@ -332,6 +338,29 @@ int audio_output_finish(struct audio_output *audio,
     }
     if (consume_frames(audio, error, error_size) < 0)
         return -1;
+    /* The resampler holds back the last samples (its filter delay). */
+    int remaining = swr_get_out_samples(audio->resampler, 0);
+    if (remaining > 0) {
+        uint8_t *output = NULL;
+        int line_size = 0;
+        result = av_samples_alloc(&output, &line_size, OUTPUT_CHANNELS,
+                                  remaining, AV_SAMPLE_FMT_S16, 0);
+        if (result < 0) {
+            set_av_error(error, error_size, "av_samples_alloc", result);
+            return -1;
+        }
+        uint8_t *outputs[] = {output};
+        result = swr_convert(audio->resampler, outputs, remaining, NULL, 0);
+        if (result < 0) {
+            set_av_error(error, error_size, "swr_convert(flush)", result);
+        } else if (result > 0) {
+            apply_volume(audio, output, result);
+            result = write_samples(audio, output, result, error, error_size);
+        }
+        av_freep(&output);
+        if (result < 0)
+            return -1;
+    }
     if (audio->device_enabled) {
         result = snd_pcm_drain(audio->pcm);
         if (result < 0) {
