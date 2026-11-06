@@ -1,14 +1,17 @@
+#define _DEFAULT_SOURCE /* flock */
 #define _XOPEN_SOURCE 700
 #include "title-settings.h"
 
 #include "../../tools/openxr-playback/nv12-playback-ipc.h"
 
 #include <errno.h>
+#include <fcntl.h>
 #include <json-c/json.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -100,6 +103,31 @@ static int write_store(const char *path, json_object *root)
     return result;
 }
 
+/* Serializes reading, changing and writing the store: the session and the
+ * renderer both save settings of the playing title, and one would drop
+ * the other's change. Returns the lock's descriptor, or -1, and the
+ * caller then saves unlocked. */
+static int lock_store(const char *path)
+{
+    char name[PATH_MAX + 8];
+    snprintf(name, sizeof(name), "%s.lock", path);
+    int fd = open(name, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+    if (fd < 0)
+        return -1;
+    while (flock(fd, LOCK_EX) < 0)
+        if (errno != EINTR) {
+            close(fd);
+            return -1;
+        }
+    return fd;
+}
+
+static void unlock_store(int fd)
+{
+    if (fd >= 0)
+        close(fd);
+}
+
 /* The entry of `key`, created if missing. */
 static json_object *store_entry(json_object *root, const char *key)
 {
@@ -179,9 +207,12 @@ int title_settings_save(const char *key, const struct title_settings *settings)
     char path[PATH_MAX];
     if (store_path(path, sizeof(path), true) < 0)
         return -1;
+    int lock = lock_store(path);
     json_object *root = read_store(path);
-    if (!root)
+    if (!root) {
+        unlock_store(lock);
         return -1;
+    }
     json_object *entry = store_entry(root, key);
     json_object_object_add(
         entry, "projection",
@@ -199,7 +230,9 @@ int title_settings_save(const char *key, const struct title_settings *settings)
     json_object_object_add(
         entry, "format_source",
         json_object_new_string(source_names[settings->format_source]));
-    return write_store(path, root);
+    int result = write_store(path, root);
+    unlock_store(lock);
+    return result;
 }
 
 int title_settings_load_numbers(const char *key, const char *group,
@@ -237,14 +270,19 @@ int title_settings_save_numbers(const char *key, const char *group,
     char path[PATH_MAX];
     if (store_path(path, sizeof(path), true) < 0)
         return -1;
+    int lock = lock_store(path);
     json_object *root = read_store(path);
-    if (!root)
+    if (!root) {
+        unlock_store(lock);
         return -1;
+    }
     json_object *numbers = json_object_new_object();
     for (size_t i = 0; i < count; ++i)
         if (names[i])
             json_object_object_add(numbers, names[i],
                                    json_object_new_double(values[i]));
     json_object_object_add(store_entry(root, key), group, numbers);
-    return write_store(path, root);
+    int result = write_store(path, root);
+    unlock_store(lock);
+    return result;
 }
