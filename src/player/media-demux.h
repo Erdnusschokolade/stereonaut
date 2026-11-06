@@ -41,6 +41,15 @@ struct media_packet {
 
 struct media_demux;
 
+/* What failed; media_demux_open and media_pipeline_open return it
+ * negated. */
+enum media_error {
+    MEDIA_ERROR_OTHER = 1,  /* allocation, audio device, ... */
+    MEDIA_ERROR_SOURCE,     /* the source cannot be opened or read */
+    MEDIA_ERROR_BROKEN,     /* the source is no valid container */
+    MEDIA_ERROR_UNSUPPORTED /* no video stream, or one we cannot play */
+};
+
 int media_demux_open(struct media_demux **result, const char *path,
                      char *error, size_t error_size);
 const struct media_stream_info *media_demux_info(const struct media_demux *demux);

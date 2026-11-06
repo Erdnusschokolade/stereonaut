@@ -9,7 +9,9 @@
 
 struct media_pipeline;
 
-/* start_us and from_us as for media_pipeline_seek. */
+/* start_us and from_us as for media_pipeline_seek. Returns 0 or a negated
+ * enum media_error. Without a supported audio stream the clock runs on
+ * monotonic time (from the first media_pipeline_pause(false) on). */
 int media_pipeline_open(struct media_pipeline **result, const char *path,
                         int64_t start_us, int64_t from_us,
                         bool enable_audio_device,

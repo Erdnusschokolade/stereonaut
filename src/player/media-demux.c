@@ -300,7 +300,8 @@ int media_demux_open(struct media_demux **result, const char *path,
     if (av_result < 0) {
         set_av_error(error, error_size, "avformat_open_input", av_result);
         media_demux_close(&demux);
-        return -1;
+        return av_result == AVERROR_INVALIDDATA ? -MEDIA_ERROR_BROKEN
+                                                : -MEDIA_ERROR_SOURCE;
     }
     struct timespec probing;
     clock_gettime(CLOCK_MONOTONIC, &probing);
@@ -309,7 +310,8 @@ int media_demux_open(struct media_demux **result, const char *path,
         set_av_error(error, error_size, "avformat_find_stream_info",
                      av_result);
         media_demux_close(&demux);
-        return -1;
+        return av_result == AVERROR_INVALIDDATA ? -MEDIA_ERROR_BROKEN
+                                                : -MEDIA_ERROR_SOURCE;
     }
     struct timespec probed;
     clock_gettime(CLOCK_MONOTONIC, &probed);
@@ -331,7 +333,7 @@ int media_demux_open(struct media_demux **result, const char *path,
     if (video < 0) {
         set_error(error, error_size, "container has no video stream");
         media_demux_close(&demux);
-        return -1;
+        return -MEDIA_ERROR_UNSUPPORTED;
     }
     AVCodecParameters *video_parameters =
         demux->format->streams[video]->codecpar;
@@ -342,7 +344,7 @@ int media_demux_open(struct media_demux **result, const char *path,
                   avcodec_get_name(video_parameters->codec_id),
                   video_parameters->profile, pixel ? pixel : "unknown");
         media_demux_close(&demux);
-        return -1;
+        return -MEDIA_ERROR_UNSUPPORTED;
     }
     demux->info.video_stream_index = video;
     demux->info.video_codec = video_parameters->codec_id;

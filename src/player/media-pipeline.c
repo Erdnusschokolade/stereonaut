@@ -52,10 +52,18 @@ struct media_pipeline {
     char failure[512];
     int64_t audio_skip_before_us;
     int64_t start_us; /* where playback resumes after the last seek */
+    /* No supported audio stream: the clock runs on monotonic time from
+     * the first video packet on (audio_has_started: it runs). */
+    bool silent;
+    int64_t first_video_pts_us;
 };
 
 static int start_workers(struct media_pipeline *pipeline,
                          char *error, size_t error_size);
+static int open_audio(struct media_pipeline *pipeline,
+                      const struct media_stream_info *info,
+                      bool enable_audio_device,
+                      char *error, size_t error_size);
 
 static int64_t monotonic_us(void)
 {
@@ -121,6 +129,12 @@ static void *demux_worker(void *argument)
         struct packet_queue *queue = packet.kind == MEDIA_PACKET_VIDEO
                                          ? &pipeline->video_queue
                                          : &pipeline->audio_queue;
+        if (packet.kind == MEDIA_PACKET_VIDEO) {
+            pthread_mutex_lock(&pipeline->state_mutex);
+            if (pipeline->first_video_pts_us == AV_NOPTS_VALUE)
+                pipeline->first_video_pts_us = packet.pts_us;
+            pthread_mutex_unlock(&pipeline->state_mutex);
+        }
         if (queue == &pipeline->audio_queue && packet_queue_full(queue) &&
             queue->capacity < AUDIO_QUEUE_START_CAPACITY) {
             pthread_mutex_lock(&pipeline->state_mutex);
@@ -247,6 +261,7 @@ int media_pipeline_open(struct media_pipeline **result, const char *path,
     pipeline->state_condition_initialized = true;
     pipeline->paused = start_paused;
     pipeline->cached_audio_clock_us = AV_NOPTS_VALUE;
+    pipeline->first_video_pts_us = AV_NOPTS_VALUE;
     if (packet_queue_initialize(&pipeline->video_queue,
                                 VIDEO_QUEUE_CAPACITY) < 0 ||
         packet_queue_initialize(&pipeline->audio_queue,
@@ -255,44 +270,31 @@ int media_pipeline_open(struct media_pipeline **result, const char *path,
         media_pipeline_close(&pipeline);
         return -1;
     }
-    if (media_demux_open(&pipeline->demux, path,
-                         error, error_size) < 0) {
+    int demux_result = media_demux_open(&pipeline->demux, path,
+                                        error, error_size);
+    if (demux_result < 0) {
         media_pipeline_close(&pipeline);
-        return -1;
+        return demux_result;
     }
     const struct media_stream_info *info = media_demux_info(pipeline->demux);
-    if (info->audio_stream_index < 0) {
-        set_error(error, error_size, "container has no supported audio stream");
-        media_pipeline_close(&pipeline);
-        return -1;
-    }
-    AVCodecParameters *parameters = avcodec_parameters_alloc();
-    if (!parameters || media_demux_copy_audio_parameters(
-                           pipeline->demux, parameters) < 0) {
-        set_error(error, error_size, "copy audio parameters failed");
-        avcodec_parameters_free(&parameters);
-        media_pipeline_close(&pipeline);
-        return -1;
-    }
-    int open_result = audio_output_open(&pipeline->audio, parameters,
-                                        info->audio_time_base,
-                                        enable_audio_device,
-                                        error, error_size);
-    avcodec_parameters_free(&parameters);
-    if (open_result < 0) {
+    pipeline->silent = info->audio_stream_index < 0;
+    if (pipeline->silent)
+        printf("audio_stream=none clock=monotonic\n");
+    else if (open_audio(pipeline, info, enable_audio_device,
+                        error, error_size) < 0) {
         media_pipeline_close(&pipeline);
         return -1;
     }
     if (start_us > 0 && media_demux_seek(pipeline->demux, start_us, from_us,
                                          error, error_size) < 0) {
         media_pipeline_close(&pipeline);
-        return -1;
+        return -MEDIA_ERROR_SOURCE;
     }
     if (start_us > 0 &&
         media_demux_start_us(pipeline->demux) != AV_NOPTS_VALUE)
         start_us = media_demux_start_us(pipeline->demux);
     pipeline->start_us = start_us;
-    if (start_us > 0) {
+    if (start_us > 0 && !pipeline->silent) {
         pipeline->audio_skip_before_us = start_us - AUDIO_SEEK_MARGIN_US;
         pthread_mutex_lock(&pipeline->audio_mutex);
         int reset_result = audio_output_reset(pipeline->audio, start_us,
@@ -311,6 +313,26 @@ int media_pipeline_open(struct media_pipeline **result, const char *path,
     return 0;
 }
 
+static int open_audio(struct media_pipeline *pipeline,
+                      const struct media_stream_info *info,
+                      bool enable_audio_device,
+                      char *error, size_t error_size)
+{
+    AVCodecParameters *parameters = avcodec_parameters_alloc();
+    if (!parameters || media_demux_copy_audio_parameters(
+                           pipeline->demux, parameters) < 0) {
+        set_error(error, error_size, "copy audio parameters failed");
+        avcodec_parameters_free(&parameters);
+        return -1;
+    }
+    int open_result = audio_output_open(&pipeline->audio, parameters,
+                                        info->audio_time_base,
+                                        enable_audio_device,
+                                        error, error_size);
+    avcodec_parameters_free(&parameters);
+    return open_result < 0 ? -1 : 0;
+}
+
 static int start_workers(struct media_pipeline *pipeline,
                          char *error, size_t error_size)
 {
@@ -320,6 +342,8 @@ static int start_workers(struct media_pipeline *pipeline,
         return -1;
     }
     pipeline->demux_started = true;
+    if (pipeline->silent)
+        return 0;
     if (pthread_create(&pipeline->audio_thread, NULL,
                        audio_worker, pipeline) != 0) {
         set_error(error, error_size, "start audio thread failed");
@@ -392,6 +416,26 @@ int media_pipeline_pause(struct media_pipeline *pipeline, bool paused,
 {
     if (!pipeline)
         return -1;
+    if (pipeline->silent) {
+        pthread_mutex_lock(&pipeline->state_mutex);
+        int64_t now = monotonic_us();
+        if (!paused && !pipeline->audio_has_started) {
+            pipeline->audio_has_started = true;
+            pipeline->cached_audio_clock_us =
+                pipeline->first_video_pts_us != AV_NOPTS_VALUE
+                    ? pipeline->first_video_pts_us
+                    : pipeline->start_us;
+        } else if (paused && !pipeline->paused &&
+                   pipeline->audio_has_started) {
+            pipeline->cached_audio_clock_us +=
+                now - pipeline->cached_audio_clock_at_us;
+        }
+        pipeline->cached_audio_clock_at_us = now;
+        pipeline->paused = paused;
+        pthread_cond_broadcast(&pipeline->state_changed);
+        pthread_mutex_unlock(&pipeline->state_mutex);
+        return 0;
+    }
     /* Pausing stops the audio worker before the device, resuming starts
      * the device before the worker: it never writes to a paused device. */
     pthread_mutex_lock(&pipeline->state_mutex);
@@ -459,12 +503,14 @@ int media_pipeline_seek(struct media_pipeline *pipeline, int64_t target_us,
         target_us = media_demux_start_us(pipeline->demux);
     pipeline->start_us = target_us;
     pipeline->audio_skip_before_us = target_us - AUDIO_SEEK_MARGIN_US;
-    pthread_mutex_lock(&pipeline->audio_mutex);
-    int reset_result = audio_output_reset(pipeline->audio, target_us,
-                                          error, error_size);
-    pthread_mutex_unlock(&pipeline->audio_mutex);
-    if (reset_result < 0)
-        return -1;
+    if (!pipeline->silent) {
+        pthread_mutex_lock(&pipeline->audio_mutex);
+        int reset_result = audio_output_reset(pipeline->audio, target_us,
+                                              error, error_size);
+        pthread_mutex_unlock(&pipeline->audio_mutex);
+        if (reset_result < 0)
+            return -1;
+    }
 
     pthread_mutex_lock(&pipeline->state_mutex);
     pipeline->stopping = false;
@@ -472,6 +518,7 @@ int media_pipeline_seek(struct media_pipeline *pipeline, int64_t target_us,
     pipeline->audio_has_started = false;
     pipeline->cached_audio_clock_us = AV_NOPTS_VALUE;
     pipeline->cached_audio_clock_at_us = 0;
+    pipeline->first_video_pts_us = AV_NOPTS_VALUE;
     pipeline->failed = false;
     pipeline->failure[0] = '\0';
     pthread_mutex_unlock(&pipeline->state_mutex);

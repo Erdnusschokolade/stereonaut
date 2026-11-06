@@ -2978,20 +2978,23 @@ int main(int argc, char **argv)
     } else if (detect_format) {
         format_from_name(argv[1], &format_name_guess);
     }
-    if (media_pipeline_open(&pipeline, input, options.start_us,
-                            options.seek_from_us, true, true,
-                            pipeline_error, sizeof(pipeline_error)) < 0) {
+    int open_result = media_pipeline_open(&pipeline, input, options.start_us,
+                                          options.seek_from_us, true, true,
+                                          pipeline_error,
+                                          sizeof(pipeline_error));
+    if (open_result < 0) {
         if (stop_requested)
             return 0;
         fprintf(stderr, "open media pipeline: %s\n", pipeline_error);
-        if (strstr(pipeline_error, "unsupported video"))
+        if (open_result == -MEDIA_ERROR_UNSUPPORTED)
             return EXIT_UNSUPPORTED_FORMAT;
         if (strncmp(input, "http", 4) != 0)
             return 2;
         /* The server answered, but not with a video (an empty or cut
          * file): not a network problem. */
-        return strstr(pipeline_error, "Invalid data") ? EXIT_BROKEN_SOURCE
-                                                      : EXIT_SOURCE_FAILED;
+        if (open_result == -MEDIA_ERROR_BROKEN)
+            return EXIT_BROKEN_SOURCE;
+        return open_result == -MEDIA_ERROR_SOURCE ? EXIT_SOURCE_FAILED : 2;
     }
     volume_pipeline = pipeline;
     log_seek_phase("pipeline_open");
