@@ -369,7 +369,52 @@ void wd_url_decode(const char *in, char *out, size_t size)
     out[used] = '\0';
 }
 
-/* The five predefined XML entities ("&amp;" in an href is a plain "&"). */
+/* Character reference "&#38;" / "&#x26;" at `in` (up to `end`) as UTF-8
+ * into `out` (4 bytes); returns its length in `in`, 0 if there is none. */
+static size_t char_reference(const char *in, const char *end, char *out,
+                             size_t *out_length)
+{
+    if (end - in < 4 || in[0] != '&' || in[1] != '#')
+        return 0;
+    bool hex = in[2] == 'x' || in[2] == 'X';
+    const char *p = in + (hex ? 3 : 2);
+    unsigned long code = 0;
+    int digits = 0;
+    for (; p < end && *p != ';' && digits < 8; ++p, ++digits) {
+        int value = hex ? hex_value(*p) : (*p >= '0' && *p <= '9' ? *p - '0'
+                                                                    : -1);
+        if (value < 0)
+            return 0;
+        code = code * (hex ? 16U : 10U) + (unsigned long)value;
+    }
+    if (p >= end || *p != ';' || !digits || !code || code > 0x10FFFF ||
+        (code >= 0xD800 && code <= 0xDFFF))
+        return 0;
+    unsigned char *u = (unsigned char *)out;
+    if (code < 0x80) {
+        u[0] = (unsigned char)code;
+        *out_length = 1;
+    } else if (code < 0x800) {
+        u[0] = (unsigned char)(0xC0 | (code >> 6));
+        u[1] = (unsigned char)(0x80 | (code & 0x3F));
+        *out_length = 2;
+    } else if (code < 0x10000) {
+        u[0] = (unsigned char)(0xE0 | (code >> 12));
+        u[1] = (unsigned char)(0x80 | ((code >> 6) & 0x3F));
+        u[2] = (unsigned char)(0x80 | (code & 0x3F));
+        *out_length = 3;
+    } else {
+        u[0] = (unsigned char)(0xF0 | (code >> 18));
+        u[1] = (unsigned char)(0x80 | ((code >> 12) & 0x3F));
+        u[2] = (unsigned char)(0x80 | ((code >> 6) & 0x3F));
+        u[3] = (unsigned char)(0x80 | (code & 0x3F));
+        *out_length = 4;
+    }
+    return (size_t)(p + 1 - in);
+}
+
+/* The five predefined XML entities ("&amp;" in an href is a plain "&")
+ * and character references ("&#38;"). */
 static void xml_unescape(const char *in, size_t length, char *out,
                          size_t size)
 {
@@ -380,6 +425,18 @@ static void xml_unescape(const char *in, size_t length, char *out,
                     {"&quot;", '"'}, {"&apos;", '\''}};
     size_t used = 0;
     for (size_t i = 0; i < length && used + 1 < size;) {
+        char character[4];
+        size_t character_length = 0;
+        size_t reference = char_reference(in + i, in + length, character,
+                                          &character_length);
+        if (reference) {
+            if (used + character_length >= size)
+                break;
+            memcpy(out + used, character, character_length);
+            used += character_length;
+            i += reference;
+            continue;
+        }
         size_t k = 0;
         while (k < sizeof(entities) / sizeof(entities[0]) &&
                strncmp(in + i, entities[k].entity,
@@ -431,7 +488,7 @@ static const char *find_tag(const char *from, const char *end,
         if (start >= end || *start == '/')
             continue;
         const char *local = start, *q = start;
-        while (q < end && *q != '>' && *q != '/' && *q != ' ') {
+        while (q < end && !strchr(">/ \t\r\n", *q)) {
             if (*q == ':')
                 local = q + 1;
             ++q;
