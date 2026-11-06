@@ -830,6 +830,15 @@ void sync_browser_input(struct app *app, XrTime time)
     app->panels.pointer_layer_visible = false;
     int pointer_x = 0, pointer_y = 0, hover = -1, settings_hover = -1;
     struct hand_input hands[2] = {0};
+    /* Each hand's point on the panel: the hand that pulls its trigger
+     * acts on what it points at, otherwise the right hand's pointer
+     * shows. */
+    struct point {
+        bool inside;
+        struct panel_hit hit;
+        int x, y, hover, settings_hover;
+    } points[2] = {0};
+    int acting = -1;
     app->overlay.lasers[0].valid = app->overlay.lasers[1].valid = false;
     app->overlay.wanted = true;
     for (unsigned hand = 0; hand < 2; ++hand) {
@@ -844,8 +853,11 @@ void sync_browser_input(struct app *app, XrTime time)
         read_select(app, hand, &hands[hand]);
         read_boolean(app, app->input.squeeze_action, app->input.hands[hand],
                      &hands[hand].squeeze);
-        if (hands[hand].select_edge)
+        if (hands[hand].select_edge) {
             pressed = true;
+            if (acting < 0)
+                acting = (int)hand;
+        }
         int flick = read_stick(app, hand);
         if (flick && !app->settings_open)
             browser_ui_flip(&app->browser, flick);
@@ -867,24 +879,36 @@ void sync_browser_input(struct app *app, XrTime time)
             .panel_length = panel_hit_inside(&hit) ? hit.distance : -1.0f,
         };
         if (panel_hit_inside(&hit)) {
-            pointer_visible = true;
-            pointer_x = (int)(hit.u * BROWSER_UI_WIDTH);
-            pointer_y = (int)(hit.v * BROWSER_UI_HEIGHT);
-            hover = browser_ui_hit_test(hit.u, hit.v);
-            int page_x = pointer_x - SETTINGS_X, page_y = pointer_y - SETTINGS_Y;
+            int x = (int)(hit.u * BROWSER_UI_WIDTH);
+            int y = (int)(hit.v * BROWSER_UI_HEIGHT);
+            points[hand] = (struct point){
+                .inside = true, .hit = hit, .x = x, .y = y,
+                .hover = browser_ui_hit_test(hit.u, hit.v),
+                .settings_hover = -1,
+            };
+            int page_x = x - SETTINGS_X, page_y = y - SETTINGS_Y;
             if (app->settings_open && page_x >= 0 &&
                 page_x < PLAYER_UI_POPUP_W && page_y >= 0 &&
                 page_y < PLAYER_UI_POPUP_H) {
                 struct player_ui_state state = settings_state(app);
-                settings_hover = player_ui_hit_test(
+                points[hand].settings_hover = player_ui_hit_test(
                     &state,
                     (float)(page_x + PLAYER_UI_POPUP_X) / PLAYER_UI_WIDTH,
                     (float)(page_y + PLAYER_UI_POPUP_Y) / PLAYER_UI_HEIGHT);
             }
-            place_pointer(app, browser_center(app), app->home_yaw,
-                          BROWSER_UI_PANEL_WIDTH_METERS,
-                          BROWSER_UI_PANEL_HEIGHT_METERS, hit, 0.04f);
         }
+    }
+    int shown = acting >= 0 ? acting : points[1].inside ? 1 : 0;
+    if (points[shown].inside) {
+        pointer_visible = true;
+        pointer_x = points[shown].x;
+        pointer_y = points[shown].y;
+        hover = points[shown].hover;
+        settings_hover = points[shown].settings_hover;
+        place_pointer(app, browser_center(app), app->home_yaw,
+                      BROWSER_UI_PANEL_WIDTH_METERS,
+                      BROWSER_UI_PANEL_HEIGHT_METERS, points[shown].hit,
+                      0.04f);
     }
     if (app->settings_open) {
         /* The page is modal: a click beside it closes it. */
