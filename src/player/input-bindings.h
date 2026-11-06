@@ -23,13 +23,15 @@
 struct controls {
     /* Bindings (settings.json "binding_*") and their input state: what was
      * down last frame, whether a held button served as a modifier (then it
-     * does not act on release), and the repeating action + 1 per input. */
+     * does not act on release), and the repeating action + 1 per input
+     * with the modifier it was pressed with (-1: none). */
     struct binding bindings[BINDING_ACTION_COUNT];
     int learn_action; /* action waiting for its buttons, or -1 */
     bool held[BINDING_INPUT_COUNT];
     bool combined[BINDING_INPUT_COUNT];
     int repeat[BINDING_INPUT_COUNT];
     double repeat_time[BINDING_INPUT_COUNT];
+    int repeat_modifier[BINDING_INPUT_COUNT];
     bool grip_toggle[2]; /* grip pressed on empty space: show/hide on release */
 };
 

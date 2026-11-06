@@ -182,6 +182,7 @@ static void press_input(struct app *app, int input, double now)
         if (binding_action_info[action].repeat) {
             app->controls.repeat[input] = action + 1;
             app->controls.repeat_time[input] = now + BINDING_REPEAT_DELAY;
+            app->controls.repeat_modifier[input] = modifier;
         }
     }
     /* A grip that became a modifier does not show/hide the panel. */
@@ -232,6 +233,11 @@ void process_bindings(struct app *app, const bool grip[2])
             press_input(app, input, now);
         } else if (!down[input] && was) {
             release_input(app, input);
+        } else if (down[input] && app->controls.repeat[input] &&
+                   app->controls.repeat_modifier[input] >= 0 &&
+                   !down[app->controls.repeat_modifier[input]]) {
+            /* "Grip + button": letting go of the grip ends the repeat. */
+            app->controls.repeat[input] = 0;
         } else if (down[input] && app->controls.repeat[input] &&
                    now >= app->controls.repeat_time[input]) {
             run_binding(app, app->controls.repeat[input] - 1, true);
