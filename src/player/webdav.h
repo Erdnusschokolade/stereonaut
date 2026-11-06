@@ -14,6 +14,9 @@
 #define WD_MAX_SERVERS 16
 
 struct wd_server {
+    /* Names the server in "webdav:ID:..." locations (and so in titles.json
+     * keys); stays when other servers are removed and is never reused. */
+    int id;
     char name[64];
     char url[512]; /* base URL, e.g. https://host:8443/dav */
     char user[128];
@@ -22,17 +25,17 @@ struct wd_server {
 
 /* Fills `out` with the saved servers (up to `max`); returns the count. */
 int wd_servers_load(struct wd_server *out, int max);
-/* Replaces the server at `index`, or appends it for index -1, and saves
- * the list; http:// is assumed without a scheme, an empty name keeps the
- * old one or becomes the address. 0 on success, <0 with a message in
- * `error`. */
-int wd_server_save(int index, const struct wd_server *server, char *error,
+/* Replaces the server with id `id`, or appends it with a new id for -1,
+ * and saves the list (server->id is ignored); http:// is assumed without a
+ * scheme, an empty name keeps the old one or becomes the address. 0 on
+ * success, <0 with a message in `error`. */
+int wd_server_save(int id, const struct wd_server *server, char *error,
                    size_t error_size);
-/* Removes the server at `index`; later servers move up one place. */
-int wd_server_remove(int index, char *error, size_t error_size);
-/* Copies the server at `index` into `out`. 0 on success, <0 if out of
- * range. */
-int wd_server_get(int index, struct wd_server *out);
+/* Removes the server with id `id`; the others keep their ids. */
+int wd_server_remove(int id, char *error, size_t error_size);
+/* Copies the server with id `id` into `out`. 0 on success, <0 if there is
+ * none. */
+int wd_server_get(int id, struct wd_server *out);
 
 /* "Authorization: Basic <base64(user:pass)>" into `out`; "" without a
  * user. */

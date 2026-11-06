@@ -58,23 +58,40 @@ static void copy_string(char *target, size_t size, const char *source)
              source ? source : "");
 }
 
-int wd_servers_load(struct wd_server *out, int max)
+/* webdav.json: {"next_id": N, "servers": [{"id", "name", "url", "user",
+ * "password"}, ...]}. A plain array of servers (the first format) and
+ * servers without an id get their place in the list as id, which the
+ * locations used then. */
+static int load_servers(struct wd_server *out, int max, int *next_id)
 {
+    *next_id = 0;
     char path[640];
     if (config_path(path, sizeof(path), false) < 0)
         return 0;
     json_object *root = json_object_from_file(path);
     if (!root)
         return 0;
+    json_object *list = root, *value = NULL;
+    if (json_object_is_type(root, json_type_object)) {
+        list = NULL;
+        json_object_object_get_ex(root, "servers", &list);
+        if (json_object_object_get_ex(root, "next_id", &value) &&
+            json_object_is_type(value, json_type_int))
+            *next_id = json_object_get_int(value);
+    }
     int count = 0;
-    if (json_object_is_type(root, json_type_array)) {
-        int n = (int)json_object_array_length(root);
+    if (list && json_object_is_type(list, json_type_array)) {
+        int n = (int)json_object_array_length(list);
         for (int i = 0; i < n && count < max; ++i) {
-            json_object *item = json_object_array_get_idx(root, i);
+            json_object *item = json_object_array_get_idx(list, i);
             if (!item || !json_object_is_type(item, json_type_object))
                 continue;
             struct wd_server *server = &out[count];
             memset(server, 0, sizeof(*server));
+            server->id = i;
+            if (json_object_object_get_ex(item, "id", &value) &&
+                json_object_is_type(value, json_type_int))
+                server->id = json_object_get_int(value);
             copy_string(server->name, sizeof(server->name),
                         json_string(item, "name"));
             copy_string(server->url, sizeof(server->url),
@@ -91,11 +108,37 @@ int wd_servers_load(struct wd_server *out, int max)
         }
     }
     json_object_put(root);
+    /* An id edited by hand to a negative or taken value gets a new one. */
+    for (int i = 0; i < count; ++i)
+        if (out[i].id >= *next_id)
+            *next_id = out[i].id + 1;
+    for (int i = 0; i < count; ++i) {
+        bool taken = out[i].id < 0;
+        for (int k = 0; k < i && !taken; ++k)
+            taken = out[k].id == out[i].id;
+        if (taken)
+            out[i].id = (*next_id)++;
+    }
     return count;
 }
 
+int wd_servers_load(struct wd_server *out, int max)
+{
+    int next_id;
+    return load_servers(out, max, &next_id);
+}
+
+/* The place of the server with id `id` in `servers`, or -1. */
+static int find_server(const struct wd_server *servers, int count, int id)
+{
+    for (int i = 0; i < count; ++i)
+        if (servers[i].id == id)
+            return i;
+    return -1;
+}
+
 static int servers_save(const struct wd_server *servers, int count,
-                        char *error, size_t error_size)
+                        int next_id, char *error, size_t error_size)
 {
     char directory[640], path[640];
     if (config_path(directory, sizeof(directory), true) < 0 ||
@@ -119,6 +162,8 @@ static int servers_save(const struct wd_server *servers, int count,
             set_error(error, error_size, tr("Not enough memory"));
             return -1;
         }
+        json_object_object_add(item, "id",
+                               json_object_new_int(servers[i].id));
         json_object_object_add(item, "name",
                                json_object_new_string(servers[i].name));
         json_object_object_add(item, "url",
@@ -129,14 +174,22 @@ static int servers_save(const struct wd_server *servers, int count,
                                json_object_new_string(servers[i].pass));
         json_object_array_add(array, item);
     }
+    json_object *root = json_object_new_object();
+    if (!root) {
+        json_object_put(array);
+        set_error(error, error_size, tr("Not enough memory"));
+        return -1;
+    }
+    json_object_object_add(root, "next_id", json_object_new_int(next_id));
+    json_object_object_add(root, "servers", array);
     const char *text =
-        json_object_to_json_string_ext(array, JSON_C_TO_STRING_PRETTY);
+        json_object_to_json_string_ext(root, JSON_C_TO_STRING_PRETTY);
     int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600);
     bool ok = fd >= 0 && text &&
               write(fd, text, strlen(text)) == (ssize_t)strlen(text);
     if (fd >= 0 && close(fd) < 0)
         ok = false;
-    json_object_put(array);
+    json_object_put(root);
     if (!ok) {
         set_error(error, error_size, tr("Cannot write the configuration"));
         return -1;
@@ -156,7 +209,7 @@ static void default_name(const char *url, char *name, size_t size)
     snprintf(name, size, "%.*s", (int)length, start);
 }
 
-int wd_server_save(int index, const struct wd_server *server, char *error,
+int wd_server_save(int id, const struct wd_server *server, char *error,
                    size_t error_size)
 {
     if (!server->url[0]) {
@@ -164,12 +217,14 @@ int wd_server_save(int index, const struct wd_server *server, char *error,
         return -1;
     }
     struct wd_server servers[WD_MAX_SERVERS];
-    int count = wd_servers_load(servers, WD_MAX_SERVERS);
-    if (index < 0 && count >= WD_MAX_SERVERS) {
+    int next_id;
+    int count = load_servers(servers, WD_MAX_SERVERS, &next_id);
+    if (id < 0 && count >= WD_MAX_SERVERS) {
         set_error(error, error_size, tr("Too many saved servers"));
         return -1;
     }
-    if (index >= count) {
+    int index = id < 0 ? -1 : find_server(servers, count, id);
+    if (id >= 0 && index < 0) {
         set_error(error, error_size, tr("The server no longer exists"));
         return -1;
     }
@@ -183,6 +238,7 @@ int wd_server_save(int index, const struct wd_server *server, char *error,
             copy_string(name, sizeof(name), saved->name);
     }
     *saved = *server;
+    saved->id = id < 0 ? next_id++ : id;
     /* A bare "host:port" has no scheme; libcurl needs one. */
     if (!strstr(saved->url, "://"))
         snprintf(saved->url, sizeof(saved->url), "http://%.*s",
@@ -191,28 +247,31 @@ int wd_server_save(int index, const struct wd_server *server, char *error,
         copy_string(saved->name, sizeof(saved->name), name);
     if (!saved->name[0])
         default_name(saved->url, saved->name, sizeof(saved->name));
-    return servers_save(servers, index < 0 ? count + 1 : count, error,
-                        error_size);
+    return servers_save(servers, index < 0 ? count + 1 : count, next_id,
+                        error, error_size);
 }
 
-int wd_server_remove(int index, char *error, size_t error_size)
+int wd_server_remove(int id, char *error, size_t error_size)
 {
     struct wd_server servers[WD_MAX_SERVERS];
-    int count = wd_servers_load(servers, WD_MAX_SERVERS);
-    if (index < 0 || index >= count) {
+    int next_id;
+    int count = load_servers(servers, WD_MAX_SERVERS, &next_id);
+    int index = find_server(servers, count, id);
+    if (index < 0) {
         set_error(error, error_size, tr("The server no longer exists"));
         return -1;
     }
     memmove(&servers[index], &servers[index + 1],
             (size_t)(count - index - 1) * sizeof(*servers));
-    return servers_save(servers, count - 1, error, error_size);
+    return servers_save(servers, count - 1, next_id, error, error_size);
 }
 
-int wd_server_get(int index, struct wd_server *out)
+int wd_server_get(int id, struct wd_server *out)
 {
     struct wd_server servers[WD_MAX_SERVERS];
     int count = wd_servers_load(servers, WD_MAX_SERVERS);
-    if (index < 0 || index >= count)
+    int index = find_server(servers, count, id);
+    if (index < 0)
         return -1;
     *out = servers[index];
     return 0;

@@ -681,9 +681,9 @@ allocation_failure:
 
 /* "webdav:" lists the saved servers and the "webdav:add" form (opened by
  * the panel, never read here); "webdav:N:PATH" is a folder (PATH ends in
- * '/') or a title on server N, PATH encoded as in the server's URLs. On a
- * failed listing (wrong password, server gone) error and entries both
- * come back. */
+ * '/') or a title on the server with id N, PATH encoded as in the
+ * server's URLs. On a failed listing (wrong password, server gone) error
+ * and entries both come back. */
 static struct file_browser_listing read_webdav(const char *path,
                                                uint64_t generation)
 {
@@ -701,7 +701,8 @@ static struct file_browser_listing read_webdav(const char *path,
         for (int i = 0; i < count; ++i) {
             char base[640], location[700];
             wd_base_path(&servers[i], base, sizeof(base));
-            snprintf(location, sizeof(location), "webdav:%d:%s", i, base);
+            snprintf(location, sizeof(location), "webdav:%d:%s",
+                     servers[i].id, base);
             if (add_entry(&listing, FILE_BROWSER_DIRECTORY, servers[i].name,
                           location) < 0)
                 goto allocation_failure;
