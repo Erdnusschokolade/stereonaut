@@ -3248,16 +3248,20 @@ open_decoder:
                     capture_started = true;
                     playback_start = monotonic_seconds();
                     last_progress = playback_start;
-                    deadline = playback_start +
-                               (source_duration > 0.0
-                                    ? source_duration * 3.0 + 30.0
-                                    : 24.0 * 60.0 * 60.0);
+                    /* Only test runs (--frames) have a time limit:
+                     * seeking back stretches a playback without bound,
+                     * the stall timeout guards it. */
+                    bool limited = options.frame_limit && source_duration > 0.0;
+                    deadline = limited ? playback_start +
+                                             source_duration * 3.0 + 30.0
+                                       : INFINITY;
                     printf("source_change event=%" PRIu64
                            " phase=initial changes=0x%x\n",
                            source_change_events,
                            event.u.src_change.changes);
-                    printf("playback_started paced=1 maximum_runtime_factor=3"
-                           " deadline_margin_s=30 stall_timeout_s=10\n");
+                    printf("playback_started paced=1 maximum_runtime_factor=%d"
+                           " deadline_margin_s=30 stall_timeout_s=10\n",
+                           limited ? 3 : 0);
                 } else {
                     if (source_change_pending)
                         fail_message("overlapping SOURCE_CHANGE events");
