@@ -297,7 +297,7 @@ static const struct ui_image *decoded_tile(struct item_state *state, int tile)
     }
     ui_image_free(state->decoded[slot].image);
     state->decoded[slot].image = thumbnail_decode_jpeg(
-        state->tiles[tile], state->tile_sizes[tile]);
+        state->tiles[tile], state->tile_sizes[tile], 0);
     state->decoded[slot].tile = state->decoded[slot].image ? tile : -1;
     state->decoded[slot].used = ++state->decode_clock;
     return state->decoded[slot].image;

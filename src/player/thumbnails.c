@@ -142,7 +142,10 @@ static void jpeg_failed(j_common_ptr info)
     longjmp(((struct jpeg_failure *)info->err)->jump, 1);
 }
 
-struct ui_image *thumbnail_decode_jpeg(const char *data, size_t size)
+#define JPEG_MAX_PIXELS (64U * 1024U * 1024U) /* 256 MiB as RGBA */
+
+struct ui_image *thumbnail_decode_jpeg(const char *data, size_t size,
+                                       int min_width)
 {
     struct jpeg_decompress_struct info;
     struct jpeg_failure failure;
@@ -158,6 +161,16 @@ struct ui_image *thumbnail_decode_jpeg(const char *data, size_t size)
     jpeg_mem_src(&info, (const unsigned char *)data, (unsigned long)size);
     jpeg_read_header(&info, TRUE);
     info.out_color_space = JCS_RGB;
+    if (min_width > 0)
+        while (info.scale_denom < 8 &&
+               info.image_width / (info.scale_denom * 2) >=
+                   (unsigned)min_width)
+            info.scale_denom *= 2;
+    jpeg_calc_output_dimensions(&info);
+    if ((uint64_t)info.output_width * info.output_height > JPEG_MAX_PIXELS) {
+        jpeg_destroy_decompress(&info);
+        return NULL;
+    }
     jpeg_start_decompress(&info);
     image = ui_image_create((int)info.output_width, (int)info.output_height);
     unsigned char *row = malloc((size_t)info.output_width * 3U);
@@ -294,7 +307,8 @@ static struct ui_image *fetch(const struct jf_config *config,
         if (cacheable)
             write_file(path, data, size);
     }
-    struct ui_image *decoded = thumbnail_decode_jpeg(data, size);
+    struct ui_image *decoded =
+        thumbnail_decode_jpeg(data, size, KEY_FRAME_WIDTH);
     free(data);
     return decoded;
 }
@@ -371,7 +385,8 @@ static struct ui_image *load_local(const char *path)
     char *data = NULL;
     size_t size = 0;
     if (local_thumbnail_sidecar(path, &data, &size) == 0) {
-        struct ui_image *decoded = thumbnail_decode_jpeg(data, size);
+        struct ui_image *decoded =
+            thumbnail_decode_jpeg(data, size, KEY_FRAME_WIDTH);
         free(data);
         bool small = false;
         decoded = decoded ? trim_border(decoded, &small) : NULL;
@@ -398,7 +413,8 @@ static struct ui_image *load_local(const char *path)
         if (cacheable)
             write_file(cache, data, size);
     }
-    struct ui_image *decoded = thumbnail_decode_jpeg(data, size);
+    struct ui_image *decoded =
+        thumbnail_decode_jpeg(data, size, KEY_FRAME_WIDTH);
     free(data);
     if (!decoded)
         return NULL;
@@ -455,7 +471,8 @@ static struct ui_image *load_webdav(const char *source)
             write_file(cache, data, size);
     }
     memset(&server, 0, sizeof(server));
-    struct ui_image *decoded = thumbnail_decode_jpeg(data, size);
+    struct ui_image *decoded =
+        thumbnail_decode_jpeg(data, size, KEY_FRAME_WIDTH);
     free(data);
     if (!decoded)
         return NULL;

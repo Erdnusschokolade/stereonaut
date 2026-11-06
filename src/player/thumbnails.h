@@ -36,7 +36,11 @@ void thumbnail_loader_request(struct thumbnail_loader *loader,
 void thumbnail_loader_cancel(struct thumbnail_loader *loader);
 bool thumbnail_loader_poll(struct thumbnail_loader *loader,
                            struct thumbnail_result *result);
-/* Decodes a JPEG into an opaque RGBA image; NULL on failure. */
-struct ui_image *thumbnail_decode_jpeg(const char *data, size_t size);
+/* Decodes a JPEG into an opaque RGBA image; NULL on failure or above
+ * 64 megapixels. A picture more than twice as wide as `min_width` decodes
+ * at 1/2, 1/4 or 1/8 of its size, still at least `min_width` wide; 0
+ * keeps the full size (trickplay tiles). */
+struct ui_image *thumbnail_decode_jpeg(const char *data, size_t size,
+                                       int min_width);
 
 #endif
