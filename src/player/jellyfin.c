@@ -19,7 +19,8 @@
 #include "i18n.h"
 
 #define RESPONSE_LIMIT (48U * 1024U * 1024U)
-#define LIST_LIMIT 5000
+#define LIST_LIMIT 5000 /* items per page */
+#define LIST_MAX 50000  /* items of one list, about 27 MB */
 
 /* Direct Play HEVC Main 8 bit (plus Main10 with the patched Turnip, see
  * STEREONAUT_TP10) and 8-bit 4:2:0 H.264 (Baseline, Main, High) in mkv/mp4,
@@ -563,6 +564,61 @@ static int collect_items(json_object *root, bool filter_views,
     return 0;
 }
 
+/* All items of the list query `path` (without Limit and StartIndex), page
+ * by page until a page comes back short. A random order cannot be paged:
+ * `paged` false asks for one page. */
+static int list_items(const struct jf_config *config, const char *path,
+                      bool paged, struct jf_item **items, size_t *count,
+                      char *error, size_t error_size)
+{
+    *items = NULL;
+    *count = 0;
+    for (size_t start = 0; start < LIST_MAX; start += LIST_LIMIT) {
+        char page[640];
+        snprintf(page, sizeof(page), "%s&Limit=%d&StartIndex=%zu", path,
+                 LIST_LIMIT, start);
+        json_object *root = NULL;
+        int result = json_call(config, "GET", page, NULL, &root, error,
+                               error_size);
+        if (result < 0) {
+            free(*items);
+            *items = NULL;
+            *count = 0;
+            return result;
+        }
+        json_object *array = NULL;
+        size_t returned =
+            json_object_object_get_ex(root, "Items", &array) &&
+                    json_object_is_type(array, json_type_array)
+                ? json_object_array_length(array)
+                : 0;
+        struct jf_item *part = NULL;
+        size_t part_count = 0;
+        result = collect_items(root, false, &part, &part_count);
+        json_object_put(root);
+        struct jf_item *joined =
+            result < 0 ? NULL
+                       : realloc(*items, (*count + part_count + 1) *
+                                             sizeof(**items));
+        if (!joined) {
+            free(part);
+            free(*items);
+            *items = NULL;
+            *count = 0;
+            set_error(error, error_size, tr("Not enough memory"));
+            return -1;
+        }
+        memcpy(joined + *count, part, part_count * sizeof(*part));
+        free(part);
+        *items = joined;
+        *count += part_count;
+        if (!paged || returned < LIST_LIMIT)
+            break;
+    }
+    folders_first(*items, *count); /* each page put its own first */
+    return 0;
+}
+
 int jf_list_views(const struct jf_config *config, struct jf_item **items,
                   size_t *count, char *error, size_t error_size)
 {
@@ -606,20 +662,11 @@ int jf_list_children(const struct jf_config *config, const char *parent_id,
     char path[512];
     snprintf(path, sizeof(path),
              "/Items?userId=%s&ParentId=%s&SortBy=%s&"
-             "SortOrder=%s&Limit=%d&EnableTotalRecordCount=false%s",
+             "SortOrder=%s&EnableTotalRecordCount=false%s",
              config->user_id, parent_id, fields[sort],
-             descending ? "Descending" : "Ascending", LIST_LIMIT,
-             filter_text);
-    json_object *root = NULL;
-    int result = json_call(config, "GET", path, NULL, &root, error,
-                           error_size);
-    if (result < 0)
-        return result;
-    result = collect_items(root, false, items, count);
-    json_object_put(root);
-    if (result < 0)
-        set_error(error, error_size, tr("Not enough memory"));
-    return result;
+             descending ? "Descending" : "Ascending", filter_text);
+    return list_items(config, path, sort != JF_SORT_RANDOM, items, count,
+                      error, error_size);
 }
 
 int jf_list_filter_values(const struct jf_config *config,
@@ -636,19 +683,10 @@ int jf_list_filter_values(const struct jf_config *config,
         return -1;
     char path[256];
     snprintf(path, sizeof(path),
-             "%s?ParentId=%s&userId=%s&SortBy=SortName&Limit=%d&"
+             "%s?ParentId=%s&userId=%s&SortBy=SortName&"
              "EnableTotalRecordCount=false",
-             endpoints[filter], parent_id, config->user_id, LIST_LIMIT);
-    json_object *root = NULL;
-    int result = json_call(config, "GET", path, NULL, &root, error,
-                           error_size);
-    if (result < 0)
-        return result;
-    result = collect_items(root, false, items, count);
-    json_object_put(root);
-    if (result < 0)
-        set_error(error, error_size, tr("Not enough memory"));
-    return result;
+             endpoints[filter], parent_id, config->user_id);
+    return list_items(config, path, true, items, count, error, error_size);
 }
 
 int jf_search(const struct jf_config *config, const char *query,
@@ -673,19 +711,10 @@ int jf_search(const struct jf_config *config, const char *query,
     char path[512];
     snprintf(path, sizeof(path),
              "/Items?userId=%s&searchTerm=%s&Recursive=true&"
-             "IncludeItemTypes=Movie,Video,Episode&Limit=200&"
+             "IncludeItemTypes=Movie,Video,Episode&"
              "EnableTotalRecordCount=false",
              config->user_id, encoded);
-    json_object *root = NULL;
-    int result = json_call(config, "GET", path, NULL, &root, error,
-                           error_size);
-    if (result < 0)
-        return result;
-    result = collect_items(root, false, items, count);
-    json_object_put(root);
-    if (result < 0)
-        set_error(error, error_size, tr("Not enough memory"));
-    return result;
+    return list_items(config, path, true, items, count, error, error_size);
 }
 
 int jf_list_streams(const struct jf_config *config, const char *ids,
