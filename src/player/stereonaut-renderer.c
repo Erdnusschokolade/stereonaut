@@ -134,7 +134,8 @@ static void begin_playback(struct app *app, int fd, const char *location)
     snprintf(app->location, sizeof(app->location), "%s", location);
     app->link.title_finished = false;
     app->last_input_time = monotonic_seconds();
-    app->auto_hidden = false;
+    /* auto_hidden stays: a panel the timer hid comes back with a trigger
+     * in the next title too. */
     if (strncmp(location, "jf:item:", 8) == 0) {
         char item[64] = "";
         size_t length = strcspn(location + 8, ":");
