@@ -228,8 +228,15 @@ static void load_info(struct trickplay *trickplay, struct item_state *state)
     state->tiles = calloc((size_t)state->tile_count, sizeof(*state->tiles));
     state->tile_sizes = calloc((size_t)state->tile_count,
                                sizeof(*state->tile_sizes));
-    if (!state->tiles || !state->tile_sizes)
+    if (!state->tiles || !state->tile_sizes) {
+        /* reset_item frees tile_count tiles */
+        free(state->tiles);
+        free(state->tile_sizes);
+        state->tiles = NULL;
+        state->tile_sizes = NULL;
+        state->tile_count = 0;
         return;
+    }
     state->info_state = 1;
     state->prefetch_at_ms = monotonic_ms() + PREFETCH_DELAY_MS;
     printf("trickplay item=%s available=1 width=%d height=%d tiles=%d"
