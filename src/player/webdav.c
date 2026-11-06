@@ -457,15 +457,18 @@ static void xml_unescape(const char *in, size_t length, char *out,
 struct buffer {
     char *data;
     size_t size;
-    size_t limit; /* 0: no limit */
+    size_t limit;
+    bool too_large; /* the transfer stopped at `limit` */
 };
 
 static size_t write_body(char *data, size_t size, size_t count, void *user)
 {
     struct buffer *buffer = user;
     size_t total = size * count;
-    if (buffer->limit && buffer->size + total > buffer->limit)
+    if (buffer->size + total > buffer->limit) {
+        buffer->too_large = true;
         return 0; /* aborts the transfer */
+    }
     char *grown = realloc(buffer->data, buffer->size + total + 1);
     if (!grown)
         return 0;
@@ -612,7 +615,8 @@ int wd_list(const struct wd_server *server, const char *dir_path,
 {
     *out = NULL;
     *count = 0;
-    struct buffer response = {0};
+    /* About 50000 entries; more is not a folder to browse in VR. */
+    struct buffer response = {.limit = 32U * 1024U * 1024U};
     CURL *curl = open_request(server, dir_path, &response);
     if (!curl) {
         set_error(error, error_size, tr("Not enough memory"));
@@ -635,7 +639,9 @@ int wd_list(const struct wd_server *server, const char *dir_path,
 
     if (result != CURLE_OK || status == 401 || status < 200 ||
         status >= 300 || !response.data) {
-        if (result != CURLE_OK)
+        if (response.too_large)
+            set_error(error, error_size, tr("The folder is too large"));
+        else if (result != CURLE_OK)
             set_error(error, error_size, curl_easy_strerror(result));
         else if (status == 401)
             set_error(error, error_size, tr("The server refused the sign-in"));
@@ -645,6 +651,8 @@ int wd_list(const struct wd_server *server, const char *dir_path,
         else
             set_error(error, error_size, tr("Invalid answer from the server"));
         free(response.data);
+        if (response.too_large)
+            return -1;
         if (result != CURLE_OK || status == 404)
             return WD_UNREACHABLE;
         return status == 401 ? WD_LOGIN_REJECTED : -1;

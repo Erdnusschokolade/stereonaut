@@ -123,6 +123,7 @@ static const struct i18n_entry entries[] = {
     {"Too many saved servers", "Zu viele gespeicherte Server"},
     {"WebDAV error (HTTP %ld)", "WebDAV-Fehler (HTTP %ld)"},
     {"Invalid answer from the server", "Ungültige Antwort vom Server"},
+    {"The folder is too large", "Der Ordner ist zu groß"},
     {"Quick Connect is switched off on the server",
      "Quick Connect ist auf dem Server ausgeschaltet"},
     {"The server refused the sign-in", "Anmeldung vom Server abgelehnt"},
