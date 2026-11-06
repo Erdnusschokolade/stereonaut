@@ -2,6 +2,8 @@
 
 #include "renderer.h"
 
+#include <sys/wait.h>
+
 static bool has_device_extension(VkPhysicalDevice physical, const char *name)
 {
     uint32_t count = 0;
@@ -87,16 +89,23 @@ void hide_dashboard_at_startup(const struct app *app)
         tool = "/opt/steamvr/bin/linuxarm64/vrcmd";
     if (access(tool, X_OK) < 0)
         return;
-    signal(SIGCHLD, SIG_IGN);
+    /* vrcmd runs in a grandchild, which init reaps; the child ends at
+     * once and is reaped here. SIGCHLD keeps its default, so that the
+     * updater can wait for its own children. */
     pid_t child = fork();
     if (child == 0) {
-        int null = open("/dev/null", O_WRONLY);
-        if (null >= 0) {
-            dup2(null, STDOUT_FILENO);
-            dup2(null, STDERR_FILENO);
+        if (fork() == 0) {
+            int null = open("/dev/null", O_WRONLY);
+            if (null >= 0) {
+                dup2(null, STDOUT_FILENO);
+                dup2(null, STDERR_FILENO);
+            }
+            execl(tool, "vrcmd", "--hidedashboard", (char *)NULL);
+            _exit(127);
         }
-        execl(tool, "vrcmd", "--hidedashboard", (char *)NULL);
-        _exit(127);
+        _exit(0);
+    }
+    while (child > 0 && waitpid(child, NULL, 0) < 0 && errno == EINTR) {
     }
     printf("hide_dashboard attempt=%d pid=%ld\n", attempts, (long)child);
 }

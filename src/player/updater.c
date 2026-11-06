@@ -146,10 +146,14 @@ bool updater_poll(struct updater *updater)
     close(updater->fd);
     updater->fd = -1;
     int status = 0;
-    while (waitpid(updater->pid, &status, 0) < 0 && errno == EINTR) {
+    pid_t waited;
+    while ((waited = waitpid(updater->pid, &status, 0)) < 0 &&
+           errno == EINTR) {
     }
     updater->pid = -1;
-    bool succeeded = WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    /* No status (waitpid failed) is no success. */
+    bool succeeded =
+        waited > 0 && WIFEXITED(status) && WEXITSTATUS(status) == 0;
     printf("updater_exit status=%d\n",
            WIFEXITED(status) ? WEXITSTATUS(status) : -1);
     if (updater->state == UPDATER_INSTALLING || !succeeded) {
