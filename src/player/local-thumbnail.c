@@ -84,8 +84,9 @@ static uint8_t clamp8(float value)
     return (uint8_t)(value < 0.0f ? 0 : value > 255.0f ? 255 : value + 0.5f);
 }
 
-/* RGB (3 bytes per pixel) scaled to `width` x `height` by point sampling;
- * BT.709, limited range. */
+/* RGB (3 bytes per pixel) scaled to `width` x `height` by point sampling,
+ * with the frame's matrix (BT.601, BT.709 or BT.2020; unset: BT.601 below
+ * 720 lines) and range (full for YUVJ formats). */
 static uint8_t *frame_to_rgb(const AVFrame *frame, int width, int height)
 {
     enum AVPixelFormat format = (enum AVPixelFormat)frame->format;
@@ -104,6 +105,22 @@ static uint8_t *frame_to_rgb(const AVFrame *frame, int width, int height)
                 av_get_pix_fmt_name(format));
         return NULL;
     }
+    /* R = Y + rv V, G = Y - gu U - gv V, B = Y + bu U */
+    float rv = 1.5748f, gu = 0.18733f, gv = 0.46813f, bu = 1.8556f;
+    enum AVColorSpace matrix = frame->colorspace;
+    if (matrix == AVCOL_SPC_UNSPECIFIED)
+        matrix = frame->height < 720 ? AVCOL_SPC_SMPTE170M : AVCOL_SPC_BT709;
+    if (matrix == AVCOL_SPC_SMPTE170M || matrix == AVCOL_SPC_BT470BG) {
+        rv = 1.402f; gu = 0.344136f; gv = 0.714136f; bu = 1.772f;
+    } else if (matrix == AVCOL_SPC_BT2020_NCL ||
+               matrix == AVCOL_SPC_BT2020_CL) {
+        rv = 1.4746f; gu = 0.16455f; gv = 0.57135f; bu = 1.8814f;
+    }
+    bool full = frame->color_range == AVCOL_RANGE_JPEG ||
+                format == AV_PIX_FMT_YUVJ420P;
+    float luma_offset = full ? 0.0f : 16.0f;
+    float luma_scale = full ? 1.0f : 255.0f / 219.0f;
+    float chroma_scale = full ? 1.0f : 255.0f / 224.0f;
     uint8_t *rgb = malloc((size_t)width * (size_t)height * 3U);
     if (!rgb)
         return NULL;
@@ -111,8 +128,9 @@ static uint8_t *frame_to_rgb(const AVFrame *frame, int width, int height)
         int sy = (int)(((int64_t)y * 2 + 1) * frame->height / (2 * height));
         for (int x = 0; x < width; ++x) {
             int sx = (int)(((int64_t)x * 2 + 1) * frame->width / (2 * width));
-            float luma = (sample(frame, 0, sx, sy, bytes, shift) - 16) *
-                         (255.0f / 219.0f);
+            float luma = (sample(frame, 0, sx, sy, bytes, shift) -
+                          luma_offset) *
+                         luma_scale;
             int cb, cr;
             if (semi) {
                 cb = sample(frame, 1, (sx / 2) * 2, sy / 2, bytes, shift);
@@ -121,12 +139,12 @@ static uint8_t *frame_to_rgb(const AVFrame *frame, int width, int height)
                 cb = sample(frame, 1, sx / 2, sy / 2, bytes, shift);
                 cr = sample(frame, 2, sx / 2, sy / 2, bytes, shift);
             }
-            float u = (cb - 128) * (255.0f / 224.0f);
-            float v = (cr - 128) * (255.0f / 224.0f);
+            float u = (cb - 128) * chroma_scale;
+            float v = (cr - 128) * chroma_scale;
             uint8_t *out = rgb + ((size_t)y * (size_t)width + (size_t)x) * 3U;
-            out[0] = clamp8(luma + 1.5748f * v);
-            out[1] = clamp8(luma - 0.18733f * u - 0.46813f * v);
-            out[2] = clamp8(luma + 1.8556f * u);
+            out[0] = clamp8(luma + rv * v);
+            out[1] = clamp8(luma - gu * u - gv * v);
+            out[2] = clamp8(luma + bu * u);
         }
     }
     return rgb;
