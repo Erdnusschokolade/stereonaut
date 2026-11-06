@@ -55,9 +55,10 @@ struct browser_ui {
     char server_url[512];
     char server_user[128];
     char server_password[256];
-    /* What resume_prompt asks about its entry: resume the title, or for a
-     * WebDAV server's settings entry remove it / enter the login again. */
+    /* What resume_prompt asks about its entry: resume the title, or for
+     * WebDAV server prompt_server remove it / enter the login again. */
     int prompt_kind;
+    int prompt_server;
     size_t page;
     size_t selected_page; /* page of the last started title */
     char selected_title[256]; /* name of the last started title */

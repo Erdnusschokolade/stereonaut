@@ -52,6 +52,7 @@ struct file_browser_listing {
     char error[256];
     bool login_rejected; /* a WebDAV server refused its credentials */
     bool unreachable;    /* or could not be reached at its address */
+    int server_id;       /* that server, with one of the two set */
 };
 
 /* Codec and picture size of Jellyfin titles (see

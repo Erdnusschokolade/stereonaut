@@ -188,8 +188,8 @@ static const char *keyboard_key(const struct browser_ui *ui, int index,
 enum {
     PROMPT_RESUME,
     PROMPT_REMOVE_SERVER, /* on "webdav:remove:N" */
-    PROMPT_LOGIN,         /* on "webdav:edit:N" after a refused login */
-    PROMPT_ADDRESS,       /* on "webdav:edit:N", the server unreachable */
+    PROMPT_LOGIN,         /* a folder of server N refused the login */
+    PROMPT_ADDRESS,       /* or server N could not be reached */
 };
 
 /* Control ids returned by browser_ui_hit_test. */
@@ -1709,12 +1709,16 @@ static void open_prompt(struct browser_ui *ui, int index, int kind)
     ui->dirty = true;
 }
 
-/* "webdav:edit:N" or "webdav:remove:N": change the server's settings
- * (PROMPT_RESUME, i.e. no question asked, or PROMPT_ADDRESS), enter its
- * login again or remove it. */
-static void server_action(struct browser_ui *ui, const char *path, int kind)
+/* Server N of "webdav:edit:N" or "webdav:remove:N". */
+static int server_of(const char *path)
 {
-    int index = atoi(strrchr(path, ':') + 1);
+    return atoi(strrchr(path, ':') + 1);
+}
+
+/* Change the settings of server `index` (PROMPT_RESUME, i.e. no question
+ * asked, or PROMPT_ADDRESS), enter its login again or remove it. */
+static void server_action(struct browser_ui *ui, int index, int kind)
+{
     struct wd_server server;
     char error[256] = "";
     if (kind == PROMPT_REMOVE_SERVER) {
@@ -1781,8 +1785,7 @@ enum browser_ui_action browser_ui_activate(struct browser_ui *ui, char *path,
             return BROWSER_UI_NONE;
         if (ui->prompt_kind != PROMPT_RESUME) {
             if (hover == ID_RESUME)
-                server_action(ui, ui->listing.entries[index].path,
-                              ui->prompt_kind);
+                server_action(ui, ui->prompt_server, ui->prompt_kind);
             return BROWSER_UI_NONE;
         }
         return select_title(ui, index,
@@ -1852,10 +1855,11 @@ enum browser_ui_action browser_ui_activate(struct browser_ui *ui, char *path,
             return BROWSER_UI_NONE;
         }
         if (strncmp(entry->path, "webdav:edit:", 12) == 0) {
-            server_action(ui, entry->path, PROMPT_RESUME);
+            server_action(ui, server_of(entry->path), PROMPT_RESUME);
             return BROWSER_UI_NONE;
         }
         if (strncmp(entry->path, "webdav:remove:", 14) == 0) {
+            ui->prompt_server = server_of(entry->path);
             open_prompt(ui, index, PROMPT_REMOVE_SERVER);
             return BROWSER_UI_NONE;
         }
@@ -1971,17 +1975,15 @@ static void install_listing(struct browser_ui *ui,
     ui->dirty = true;
     request_thumbnails(ui);
     /* A refused WebDAV login or an unreachable server asks right away to
-     * enter the login or the address again. */
-    bool ask = ui->listing.login_rejected || ui->listing.unreachable;
-    for (size_t i = 0; ask && !ui->keyboard_open &&
-                       i < ui->listing.entry_count;
-         ++i)
-        if (strncmp(ui->listing.entries[i].path, "webdav:edit:", 12) == 0) {
-            open_prompt(ui, (int)i,
-                        ui->listing.login_rejected ? PROMPT_LOGIN
-                                                   : PROMPT_ADDRESS);
-            break;
-        }
+     * enter the login or the address again, in any of its folders. The
+     * prompt hangs on the first entry (".."), it only names the server. */
+    if ((ui->listing.login_rejected || ui->listing.unreachable) &&
+        !ui->keyboard_open && ui->listing.entry_count) {
+        ui->prompt_server = ui->listing.server_id;
+        open_prompt(ui, 0,
+                    ui->listing.login_rejected ? PROMPT_LOGIN
+                                               : PROMPT_ADDRESS);
+    }
 }
 
 void browser_ui_set_thumbnail(struct browser_ui *ui, size_t index,
