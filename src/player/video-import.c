@@ -1,4 +1,4 @@
-#define _POSIX_C_SOURCE 200809L
+#define _DEFAULT_SOURCE /* MAP_ANONYMOUS */
 
 #include "renderer.h"
 
@@ -39,6 +39,9 @@ static void apply_init(struct app *app, const struct nv12_ipc_message *message,
     app->video.uv_offset = message->uv_offset;
     app->video.format = message->pixel_format;
     app->video.buffer_kind = message->buffer_kind;
+    need(app->video.buffer_kind != NV12_BUFFER_DMA_BUF ||
+             app->gpu.get_modifier_properties,
+         "DMA-BUF video buffers need the Vulkan DMA-BUF extensions");
     need(app->video.buffer_kind == NV12_BUFFER_DMA_BUF ||
              (app->video.buffer_kind == NV12_BUFFER_HOST &&
               app->gpu.get_host_pointer_properties),
@@ -228,6 +231,37 @@ static void create_upload_image(struct app *app, VkFormat format,
             vkCreateImageView(app->gpu.device, &view_info, NULL, view));
 }
 
+/* `fd` mapped at an address that is a multiple of `alignment` (a power of
+ * two): mmap only promises the page size. */
+static void *map_aligned(int fd, size_t size, size_t alignment)
+{
+    void *mapping = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd,
+                         0);
+    if (mapping == MAP_FAILED || alignment <= 1 ||
+        (uintptr_t)mapping % alignment == 0)
+        return mapping;
+    munmap(mapping, size);
+    /* Reserve room for an aligned start, map there, give back the rest. */
+    size_t span = size + alignment;
+    char *reserved = mmap(NULL, span, PROT_NONE,
+                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (reserved == MAP_FAILED)
+        return MAP_FAILED;
+    char *aligned = (char *)(((uintptr_t)reserved + alignment - 1) &
+                             ~(uintptr_t)(alignment - 1));
+    mapping = mmap(aligned, size, PROT_READ | PROT_WRITE,
+                   MAP_SHARED | MAP_FIXED, fd, 0);
+    if (mapping == MAP_FAILED) {
+        munmap(reserved, span);
+        return MAP_FAILED;
+    }
+    if (aligned > reserved)
+        munmap(reserved, (size_t)(aligned - reserved));
+    if (reserved + span > aligned + size)
+        munmap(aligned + size, (size_t)(reserved + span - (aligned + size)));
+    return mapping;
+}
+
 /* NV12_BUFFER_HOST: map the memfd, import the mapping as host memory of a
  * transfer buffer and create the images it is copied into. Sampling
  * device-local images is also much cheaper than reading system memory over
@@ -240,8 +274,12 @@ static void import_host_buffer(struct app *app, uint32_t i)
     buffer->host = true;
     buffer->tp10 = p010;
     buffer->host_size = (size_t)app->video.dma_buf_size;
-    void *mapping = mmap(NULL, buffer->host_size, PROT_READ | PROT_WRITE,
-                         MAP_SHARED, buffer->dma_buf_fd, 0);
+    size_t alignment = app->gpu.host_pointer_alignment;
+    need(alignment <= 1 || ((alignment & (alignment - 1)) == 0 &&
+                            buffer->host_size % alignment == 0),
+         "host video buffer size is no multiple of the import alignment");
+    void *mapping = map_aligned(buffer->dma_buf_fd, buffer->host_size,
+                                alignment);
     need(mapping != MAP_FAILED, "map host video buffer");
     buffer->host_mapping = mapping;
     VkExternalMemoryBufferCreateInfo external = {

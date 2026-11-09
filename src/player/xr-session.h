@@ -55,11 +55,13 @@ struct gpu {
     VkDevice device;
     VkQueue queue;
     uint32_t queue_family;
+    /* NULL without the DMA-BUF extensions (then only host memory). */
     PFN_vkImportSemaphoreFdKHR import_semaphore_fd;
     PFN_vkGetMemoryFdPropertiesKHR get_memory_fd_properties;
     PFN_vkGetImageDrmFormatModifierPropertiesEXT get_modifier_properties;
     /* VK_EXT_external_memory_host, for PC decoder buffers (optional). */
     PFN_vkGetMemoryHostPointerPropertiesEXT get_host_pointer_properties;
+    size_t host_pointer_alignment; /* minImportedHostPointerAlignment */
     float panel_anisotropy; /* 1 without samplerAnisotropy */
 };
 

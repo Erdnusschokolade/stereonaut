@@ -338,26 +338,58 @@ void initialize_xr_vulkan(struct app *app)
         }
     free(families);
     need(found, "OpenXR Vulkan device has no graphics queue");
-    const char *device_extensions[] = {
+    /* Video arrives as DMA-BUFs (Iris, AV1 in udmabufs) or, from PC
+     * decoders, as memfds imported as host memory (no udmabuf size
+     * limit); a device needs one of the two. */
+    const char *dma_buf_extensions[] = {
         VK_EXT_IMAGE_DRM_FORMAT_MODIFIER_EXTENSION_NAME,
         VK_EXT_EXTERNAL_MEMORY_DMA_BUF_EXTENSION_NAME,
         VK_KHR_EXTERNAL_MEMORY_FD_EXTENSION_NAME,
         VK_KHR_EXTERNAL_SEMAPHORE_FD_EXTENSION_NAME,
         VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME,
-        VK_KHR_SAMPLER_YCBCR_CONVERSION_EXTENSION_NAME,
     };
-    for (size_t i = 0; i < ARRAY_COUNT(device_extensions); ++i)
-        need(has_device_extension(app->gpu.physical, device_extensions[i]),
-             "required NV12 DMA-BUF Vulkan extension is missing");
-    /* PC decoder buffers arrive as memfds (no udmabuf size limit). */
-    const char *enabled_extensions[ARRAY_COUNT(device_extensions) + 1];
-    memcpy(enabled_extensions, device_extensions, sizeof(device_extensions));
-    uint32_t enabled_count = ARRAY_COUNT(device_extensions);
+    need(has_device_extension(app->gpu.physical,
+                              VK_KHR_SAMPLER_YCBCR_CONVERSION_EXTENSION_NAME),
+         "Vulkan extension VK_KHR_sampler_ycbcr_conversion is missing");
+    const char *enabled_extensions[ARRAY_COUNT(dma_buf_extensions) + 2];
+    uint32_t enabled_count = 0;
+    enabled_extensions[enabled_count++] =
+        VK_KHR_SAMPLER_YCBCR_CONVERSION_EXTENSION_NAME;
+    bool dma_buf_import = true;
+    for (size_t i = 0; i < ARRAY_COUNT(dma_buf_extensions); ++i)
+        dma_buf_import = dma_buf_import &&
+                         has_device_extension(app->gpu.physical,
+                                              dma_buf_extensions[i]);
+    if (dma_buf_import)
+        for (size_t i = 0; i < ARRAY_COUNT(dma_buf_extensions); ++i)
+            enabled_extensions[enabled_count++] = dma_buf_extensions[i];
     bool host_import = has_device_extension(
         app->gpu.physical, VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);
     if (host_import)
         enabled_extensions[enabled_count++] =
             VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME;
+    printf("vulkan_video_import dma_buf=%d host=%d\n", dma_buf_import,
+           host_import);
+    need(dma_buf_import || host_import,
+         "Vulkan device can import neither DMA-BUFs nor host memory");
+    /* The video samplers convert YCbCr; the feature must be enabled, not
+     * just the extension. */
+    VkPhysicalDeviceSamplerYcbcrConversionFeatures ycbcr_supported = {
+        .sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_YCBCR_CONVERSION_FEATURES,
+    };
+    VkPhysicalDeviceFeatures2 supported2 = {
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+        .pNext = &ycbcr_supported,
+    };
+    vkGetPhysicalDeviceFeatures2(app->gpu.physical, &supported2);
+    need(ycbcr_supported.samplerYcbcrConversion,
+         "Vulkan feature samplerYcbcrConversion is missing");
+    VkPhysicalDeviceSamplerYcbcrConversionFeatures ycbcr_enabled = {
+        .sType =
+            VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_YCBCR_CONVERSION_FEATURES,
+        .samplerYcbcrConversion = VK_TRUE,
+    };
     /* Panels drawn into the eye images are sampled anisotropically. */
     VkPhysicalDeviceFeatures supported, features = {0};
     vkGetPhysicalDeviceFeatures(app->gpu.physical, &supported);
@@ -366,6 +398,7 @@ void initialize_xr_vulkan(struct app *app)
     VkDeviceQueueCreateInfo queue_info = {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
         .queueFamilyIndex = app->gpu.queue_family, .queueCount = 1, .pQueuePriorities = &priority};
     VkDeviceCreateInfo vk_device_info = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
+        .pNext = &ycbcr_enabled,
         .queueCreateInfoCount = 1, .pQueueCreateInfos = &queue_info,
         .enabledExtensionCount = enabled_count,
         .ppEnabledExtensionNames = enabled_extensions,
@@ -388,20 +421,37 @@ void initialize_xr_vulkan(struct app *app)
     if (features.samplerAnisotropy)
         app->gpu.panel_anisotropy =
             fminf(8.0f, properties.limits.maxSamplerAnisotropy);
-    app->gpu.import_semaphore_fd = (PFN_vkImportSemaphoreFdKHR)
-        vkGetDeviceProcAddr(app->gpu.device, "vkImportSemaphoreFdKHR");
-    app->gpu.get_memory_fd_properties = (PFN_vkGetMemoryFdPropertiesKHR)
-        vkGetDeviceProcAddr(app->gpu.device, "vkGetMemoryFdPropertiesKHR");
-    app->gpu.get_modifier_properties = (PFN_vkGetImageDrmFormatModifierPropertiesEXT)
-        vkGetDeviceProcAddr(app->gpu.device,
-                            "vkGetImageDrmFormatModifierPropertiesEXT");
-    need(app->gpu.import_semaphore_fd && app->gpu.get_memory_fd_properties &&
-             app->gpu.get_modifier_properties,
-         "required external-memory entry point is missing");
-    if (host_import)
+    if (dma_buf_import) {
+        app->gpu.import_semaphore_fd = (PFN_vkImportSemaphoreFdKHR)
+            vkGetDeviceProcAddr(app->gpu.device, "vkImportSemaphoreFdKHR");
+        app->gpu.get_memory_fd_properties = (PFN_vkGetMemoryFdPropertiesKHR)
+            vkGetDeviceProcAddr(app->gpu.device, "vkGetMemoryFdPropertiesKHR");
+        app->gpu.get_modifier_properties =
+            (PFN_vkGetImageDrmFormatModifierPropertiesEXT)vkGetDeviceProcAddr(
+                app->gpu.device, "vkGetImageDrmFormatModifierPropertiesEXT");
+        need(app->gpu.import_semaphore_fd &&
+                 app->gpu.get_memory_fd_properties &&
+                 app->gpu.get_modifier_properties,
+             "required external-memory entry point is missing");
+    }
+    if (host_import) {
         app->gpu.get_host_pointer_properties =
             (PFN_vkGetMemoryHostPointerPropertiesEXT)vkGetDeviceProcAddr(
                 app->gpu.device, "vkGetMemoryHostPointerPropertiesEXT");
+        VkPhysicalDeviceExternalMemoryHostPropertiesEXT host = {
+            .sType =
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT,
+        };
+        VkPhysicalDeviceProperties2 properties2 = {
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+            .pNext = &host,
+        };
+        vkGetPhysicalDeviceProperties2(app->gpu.physical, &properties2);
+        app->gpu.host_pointer_alignment =
+            (size_t)host.minImportedHostPointerAlignment;
+        printf("vulkan_host_pointer_alignment=%zu\n",
+               app->gpu.host_pointer_alignment);
+    }
 }
 
 void initialize_swapchain(struct app *app)
