@@ -1,7 +1,7 @@
 #!/bin/sh
 # Signs the packages of a release and publishes them on GitHub:
 #
-#   tools/release/publish-release.sh DIRECTORY KEY [--draft]
+#   tools/release/publish-release.sh DIRECTORY KEY [--draft] [--notes FILE]
 #
 # DIRECTORY holds the output of src/player/make-release.sh (copied from the
 # Frame); the source package for Linux PCs is added from the same git tag
@@ -12,6 +12,8 @@
 # the commit it was built from. Each package gets a .sig (ssh-keygen -Y
 # sign, namespace "stereonaut-release"), checked against the
 # release-signers inside the package before anything is uploaded.
+# --notes FILE puts the text of FILE (Markdown, e.g. "## What's new")
+# before the generated install instructions.
 # STEREONAUT_REPOSITORY (OWNER/NAME) publishes elsewhere, e.g. in a fork.
 set -eu
 
@@ -19,13 +21,29 @@ repository=${STEREONAUT_REPOSITORY:-Erdnusschokolade/stereonaut}
 tools_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
 [ $# -ge 2 ] || {
-    sed -n '2,16s/^# \{0,1\}//p' "$0" >&2
+    sed -n '2,18s/^# \{0,1\}//p' "$0" >&2
     exit 2
 }
 directory=$(CDPATH= cd -- "$1" && pwd)
 key=$2
+shift 2
 draft=
-[ "${3:-}" = --draft ] && draft=--draft
+release_notes=
+while [ $# -gt 0 ]; do
+    case $1 in
+    --draft) draft=--draft ;;
+    --notes)
+        [ $# -ge 2 ] && [ -s "$2" ] || {
+            echo "--notes needs a file with text" >&2
+            exit 2
+        }
+        release_notes=$(cat "$2")
+        shift
+        ;;
+    *) echo "unknown option: $1" >&2; exit 2 ;;
+    esac
+    shift
+done
 command -v gh >/dev/null 2>&1 || { echo "gh is missing" >&2; exit 1; }
 
 cd "$directory"
@@ -99,6 +117,9 @@ sha256sum -c stereonaut-linux-source.tar.gz.sha256 &&
 \`\`\`
 
 Later updates: Settings → Updates in the headset."
+[ -z "$release_notes" ] || notes="$release_notes
+
+$notes"
 set --
 for file in stereonaut-*.tar.gz; do
     set -- "$@" "$file" "$file.sha256" "$file.sig"

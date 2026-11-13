@@ -31,7 +31,8 @@ version.
    is in `OUTPUT_DIR` already, signs the packages, checks each signature
    against the `release-signers` inside the package and creates the GitHub
    release with `gh` (`--draft` for a draft, which the updater does not
-   see).
+   see). `--notes FILE` puts a Markdown text, such as a "What's new"
+   section, before the generated install instructions.
 
 `STEREONAUT_REPOSITORY=OWNER/NAME` publishes to a fork. For tests,
 `STEREONAUT_RELEASES` (a base URL) and `STEREONAUT_RELEASE_SIGNERS` point the
